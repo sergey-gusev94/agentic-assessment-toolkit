@@ -4,7 +4,8 @@
 
 Agentic Assessment Toolkit is a Python package for building assessment agents.
 The distribution is named `agentic-assessment-toolkit`; the Python import
-package is `agentic_assessment_toolkit`.
+package is `agentic_assessment_toolkit`. Documentation and examples may use
+`aat` as a local import alias.
 
 ## Development
 
