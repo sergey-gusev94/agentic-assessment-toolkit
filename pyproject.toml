@@ -1,0 +1,85 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agentic-assessment-toolkit"
+dynamic = ["version"]
+description = "Toolkit for building assessment agents"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [
+  { name = "Sergey Gusev" },
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2",
+  "mypy>=1.10",
+  "pre-commit>=3.7",
+  "pytest>=8",
+  "ruff>=0.6",
+]
+
+[tool.hatch.version]
+path = "src/agentic_assessment_toolkit/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentic_assessment_toolkit"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/.github",
+  "/.pre-commit-config.yaml",
+  "/AGENTS.md",
+  "/LICENSE",
+  "/Makefile",
+  "/README.md",
+  "/docs",
+  "/pyproject.toml",
+  "/src",
+  "/tests",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "ARG",
+  "B",
+  "C4",
+  "E",
+  "F",
+  "I",
+  "PTH",
+  "SIM",
+  "UP",
+]
+ignore = ["E501"]
+
+[tool.ruff.format]
+indent-style = "space"
+quote-style = "double"
+
+[tool.pytest.ini_options]
+addopts = [
+  "-ra",
+  "--strict-config",
+  "--strict-markers",
+]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+files = ["src", "tests"]
+warn_return_any = true
+warn_unused_ignores = true
