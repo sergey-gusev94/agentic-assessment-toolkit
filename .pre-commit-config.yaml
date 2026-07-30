@@ -1,6 +1,20 @@
 repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
   - repo: local
     hooks:
+      - id: forbid-data-files
+        name: forbid data-shaped files outside tests/fixtures
+        entry: >-
+          bash -c 'echo "Data-shaped files belong in the data root (see
+          docs/data-conventions.md) or tests/fixtures/:"; printf "  %s\n"
+          "$@"; exit 1' --
+        language: system
+        files: '\.(ipynb|csv|tsv|xlsx|xls|parquet|pdf|zip|tar|gz|pkl|pt|h5|db|sqlite)$'
+        exclude: '^tests/fixtures/'
       - id: check
         name: make check
         entry: make check

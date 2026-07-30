@@ -2,8 +2,9 @@
 
 This document specifies the concrete conventions behind the "strict code–data
 separation" constraint in [brief.md](brief.md). The repository must always be
-safe to publish; all real data lives outside it. This is a specification for
-future implementation — none of it is enforced in code yet.
+safe to publish; all real data lives outside it. The repository-side guards
+below are in place; the data-root resolution is a specification for future
+implementation.
 
 ## Data root
 
@@ -65,13 +66,15 @@ documentation, and demos.
 ## Repository-side guards (defense in depth)
 
 The structural rule above is the primary defense. In addition, the repository
-should keep:
+keeps:
 
 - `.gitignore` patterns for data-shaped directories (`data/`, `runs/`,
-  `reference_repos/`), so accidental in-repo copies stay untracked.
-- A pre-commit guard that rejects notebooks, CSV/XLSX files, PDFs, and files
-  above a small size threshold anywhere outside an explicit synthetic-fixture
-  allowlist (e.g. `tests/fixtures/`).
+  `jobs/`, `grading/`, `submissions/`, `reference_repos/`), so accidental
+  in-repo copies stay untracked.
+- Pre-commit guards: `check-added-large-files` (500 KB threshold) and a
+  `forbid-data-files` hook that rejects notebooks, CSV/TSV, spreadsheets,
+  Parquet, PDFs, archives, pickles, model weights, and database files
+  anywhere outside the `tests/fixtures/` allowlist.
 
 ## Tests and examples
 

@@ -28,6 +28,13 @@ htmlcov/
 .gemini/
 reference_repos/
 
+# Data must live in the external data root; keep accidental in-repo copies untracked
+data/
+runs/
+jobs/
+grading/
+submissions/
+
 # Editors and operating systems
 .idea/
 .vscode/
