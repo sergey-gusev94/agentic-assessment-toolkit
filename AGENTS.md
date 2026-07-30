@@ -9,11 +9,7 @@ package is `agentic_assessment_toolkit`.
 ## Development
 
 The project is in its initial development stage. Backward compatibility is not
-required unless explicitly requested. Prefer small, typed, testable components.
-
-Before drawing conclusions from or editing a repository file, read the complete
-file. Before claiming that something is absent, search the relevant repository
-scope. Preserve unrelated user changes.
+required unless explicitly requested.
 
 ## Validation
 
