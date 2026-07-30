@@ -16,8 +16,10 @@ The project is in its initial development stage.
 ## Documentation
 
 - [Project brief](docs/brief.md) — vision, use cases, scope, and constraints.
-- [Research](docs/research.md) — technical foundation (Harbor + RewardKit),
-  alternatives considered, methodology, security model, and adoption plan.
+- [Design](docs/design.md) — decisions, architecture of the two pipelines,
+  and roadmap.
+- [Research](docs/research.md) — frozen research snapshot: alternatives
+  considered, methodology, security model.
 - [Data conventions](docs/data-conventions.md) — strict code–data separation:
   this repository is always safe to publish; all real course and student data
   lives in an external data root and is never committed.

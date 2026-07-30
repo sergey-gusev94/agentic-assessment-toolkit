@@ -18,3 +18,8 @@ Run `make check` after changes. It performs formatting verification, linting,
 strict type checking, and tests. Run `make format` to apply formatting.
 
 Normal tests must be deterministic, local, offline, and credential-free.
+
+Live execution — Harbor runs, Docker, subscription-authenticated agent or
+model calls, network access to model providers — is out of scope for
+repository work. Do not attempt it or make any deliverable depend on it; the
+maintainer performs all live validation outside the repository.

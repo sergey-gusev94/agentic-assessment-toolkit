@@ -137,5 +137,6 @@ potentially an open-source package for others — clean separation of code from
 data, no hardcoded local paths in the package, documented conventions — but
 those audiences are not current requirements.
 
-The technical foundation, alternatives considered, methodology, security
-model, and phased adoption plan are documented in [research.md](research.md).
+Decisions, architecture, and the roadmap are recorded in
+[design.md](design.md). The underlying research — alternatives considered,
+methodology, and security model — is documented in [research.md](research.md).
