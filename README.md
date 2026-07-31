@@ -13,11 +13,18 @@ student. It serves two workflows:
 
 The project is in its initial development stage.
 
+The initial implementation is **Codex-first**: the complete solving, grading,
+validation, reporting, and hardening pipeline will be built for Codex before
+other agent stacks and cross-agent comparisons are added. See the
+[design](docs/design.md) for the authoritative sequencing decision.
+
 ## Documentation
 
 - [Project brief](docs/brief.md) — vision, use cases, scope, and constraints.
 - [Design](docs/design.md) — decisions, architecture of the two pipelines,
   and roadmap.
+- [Live validation](docs/live-validation.md) — maintainer-run integration
+  checks and the exact limits of what they establish.
 - [Research](docs/research.md) — frozen research snapshot: alternatives
   considered, methodology, security model.
 - [Data conventions](docs/data-conventions.md) — strict code–data separation:

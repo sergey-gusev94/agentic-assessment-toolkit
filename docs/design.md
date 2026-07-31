@@ -27,26 +27,34 @@ analysis are in research.md.
    Codex CLI / Claude Code / Gemini CLI subscriptions, not per-token API
    billing. Harbor supports this natively for solving; grading runs on the
    host as the authenticated user.
-4. **Two pipelines, one grading core.** Benchmarking (agents solve
+4. **Codex-first implementation.** The first complete benchmark and
+   grading-assistant pipelines use Codex for both assignment solving and
+   rubric-based judging. Benchmark core, static grading, validation,
+   reporting, and hardening are completed for the Codex stack before Claude
+   Code, Gemini CLI, or other agents are integrated. Solver and judge remain
+   separate, independently configured runs. Multi-agent comparison remains a
+   long-term goal, not an acceptance criterion for the initial vertical
+   slices.
+5. **Two pipelines, one grading core.** Benchmarking (agents solve
    assignments inside Harbor sandboxes) and grading assistance (static
    grading of real student work) share rubrics, judge configuration, and
    reporting. The grading assistant does not use Harbor: RewardKit runs
    standalone, and student code is never executed.
-5. **Strict code–data separation.** The repository is always publishable; all
+6. **Strict code–data separation.** The repository is always publishable; all
    real data lives in an external data root. Specified in
    [data-conventions.md](data-conventions.md).
-6. **Judge validity without human calibration.** Benchmark scores are
+7. **Judge validity without human calibration.** Benchmark scores are
    rubric-based judge scores under one frozen judge configuration, not
    proxies for professor grades. Deterministic checks carry as much of the
    grade as possible; the judge must pass sanity checks (oracle near full
    marks, garbage near zero, stable repeats). Calibration against trusted
    human grading is deferred until a trustworthy human-graded corpus exists.
-7. **Grading assistance is policy-agnostic.** The toolkit produces grades,
+8. **Grading assistance is policy-agnostic.** The toolkit produces grades,
    per-criterion scores, and evidence. How they are used relative to human
    grading is university policy and out of scope.
-8. **No second MVP.** The reference repositories are the proof of value; the
+9. **No second MVP.** The reference repositories are the proof of value; the
    durable system is built directly — no intermediate throwaway.
-9. **Live validation is outside repository work.** All live execution —
+10. **Live validation is outside repository work.** All live execution —
    Harbor runs, Docker, subscription-authenticated agent or judge calls,
    network access to model providers — is performed by the maintainer
    outside this repository. Repository work never attempts live runs and
@@ -104,42 +112,46 @@ No repository work — human or agent — performs or depends on live
 validation. Consistent with AGENTS.md, tests are deterministic, local,
 offline, and credential-free.
 
-For the maintainer's own external checklist, the assumptions the foundation
-choice rests on are:
+Detailed evidence and exact limits of completed manual checks are recorded in
+[live-validation.md](live-validation.md). The current external checklist is:
 
-1. Codex CLI solves a Harbor task using ChatGPT-subscription auth
-   (`CODEX_FORCE_AUTH_JSON=1`), with no API billing.
-2. Claude Code solves the same task using a subscription OAuth token
-   (`CLAUDE_FORCE_OAUTH=1`), with no API billing.
-3. The full submission directory survives as a declared artifact, and raw
-   transcripts plus ATIF trajectories are captured.
-4. A verifier in a separate container scores the solution with mixed
-   deterministic + rubric criteria and multiple score dimensions.
-5. `harbor job regrade` rescores the recorded solution under a modified
-   rubric without rerunning the solver, on a pinned Harbor version that
-   contains regrade.
-6. RewardKit runs standalone on the host against a copied student-style
-   solution using cached subscription auth (no `OPENAI_API_KEY` set).
+1. **Validated:** Codex CLI solves a synthetic Harbor task using cached
+   ChatGPT authentication while `OPENAI_API_KEY` is unset.
+2. **Validated:** a declared artifact, raw agent output, and an ATIF trajectory
+   survive the synthetic task run.
+3. **Pending:** a verifier in a separate environment scores a solution with
+   mixed deterministic and rubric criteria and multiple score dimensions.
+4. **Pending:** `harbor job regrade` rescores a recorded solution under a
+   modified rubric without rerunning the solver, on a pinned Harbor version
+   that contains regrade.
+5. **Pending:** RewardKit runs standalone on the host against a copied
+   student-style solution using cached Codex authentication while
+   `OPENAI_API_KEY` is unset.
+6. **Deferred:** Claude Code, Gemini CLI, and other agent stacks are validated
+   only after the Codex pipeline and its hardening are complete.
 
 ## Roadmap
 
 Sequence and scope only; no dates. Completion of each stage is judged by
 what the toolkit provides, not by live runs.
 
-1. **Benchmark core** — data-root and task conventions implemented; importer
-   converts existing course assignment folders into Harbor tasks;
-   environment and rubric templates; oracle and task validation; pinned job
-   configurations; statistical `metric.py`. Complete when the toolkit can
-   materialize a full course from the reference corpus into runnable Harbor
-   tasks, datasets, and job configs.
-2. **Grading assistant** — standalone static-grading pipeline with
-   anonymization, per-criterion output, and the discrepancy report against a
-   professor's grade export, covering what the reference-repo scripts did ad
-   hoc.
-3. **Benchmark hardening** — repeated-attempt configurations, failure
-   accounting, confidence intervals, judge sanity-check fixtures,
-   prompt-injection cases for the grader, version pinning for reportable
-   runs.
-4. **Later, on demand** — judge calibration if a trusted human-graded corpus
+1. **Benchmark core, Codex-first** — data-root and task conventions
+   implemented; importer converts existing course assignment folders into
+   Harbor tasks; environment and rubric templates; oracle and task
+   validation; pinned Codex job configurations; statistical `metric.py`.
+   Complete when the toolkit can materialize a full course from the reference
+   corpus into runnable Harbor tasks, datasets, and Codex job configs.
+2. **Grading assistant, Codex-first** — standalone static-grading pipeline
+   using Codex as the initial rubric judge, with anonymization,
+   per-criterion output, and the discrepancy report against a professor's
+   grade export, covering what the reference-repo scripts did ad hoc.
+3. **Codex benchmark hardening and corpus evaluation** — repeated-attempt
+   configurations, failure accounting, confidence intervals, judge
+   sanity-check fixtures, prompt-injection cases for the grader, version
+   pinning for reportable runs, and evaluation across the target corpus.
+4. **Additional agent stacks** — integrate and validate Claude Code, Gemini
+   CLI, and other agents; add cross-agent configurations and comparisons only
+   after the complete Codex pipeline is hardened.
+5. **Later, on demand** — judge calibration if a trusted human-graded corpus
    emerges; MLflow if Harbor's viewer becomes insufficient; institutional or
    open-source packaging.
