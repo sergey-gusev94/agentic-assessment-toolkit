@@ -82,14 +82,21 @@ with public network access.
 
 This validates a manually authored real-assignment solve and artifact path. The
 verifier checked completion, not scientific correctness; automatic task
-materialization and RewardKit rubric grading remain pending.
+materialization and rubric/agent judging remain pending.
+
+The same assignment was then run with `harbor-rewardkit==0.1.7` and seven
+programmatic reward dimensions. One trial completed in 10m10s with no
+exception; every dimension and the aggregate reward were `1.0`, verifier
+stderr was empty, `reward-details.json` was retained, and all submission
+artifacts were collected. This validates RewardKit's shared-environment,
+multi-dimension Harbor integration, not scientific correctness or a rubric
+judge.
 
 ### Pending
 
 - Automatic real-assignment materialization by the toolkit importer.
 - A separate verifier environment.
-- RewardKit deterministic and rubric criteria in one verifier.
-- Multiple grading dimensions.
+- Mixed deterministic and rubric criteria in one verifier.
 - Regrading recorded artifacts without rerunning Codex.
 - Standalone RewardKit grading through cached Codex authentication.
 - Oracle, empty-submission, and irrelevant-submission judge sanity checks.

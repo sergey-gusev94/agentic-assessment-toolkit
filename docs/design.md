@@ -122,15 +122,18 @@ Detailed evidence and exact limits of completed manual checks are recorded in
 3. **Validated:** Codex completes a manually materialized real notebook
    assignment in Harbor; the executed notebook, plots, transcript, trajectory,
    and source-preserving artifacts survive the run.
-4. **Pending:** a verifier in a separate environment scores a solution with
+4. **Validated:** RewardKit runs seven programmatic dimensions in Harbor's
+   shared task environment, writes structured reward details, and returns an
+   aggregate reward without verifier errors.
+5. **Pending:** a verifier in a separate environment scores a solution with
    mixed deterministic and rubric criteria and multiple score dimensions.
-5. **Pending:** `harbor job regrade` rescores a recorded solution under a
+6. **Pending:** `harbor job regrade` rescores a recorded solution under a
    modified rubric without rerunning the solver, on a pinned Harbor version
    that contains regrade.
-6. **Pending:** RewardKit runs standalone on the host against a copied
+7. **Pending:** RewardKit runs standalone on the host against a copied
    student-style solution using cached Codex authentication while
    `OPENAI_API_KEY` is unset.
-7. **Deferred:** Claude Code, Gemini CLI, and other agent stacks are validated
+8. **Deferred:** Claude Code, Gemini CLI, and other agent stacks are validated
    only after the Codex pipeline and its hardening are complete.
 
 ## Roadmap
