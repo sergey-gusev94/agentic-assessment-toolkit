@@ -119,15 +119,18 @@ Detailed evidence and exact limits of completed manual checks are recorded in
    ChatGPT authentication while `OPENAI_API_KEY` is unset.
 2. **Validated:** a declared artifact, raw agent output, and an ATIF trajectory
    survive the synthetic task run.
-3. **Pending:** a verifier in a separate environment scores a solution with
+3. **Validated:** Codex completes a manually materialized real notebook
+   assignment in Harbor; the executed notebook, plots, transcript, trajectory,
+   and source-preserving artifacts survive the run.
+4. **Pending:** a verifier in a separate environment scores a solution with
    mixed deterministic and rubric criteria and multiple score dimensions.
-4. **Pending:** `harbor job regrade` rescores a recorded solution under a
+5. **Pending:** `harbor job regrade` rescores a recorded solution under a
    modified rubric without rerunning the solver, on a pinned Harbor version
    that contains regrade.
-5. **Pending:** RewardKit runs standalone on the host against a copied
+6. **Pending:** RewardKit runs standalone on the host against a copied
    student-style solution using cached Codex authentication while
    `OPENAI_API_KEY` is unset.
-6. **Deferred:** Claude Code, Gemini CLI, and other agent stacks are validated
+7. **Deferred:** Claude Code, Gemini CLI, and other agent stacks are validated
    only after the Codex pipeline and its hardening are complete.
 
 ## Roadmap

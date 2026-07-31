@@ -65,9 +65,28 @@ harbor run \
 These checks validate synthetic Codex execution and artifact collection. They
 do not validate the complete assessment or grading pipeline.
 
+## 2026-07-31: Real-assignment Harbor pilot
+
+A manually materialized `PU_CHE597DS_S2026/HW5` notebook task ran with the
+same Harbor, Codex, model, and cached-auth configuration. The Docker image
+provided pinned Python, NumPy, Matplotlib, nbconvert, and ipykernel packages
+with public network access.
+
+- One trial completed in 8m32s with no exception and completion reward `1.0`.
+- Harbor retained the raw output, ATIF trajectory, and `/app/submission`.
+- The notebook ran top-to-bottom with 10 executed code cells, no error outputs,
+  and 8 embedded plots; source data remained unchanged.
+- Problems 1–6 and the optional extension were completed without installing
+  additional packages, and manual review found results consistent with the
+  reference solution.
+
+This validates a manually authored real-assignment solve and artifact path. The
+verifier checked completion, not scientific correctness; automatic task
+materialization and RewardKit rubric grading remain pending.
+
 ### Pending
 
-- A real course assignment materialized by this toolkit.
+- Automatic real-assignment materialization by the toolkit importer.
 - A separate verifier environment.
 - RewardKit deterministic and rubric criteria in one verifier.
 - Multiple grading dimensions.
