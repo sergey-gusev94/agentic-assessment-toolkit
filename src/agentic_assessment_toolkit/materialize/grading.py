@@ -4,7 +4,7 @@ One code path for both submission sources — a Harbor solve artifact or a
 real student folder (design decision 5). The task presents submission,
 reference solution, and optional rubric under /app as data; the grader
 writes into /app/grading_output; the generic grading verifier validates
-the output schema and surfaces score_pct as the reward.
+the output schema and derives score_pct as the reward.
 """
 
 from __future__ import annotations

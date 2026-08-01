@@ -103,10 +103,10 @@ A same-day clean-slate revision additionally demoted the pilots to
 evidence: the toolkit's contracts — grading output schema, reward
 semantics, prompt templates, verifiers, environment templates — are
 specified fresh in [design.md](design.md), and nothing is ported from
-the pilot implementations. In particular, the course-style reward
-surfaced below (`110.0`) is superseded: the toolkit's grading verifier
-surfaces `score_pct` on a 0–100 scale over required criteria, with
-bonus points recorded only inside `grading_result.json`.
+the pilot implementations. The toolkit's grading verifier derives the
+reward in code from the grader's validated point sums: a
+bonus-inclusive `score_pct` that can exceed 100 (the course-style
+reward surfaced below), with a required-only `required_pct` beside it.
 
 ### Separate Harbor grading job
 

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from agentic_assessment_toolkit.grading_schema import (
+    derive_scores,
     load_grading_result,
     validate_grading_result,
 )
@@ -41,7 +42,6 @@ def valid_result() -> dict[str, Any]:
         "raw_max": 10,
         "bonus_points": 0.5,
         "bonus_max": 1,
-        "score_pct": 80.0,
         "overall_comment": "Good work; method could be clearer.",
     }
 
@@ -57,7 +57,7 @@ def test_non_object_is_rejected() -> None:
 def test_missing_fields_are_reported() -> None:
     errors = validate_grading_result({})
     assert "missing required field 'criteria'" in errors
-    assert "missing required field 'score_pct'" in errors
+    assert "missing required field 'raw_points'" in errors
 
 
 def test_wrong_schema_version() -> None:
@@ -124,7 +124,7 @@ def test_all_bonus_criteria_rejected() -> None:
     data = valid_result()
     for entry in data["criteria"]:
         entry["bonus"] = True
-    data.update(raw_points=0, raw_max=0, bonus_points=8.5, bonus_max=11, score_pct=0)
+    data.update(raw_points=0, raw_max=0, bonus_points=8.5, bonus_max=11)
     assert any(
         "at least one criterion must be non-bonus" in e for e in validate_grading_result(data)
     )
@@ -137,10 +137,18 @@ def test_aggregate_mismatch_rejected() -> None:
     assert any("raw_points is 9" in e for e in errors)
 
 
-def test_score_pct_mismatch_rejected() -> None:
+def test_derive_scores_counts_bonus_over_required_max() -> None:
+    scores = derive_scores(valid_result())
+    assert scores == {"score_pct": 85.0, "required_pct": 80.0}
+
+
+def test_derive_scores_can_exceed_100() -> None:
     data = valid_result()
-    data["score_pct"] = 92.0
-    assert any("score_pct is 92.0" in e for e in validate_grading_result(data))
+    data["criteria"][0]["points"] = 8
+    data["criteria"][2]["points"] = 1
+    data.update(raw_points=10, bonus_points=1)
+    assert validate_grading_result(data) == []
+    assert derive_scores(data) == {"score_pct": 110.0, "required_pct": 100.0}
 
 
 def test_float_accumulation_tolerated() -> None:
@@ -161,7 +169,6 @@ def test_float_accumulation_tolerated() -> None:
         "raw_max": 1.0,
         "bonus_points": 0,
         "bonus_max": 0,
-        "score_pct": 100.0,
         "overall_comment": "ok",
     }
     assert validate_grading_result(data) == []
@@ -192,7 +199,7 @@ def test_load_valid_file(tmp_path: Path) -> None:
     path.write_text(json.dumps(valid_result()), encoding="utf-8")
     data, errors = load_grading_result(path)
     assert errors == []
-    assert data is not None and data["score_pct"] == 80.0
+    assert data is not None and data["raw_points"] == 8
 
 
 def test_non_finite_points_rejected() -> None:

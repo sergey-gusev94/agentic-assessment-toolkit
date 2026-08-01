@@ -23,7 +23,6 @@ _TOP_LEVEL_FIELDS = (
     "raw_max",
     "bonus_points",
     "bonus_max",
-    "score_pct",
     "overall_comment",
 )
 _ABS_TOL = 1e-6
@@ -160,28 +159,38 @@ def _validate_aggregates(
         "bonus_points": bonus_points,
         "bonus_max": bonus_max,
     }
-    usable = True
     for field, value in expected.items():
         declared = data.get(field)
         if not _is_number(declared):
             if field in data:
                 errors.append(f"{field} must be a number")
-            usable = False
         elif not _close(float(declared), value):  # type: ignore[arg-type]
             errors.append(f"{field} is {declared}, but the criteria sum to {value}")
-            usable = False
-
-    score_pct = data.get("score_pct")
-    if not _is_number(score_pct):
-        if "score_pct" in data:
-            errors.append("score_pct must be a number")
-    elif usable and raw_max > 0:
-        expected_pct = 100.0 * raw_points / raw_max
-        if not _close(float(score_pct), expected_pct):  # type: ignore[arg-type]
-            errors.append(
-                f"score_pct is {score_pct}, but 100 * raw_points / raw_max is {expected_pct}"
-            )
     return errors
+
+
+def _as_number(value: object) -> float:
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        raise ValueError(f"expected a number, got {value!r}")
+    return float(value)
+
+
+def derive_scores(data: dict[str, object]) -> dict[str, float]:
+    """Derive the percentage scores from a validated grading result.
+
+    ``score_pct`` counts earned bonus points over the required maximum,
+    so it can exceed 100; ``required_pct`` covers required criteria only
+    (0-100). Percentages are never authored by the grader — all division
+    lives here. Call only on data that passed validate_grading_result,
+    which guarantees the sums match the criteria and ``raw_max > 0``.
+    """
+    raw_points = _as_number(data["raw_points"])
+    raw_max = _as_number(data["raw_max"])
+    bonus_points = _as_number(data["bonus_points"])
+    return {
+        "score_pct": 100.0 * (raw_points + bonus_points) / raw_max,
+        "required_pct": 100.0 * raw_points / raw_max,
+    }
 
 
 def load_grading_result(path: Path) -> tuple[dict[str, object] | None, list[str]]:

@@ -4,8 +4,10 @@
 Standalone by design: runs inside the grading task container beside a
 verbatim copy of the toolkit's grading_schema.py — one source of truth
 for validation (docs/design.md, "Grading output schema"). Validates the
-two required grading deliverables and surfaces score_pct (0-100 over
-required criteria) as the Harbor reward; any contract violation yields
+two required grading deliverables, then derives the percentage scores
+from the grader's validated sums: the bonus-inclusive score_pct (may
+exceed 100) is the primary Harbor reward, with the required-only
+required_pct (0-100) surfaced beside it. Any contract violation yields
 reward 0.0 with the violations listed in the verifier details. Extra
 scratch files in the output directory are tolerated.
 """
@@ -20,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from grading_schema import (  # noqa: E402
     JUSTIFICATION_FILENAME,
     RESULT_FILENAME,
+    derive_scores,
     load_grading_result,
 )
 
@@ -43,31 +46,32 @@ def main():
             errors.append(f"{JUSTIFICATION_FILENAME} is not UTF-8 text")
 
     if errors:
-        reward = 0.0
-        score_pct = None
+        rewards = {"reward": 0.0}
+        scores = {"score_pct": None, "required_pct": None}
     else:
-        score_pct = float(data["score_pct"])
-        reward = score_pct
+        scores = derive_scores(data)
+        rewards = {"reward": scores["score_pct"], "required_pct": scores["required_pct"]}
 
     emit(
-        reward,
+        rewards,
         {
             "contract": "grading-output-v1",
             "contract_valid": not errors,
             "errors": errors,
-            "score_pct": score_pct,
+            "score_pct": scores["score_pct"],
+            "required_pct": scores["required_pct"],
         },
     )
     return 0
 
 
-def emit(reward, details):
-    # Harbor reads the reward from /logs/verifier/reward.json: a flat JSON
-    # object of numbers. Details go to stdout, which Harbor captures as
-    # the verifier's test-stdout.txt.
+def emit(rewards, details):
+    # Harbor reads the rewards from /logs/verifier/reward.json: a flat JSON
+    # object of numbers, "reward" being the primary one. Details go to
+    # stdout, which Harbor captures as the verifier's test-stdout.txt.
     REWARD_PATH.parent.mkdir(parents=True, exist_ok=True)
-    REWARD_PATH.write_text(json.dumps({"reward": reward}), encoding="utf-8")
-    print(json.dumps({"reward": reward, "details": details}, indent=2, sort_keys=True))
+    REWARD_PATH.write_text(json.dumps(rewards), encoding="utf-8")
+    print(json.dumps({"reward": rewards["reward"], "details": details}, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

@@ -68,12 +68,13 @@ A single JSON object with exactly these fields:
 - `raw_max` — sum of `max_points` over non-bonus criteria.
 - `bonus_points` — sum of `points` over bonus criteria (0 if none).
 - `bonus_max` — sum of `max_points` over bonus criteria (0 if none).
-- `score_pct` — exactly `100 * raw_points / raw_max`.
 - `overall_comment` — short free-text summary of the grade.
 
-The aggregates are re-derived and checked mechanically: any arithmetic
-inconsistency, duplicate id, out-of-range points, or empty evidence
-invalidates the result. Compute the sums carefully.
+Do not compute percentages or any other derived score: the verifier
+derives them from these sums. The sums are re-derived and checked
+mechanically: any arithmetic inconsistency, duplicate id, out-of-range
+points, or empty evidence invalidates the result. Compute the sums
+carefully.
 
 ### 2. `justification.md`
 

@@ -113,7 +113,8 @@ def run_grading_verifier(tmp_path: Path, output_dir: Path) -> dict[str, Any]:
     )
     stdout: dict[str, Any] = json.loads(completed.stdout)
     rewards = json.loads(reward_path.read_text(encoding="utf-8"))
-    assert rewards == {"reward": stdout["reward"]}
+    assert rewards["reward"] == stdout["reward"]
+    stdout["rewards_file"] = rewards
     return stdout
 
 
@@ -126,27 +127,31 @@ def make_grading_output(tmp_path: Path, result: dict[str, object] | None) -> Pat
     return output_dir
 
 
-def test_grading_verifier_surfaces_score_pct(tmp_path: Path) -> None:
+def test_grading_verifier_surfaces_derived_scores(tmp_path: Path) -> None:
     output_dir = make_grading_output(tmp_path, valid_result())
     result = run_grading_verifier(tmp_path, output_dir)
-    assert result["reward"] == 80.0
+    assert result["reward"] == 85.0  # (8 raw + 0.5 bonus) / 10 required max
     assert result["details"]["contract_valid"] is True
+    assert result["details"]["score_pct"] == 85.0
+    assert result["details"]["required_pct"] == 80.0
+    assert result["rewards_file"] == {"reward": 85.0, "required_pct": 80.0}
 
 
 def test_grading_verifier_tolerates_scratch_files(tmp_path: Path) -> None:
     output_dir = make_grading_output(tmp_path, valid_result())
     (output_dir / "notes.txt").write_text("scratch", encoding="utf-8")
     result = run_grading_verifier(tmp_path, output_dir)
-    assert result["reward"] == 80.0
+    assert result["reward"] == 85.0
 
 
 def test_grading_verifier_rejects_inconsistent_result(tmp_path: Path) -> None:
     bad = valid_result()
-    bad["score_pct"] = 100.0
+    bad["raw_points"] = 9
     output_dir = make_grading_output(tmp_path, bad)
     result = run_grading_verifier(tmp_path, output_dir)
     assert result["reward"] == 0.0
     assert result["details"]["contract_valid"] is False
+    assert result["rewards_file"] == {"reward": 0.0}
 
 
 def test_grading_verifier_rejects_missing_result(tmp_path: Path) -> None:

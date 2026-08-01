@@ -60,9 +60,10 @@ two disagree, this document wins.
   them, and every contract — grading output schema, reward semantics,
   prompt templates, verifiers, environment templates, config identity,
   run records — is specified fresh in this document and
-  [data-conventions.md](data-conventions.md). Rewards are `score_pct` on
-  a 0–100 scale over required criteria; the pilot's course-style bonus
-  reward (e.g. 110.0) is superseded. Environment templates are
+  [data-conventions.md](data-conventions.md). The reward is a derived,
+  bonus-inclusive `score_pct` that can exceed 100 (see the reward
+  semantics section); the grader authors judgments and point sums, never
+  percentages. Environment templates are
   per-course flavors (data-science and optimization first) selected via
   course defaults and per-assignment overrides. Experiment configs are
   TOML files committed under `configs/`.
@@ -122,11 +123,12 @@ analysis are in research.md.
    outputs, where applicable — live in the solver prompt's output
    contract and are judged by the grader, not checked mechanically. The grading verifier
    validates that `grading_result.json`
-   exists, parses, and satisfies its internal-consistency rules, and
-   surfaces its `score_pct` as the Harbor reward so grades appear in the
-   viewer. `score_pct` is computed over required criteria only on a
-   0–100 scale; bonus points are recorded in the grading result but
-   never enter the reward (see the contracts section). The deliverables
+   exists, parses, and satisfies its internal-consistency rules, then
+   derives the percentage scores from the grader's validated point sums
+   and surfaces the bonus-inclusive `score_pct` as the Harbor reward so
+   grades appear in the viewer. The grader authors judgments and sums,
+   never percentages: all division and denominator policy lives in code
+   (see the contracts section). The deliverables
    are the JSON plus a written per-problem Markdown justification.
 7. **Regrading is re-running the grader.** Solving and grading are separable
    in time because grading consumes only stored artifacts; a revised rubric
@@ -217,7 +219,7 @@ submission directory
 Harbor grading job: grader agent in isolated container
   (public network, -k repeats for variance)
         ↓  generic grading verifier: validate grading_result.json,
-           surface score_pct as the reward
+           derive and surface score_pct as the reward
 grading_result.json + per-problem Markdown justification
         ↓  where a professor grade exists
 discrepancy report: side-by-side scores, flagged disagreements
@@ -248,27 +250,42 @@ valid.
   `title`, `max_points` (> 0), `points` (`0 <= points <= max_points`),
   `evidence` (non-empty string citing what in the submission justifies
   the score), and optional `bonus` (boolean, default false). At least
-  one criterion must be non-bonus, so `raw_max > 0` and `score_pct` is
-  always well defined.
+  one criterion must be non-bonus, so `raw_max > 0` and the derived
+  percentages are always well defined.
 - `raw_points`, `raw_max` — sums over non-bonus criteria.
 - `bonus_points`, `bonus_max` — sums over bonus criteria (0 when none).
-- `score_pct` — `100 * raw_points / raw_max`.
 - `overall_comment` — short free-text summary.
 
-The generic grading verifier re-derives every aggregate and fails the
-contract on any mismatch, duplicate criterion id, out-of-range points,
-missing or all-bonus criteria, or empty evidence. Provenance (submission, reference, rubric, and
+The sums are the grader's self-check, not the source of truth: the
+generic grading verifier re-derives every sum from the criteria and
+fails the contract on any mismatch, duplicate criterion id,
+out-of-range points, missing or all-bonus criteria, or empty evidence.
+Percentages are never authored by the grader — all division and
+denominator policy lives in code (`derive_scores` in
+`grading_schema.py`), so a scoring-convention change never invalidates
+stored grading results. Provenance (submission, reference, rubric, and
 config hashes) is recorded by the materializer and the run record,
 never authored by the LLM: the grader's required output stays minimal
 to reduce parse failures.
 
 ### Reward semantics
 
-The grading verifier surfaces `score_pct` — a 0–100 scale over required
-criteria only — as the Harbor reward. Bonus points live only inside
-`grading_result.json`. This keeps rewards comparable across assignments
-regardless of point totals or bonus availability. The solve verifier's
-reward remains the 0/1 output-contract check.
+From a validated grading result the verifier derives two percentages:
+
+- `score_pct` — `100 * (raw_points + bonus_points) / raw_max`, the
+  gradebook score: graded out of 100% of the required points, with
+  earned bonus counting on top, so it can exceed 100.
+- `required_pct` — `100 * raw_points / raw_max`, a 0–100 scale over
+  required criteria only, comparable across assignments regardless of
+  bonus availability.
+
+`score_pct` is surfaced as the primary Harbor reward so grades appear
+in the viewer; `required_pct` is written beside it in the verifier's
+reward file and details. Any contract violation yields reward 0.0.
+Downstream aggregation (per-student or per-agent totals, final course
+scores, bonus caps) reads the per-criterion judgments in
+`grading_result.json`, so it never depends on the reward convention.
+The solve verifier's reward remains the 0/1 output-contract check.
 
 ### Solve task layout and verifier
 
