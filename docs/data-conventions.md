@@ -45,10 +45,11 @@ $AAT_DATA_DIR/
 ├── submissions/                # real student submissions, as received
 │   └── <course_id>/<student_id>/<assignment_id>/
 ├── tables/                     # rosters, grade exports, identity mappings
-├── runs/                       # solve jobs: Harbor output + aat-run.json
+├── runs/                       # solve jobs (Harbor job dirs + aat-run.json)
 │   └── <utc>__<config>__<hash8>/
 ├── grading/                    # grading jobs, any submission source
 │   └── <utc>__<config>__<hash8>/
+├── analysis/                   # derived tables and reports, regenerable
 └── scratch/                    # disposable working space
 ```
 
@@ -60,6 +61,11 @@ Notes:
   logs: they embed full assignment content and possibly student text.
 - `tables/` holds the only mapping between real identities and anonymized
   IDs; it never leaves the data root.
+- `analysis/` holds only derived outputs: statistics tables, discrepancy
+  reports, exported summaries. Everything in it is regenerable from
+  `runs/`, `grading/`, and `tables/`, and every output records its
+  provenance (toolkit version, config identities, and the job
+  directories consumed). It is a cache, never a source of truth.
 - Solver licenses (e.g. a Gurobi WLS license file or its
   `GRB_WLSACCESSID`/`GRB_WLSSECRET`/`GRB_LICENSEID` values) are
   credentials: they live outside the repository — in the data root or
@@ -97,23 +103,28 @@ Each `aat solve` or `aat grade` invocation creates one job directory —
 `<utc-timestamp>__<config-name>__<identity-prefix8>/` (with a rare `-N`
 suffix on same-second collisions) — under `runs/` (solve jobs) or
 `grading/` (grading jobs, whether the submissions are benchmark
-artifacts or real student folders). The directory contains Harbor's job
-output unchanged plus `aat-run.json`, the toolkit's run record: the
-exact `harbor --version`, the toolkit's own version, agent and model
-configuration, effective command line, repeats, maximum concurrent trials,
-and executed flag,
+artifacts or real student folders). The AAT job directory is itself the
+Harbor job directory: Harbor's `config.json`, `result.json`, logs, and
+per-trial directories live directly inside it, beside `aat-run.json`
+(the toolkit's run record) and the generated Harbor job config. The
+run record holds the exact `harbor --version`, the toolkit's own
+version, agent and model configuration, effective command line,
+repeats, maximum concurrent trials, and executed flag,
 requested items with their per-item identities, config identity, and
 input hashes (assignment, prompt, environment template, verifier,
 rubric, submission, reference solution, grading schema — as
 applicable). Doneness of an item under a config is derived from these
 directories and Harbor's per-trial result files; there is no separate
-bookkeeping state.
+bookkeeping state. A solve item is done when a completed, non-error
+trial exists (a 0-reward contract failure is a countable outcome); a
+grading item is done only when a completed trial produced a valid
+grading result — failed gradings are regraded by the next incremental
+run.
 
-Use the exact `harbor view <specific-job-directory>` command printed by
-`aat` to inspect a job. Do not use `harbor view --jobs` on the shared
-`runs/` or `grading/` parent: those directories contain AAT wrapper
-directories, while Harbor's own job is nested beneath each wrapper, and
-Harbor 0.20 tries to parse that nested job as a trial. Harbor may also print
+Because the layout is flat, `harbor view` works on the shared `runs/`
+or `grading/` parent to browse a stage's jobs, and the exact
+`harbor view <specific-job-directory>` command printed by `aat` opens
+one job. Harbor may also print
 an `upload` suggestion after a run; do not upload real-course jobs unless
 all assignment, reference, submission, grading, and transcript content is
 authorized for disclosure or has been sanitized.

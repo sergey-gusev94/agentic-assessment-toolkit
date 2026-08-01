@@ -15,11 +15,16 @@ from agentic_assessment_toolkit.harbor import (
     harbor_environment,
     harbor_version,
     is_completed_trial,
+    is_graded_trial,
     job_dir_name,
     read_run_record,
     write_run_record,
 )
-from tests.test_config import SOLVE_TOML, write_config
+from tests.test_config import GRADE_TOML, SOLVE_TOML, write_config
+
+# What the grading verifier emits for a valid grading result; a contract
+# violation emits {"reward": 0.0} with no required_pct.
+GRADED_REWARDS = {"reward": 85.0, "required_pct": 80.0}
 
 
 def test_harbor_version_is_pinned_range() -> None:
@@ -82,14 +87,19 @@ def write_trial(
     *,
     task_name: str,
     completed: bool = True,
+    rewards: dict[str, float] | None = None,
     submission_files: dict[str, str] | None = None,
 ) -> Path:
-    trial_dir = job_dir / "harbor" / trial_name
+    # Flat layout: the AAT job directory is the Harbor job directory, so
+    # trials are its immediate subdirectories.
+    trial_dir = job_dir / trial_name
     trial_dir.mkdir(parents=True)
     result: dict[str, object] = {
         "task_name": task_name,
         "exception_info": None if completed else {"exception_type": "AgentTimeoutError"},
-        "verifier_result": {"rewards": {"reward": 1.0}} if completed else None,
+        "verifier_result": (
+            {"rewards": {"reward": 1.0} if rewards is None else rewards} if completed else None
+        ),
     }
     (trial_dir / "result.json").write_text(json.dumps(result), encoding="utf-8")
     if submission_files is not None:
@@ -144,6 +154,16 @@ def test_is_completed_trial() -> None:
     assert not is_completed_trial({"exception_info": None, "verifier_result": {"rewards": {}}})
 
 
+def test_is_graded_trial() -> None:
+    assert is_graded_trial({"exception_info": None, "verifier_result": {"rewards": GRADED_REWARDS}})
+    # A contract violation completes the trial but is a failed
+    # measurement, never a grade.
+    assert not is_graded_trial(
+        {"exception_info": None, "verifier_result": {"rewards": {"reward": 0.0}}}
+    )
+    assert not is_graded_trial({"exception_info": None, "verifier_result": None})
+
+
 def test_completed_items(tmp_path: Path) -> None:
     config_path = write_config(tmp_path, SOLVE_TOML, "codex-high")
     jobs_root = tmp_path / "runs"
@@ -162,6 +182,40 @@ def test_completed_items(tmp_path: Path) -> None:
     write_trial(job_dir, "t2__def5678", task_name="t2", completed=False)
     assert completed_items(jobs_root) == {("C1/HW1", "done-identity")}
     assert completed_items(tmp_path / "absent") == set()
+
+
+def test_solve_contract_failure_counts_done(tmp_path: Path) -> None:
+    """A 0-reward solve is a countable outcome, not a retryable failure."""
+    config_path = write_config(tmp_path, SOLVE_TOML, "codex-high")
+    jobs_root = tmp_path / "runs"
+    job_dir = write_job(
+        jobs_root,
+        "20260731T000000Z__codex-high__cccccccc",
+        stage="solve",
+        config_path=config_path,
+        items=[make_item("t1", "C1/HW1", "i1")],
+    )
+    write_trial(job_dir, "t1__abc1234", task_name="t1", rewards={"reward": 0.0})
+    assert completed_items(jobs_root) == {("C1/HW1", "i1")}
+
+
+def test_grading_doneness_requires_valid_result(tmp_path: Path) -> None:
+    """An invalid grading result leaves the item not-done for regrading."""
+    config_path = write_config(tmp_path, GRADE_TOML, "codex-grader-high")
+    jobs_root = tmp_path / "grading"
+    job_dir = write_job(
+        jobs_root,
+        "20260731T000000Z__codex-grader-high__cccccccc",
+        stage="grade",
+        config_path=config_path,
+        items=[
+            make_item("t1", "C1/stu1/HW1", "i1"),
+            make_item("t2", "C1/stu2/HW1", "i2"),
+        ],
+    )
+    write_trial(job_dir, "t1__abc1234", task_name="t1", rewards=GRADED_REWARDS)
+    write_trial(job_dir, "t2__def5678", task_name="t2", rewards={"reward": 0.0})
+    assert completed_items(jobs_root) == {("C1/stu1/HW1", "i1")}
 
 
 def test_completed_solve_submissions(tmp_path: Path) -> None:

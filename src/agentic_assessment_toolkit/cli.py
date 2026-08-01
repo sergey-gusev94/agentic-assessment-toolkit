@@ -2,9 +2,11 @@
 
 Three option axes (docs/design.md, "CLI design"): selection and
 mechanics are flags; experiment configuration lives only in named config
-files. Doneness is derived from the data root — an item is done under a
-config when some job directory holds a completed, non-error trial for
-its per-item identity — so bulk commands are naturally incremental.
+files. Doneness is derived from the data root — a solve item is done
+under a config when some job directory holds a completed, non-error
+trial for its per-item identity; a grading item additionally needs a
+valid grading result — so bulk commands are naturally incremental and
+failed gradings are regraded automatically.
 """
 
 from __future__ import annotations

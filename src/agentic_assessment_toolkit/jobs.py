@@ -14,7 +14,6 @@ from pathlib import Path
 
 from .config import ConfigError, ExperimentConfig
 
-HARBOR_JOB_NAME = "harbor"
 HARBOR_JOB_CONFIG_FILENAME = "harbor-job.json"
 
 DEFAULT_MAX_CONCURRENT_TRIALS = 8
@@ -40,14 +39,21 @@ def build_harbor_job_config(
     repeats: int,
     max_concurrent_trials: int,
 ) -> dict[str, object]:
-    """A Harbor JobConfig document (harbor.models.job.config:JobConfig)."""
+    """A Harbor JobConfig document (harbor.models.job.config:JobConfig).
+
+    The AAT job directory is itself the Harbor job directory
+    (docs/data-conventions.md): the stage parent is Harbor's jobs
+    directory and the AAT directory name is the Harbor job name, so
+    Harbor's files land beside aat-run.json and this config with no
+    nesting, and `harbor view` works on the shared parent.
+    """
     agent: dict[str, object] = {"name": config.agent, "model_name": config.model}
     kwargs = agent_kwargs(config)
     if kwargs:
         agent["kwargs"] = kwargs
     return {
-        "jobs_dir": str(job_dir),
-        "job_name": HARBOR_JOB_NAME,
+        "jobs_dir": str(job_dir.parent),
+        "job_name": job_dir.name,
         "n_attempts": repeats,
         "n_concurrent_trials": max_concurrent_trials,
         "agents": [agent],

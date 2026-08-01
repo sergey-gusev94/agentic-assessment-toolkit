@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from importlib import metadata
@@ -20,7 +20,6 @@ from pathlib import Path
 from . import __version__
 from .config import ExperimentConfig, Stage
 from .hashing import sha256_bytes
-from .jobs import HARBOR_JOB_NAME
 
 RUN_RECORD_FILENAME = "aat-run.json"
 RUN_RECORD_SCHEMA_VERSION = 1
@@ -158,11 +157,16 @@ def job_dirs(jobs_root: Path) -> list[Path]:
 
 
 def trial_results(job_dir: Path) -> Iterator[tuple[Path, dict[str, object]]]:
-    """Yield (trial_dir, result) for every Harbor trial result in a job dir."""
-    harbor_dir = job_dir / HARBOR_JOB_NAME
-    if not harbor_dir.is_dir():
+    """Yield (trial_dir, result) for every Harbor trial result in a job dir.
+
+    The AAT job directory is the Harbor job directory (flat layout), so
+    trials are its immediate subdirectories that hold a ``result.json``;
+    the ``tasks/`` directory and Harbor's job-level files have none and
+    are skipped naturally.
+    """
+    if not job_dir.is_dir():
         return
-    for trial_dir in sorted(harbor_dir.iterdir(), key=lambda entry: entry.name):
+    for trial_dir in sorted(job_dir.iterdir(), key=lambda entry: entry.name):
         result_path = trial_dir / "result.json"
         if not result_path.is_file():
             continue
@@ -186,10 +190,39 @@ def is_completed_trial(result: dict[str, object]) -> bool:
     return isinstance(verifier_result, dict) and bool(verifier_result.get("rewards"))
 
 
-def completed_task_names(job_dir: Path) -> set[str]:
+def is_graded_trial(result: dict[str, object]) -> bool:
+    """Completed with a *valid* grading result.
+
+    The grading verifier writes ``required_pct`` into the rewards only
+    when ``grading_result.json`` passed validation; a contract violation
+    emits the bare ``{"reward": 0.0}``. An invalid grading is a failed
+    measurement, not a grade, so it never counts as done
+    (docs/design.md, "Run records and idempotence").
+    """
+    if not is_completed_trial(result):
+        return False
+    verifier_result = result.get("verifier_result")
+    if not isinstance(verifier_result, dict):
+        return False
+    rewards = verifier_result.get("rewards")
+    return isinstance(rewards, dict) and "required_pct" in rewards
+
+
+def _done_check(stage: object) -> Callable[[dict[str, object]], bool]:
+    """The per-stage doneness predicate for a run record's stage value.
+
+    Solve failures (reward 0) are countable experimental outcomes and
+    stay done; grading requires a valid grading result.
+    """
+    return is_graded_trial if stage == "grade" else is_completed_trial
+
+
+def completed_task_names(
+    job_dir: Path, check: Callable[[dict[str, object]], bool] = is_completed_trial
+) -> set[str]:
     names = set()
     for _, result in trial_results(job_dir):
-        if is_completed_trial(result):
+        if check(result):
             task_name = result.get("task_name")
             if isinstance(task_name, str):
                 names.add(task_name)
@@ -204,18 +237,19 @@ def _record_items(record: dict[str, object]) -> list[dict[str, object]]:
 
 
 def completed_items(jobs_root: Path) -> set[tuple[str, str]]:
-    """(item_id, item_identity) pairs with at least one completed trial.
+    """(item_id, item_identity) pairs with at least one done trial.
 
     Doneness is keyed on the pair, per docs/design.md: the identity alone
     is not item-specific (it hashes config + environment + rubric bytes),
-    so distinct items routinely share one identity.
+    so distinct items routinely share one identity. The per-trial check
+    is stage-specific, read from each job's run record.
     """
     done = set()
     for job_dir in job_dirs(jobs_root):
         record = read_run_record(job_dir)
         if record is None:
             continue
-        completed = completed_task_names(job_dir)
+        completed = completed_task_names(job_dir, _done_check(record.get("stage")))
         for item in _record_items(record):
             item_id = item.get("item_id")
             task_dir_name = item.get("task_dir_name")

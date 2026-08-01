@@ -7,8 +7,10 @@ from typing import Any
 import pytest
 
 from agentic_assessment_toolkit.grading_schema import (
+    computed_sums,
     derive_scores,
     load_grading_result,
+    sums_report,
     validate_grading_result,
 )
 
@@ -59,7 +61,9 @@ def test_non_object_is_rejected() -> None:
 def test_missing_fields_are_reported() -> None:
     errors = validate_grading_result({})
     assert "missing required field 'criteria'" in errors
-    assert "missing required field 'raw_points'" in errors
+    assert "missing required field 'overall_comment'" in errors
+    # Authored sums are a self-check, not required fields.
+    assert not any("raw_points" in e for e in errors)
 
 
 def test_wrong_schema_version() -> None:
@@ -132,16 +136,55 @@ def test_all_bonus_criteria_rejected() -> None:
     )
 
 
-def test_aggregate_mismatch_rejected() -> None:
+def test_sum_mismatch_is_flagged_not_rejected() -> None:
     data = valid_result()
     data["raw_points"] = 9
-    errors = validate_grading_result(data)
-    assert any("raw_points is 9" in e for e in errors)
+    assert validate_grading_result(data) == []
+    report: dict[str, Any] = sums_report(data)
+    assert report["consistent"] is False
+    assert report["authored"]["raw_points"] == 9
+    assert report["computed"]["raw_points"] == 8.0
+
+
+def test_missing_sums_are_valid_but_inconsistent() -> None:
+    data = valid_result()
+    del data["raw_points"]
+    assert validate_grading_result(data) == []
+    report: dict[str, Any] = sums_report(data)
+    assert report["consistent"] is False
+    assert report["authored"]["raw_points"] is None
+
+
+def test_consistent_sums_report() -> None:
+    report = sums_report(valid_result())
+    assert report["consistent"] is True
+    assert report["computed"] == {
+        "raw_points": 8.0,
+        "raw_max": 10.0,
+        "bonus_points": 0.5,
+        "bonus_max": 1.0,
+    }
+
+
+def test_computed_sums_from_criteria() -> None:
+    assert computed_sums(valid_result()) == {
+        "raw_points": 8.0,
+        "raw_max": 10.0,
+        "bonus_points": 0.5,
+        "bonus_max": 1.0,
+    }
 
 
 def test_derive_scores_counts_bonus_over_required_max() -> None:
     scores = derive_scores(valid_result())
     assert scores == {"score_pct": 85.0, "required_pct": 80.0}
+
+
+def test_derive_scores_ignores_authored_sums() -> None:
+    """The computed sums are authoritative; the self-check never enters scoring."""
+    data = valid_result()
+    data["raw_points"] = 999
+    assert derive_scores(data) == {"score_pct": 85.0, "required_pct": 80.0}
 
 
 def test_derive_scores_can_exceed_100() -> None:
@@ -186,6 +229,7 @@ def test_float_accumulation_tolerated() -> None:
         "overall_comment": "ok",
     }
     assert validate_grading_result(data) == []
+    assert sums_report(data)["consistent"] is True
 
 
 def test_non_string_comment_rejected() -> None:

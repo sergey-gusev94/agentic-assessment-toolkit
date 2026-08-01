@@ -72,16 +72,16 @@ new solver trials that have not yet been graded. To run another independent
 grader trial over an already-graded submission, use `--force` on `aat grade`
 (and optionally `--repeats N`).
 
-Inspect a run with the exact per-job command printed by `aat`, for example:
+Inspect a single run with the exact per-job command printed by `aat`, or
+browse a whole stage — job directories are Harbor job directories, so the
+viewer works on the shared `runs/` and `grading/` parents too:
 
 ```bash
 harbor view "$AAT_DATA_DIR/grading/20260801T044338Z__codex-grader-high__44292e75"
+harbor view "$AAT_DATA_DIR/runs"
 ```
 
-Do not point `harbor view --jobs` at the shared `runs/` or `grading/` parent:
-those directories contain AAT job wrappers, with each Harbor job nested one
-level deeper, and Harbor 0.20 misidentifies the nested job as a trial. Also do
-not use Harbor's suggested `upload` command for real coursework unless the
+Do not use Harbor's suggested `upload` command for real coursework unless the
 assignment, reference solution, submissions, and transcripts are authorized
 for disclosure or have been sanitized.
 

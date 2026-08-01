@@ -1,9 +1,13 @@
-"""Grading output schema: fields and internal-consistency validation.
+"""Grading output schema: structural validation and authoritative sums.
 
-Specified in docs/design.md ("Grading output schema"). This module is
-stdlib-only and self-contained by design: it is imported by the package
-and also copied verbatim into every materialized grading task beside the
-generic grading verifier, so validation has exactly one source of truth.
+Specified in docs/design.md ("Grading output schema"). Structural
+violations fail the contract; the grader's authored sums are a
+self-check only — the sums computed from the criteria are authoritative
+everywhere, and an authored-sum mismatch is reported as an
+inconsistency, never a failure. This module is stdlib-only and
+self-contained by design: it is imported by the package and also copied
+verbatim into every materialized grading task beside the generic
+grading verifier, so validation has exactly one source of truth.
 """
 
 from __future__ import annotations
@@ -16,15 +20,14 @@ SCHEMA_VERSION = 1
 RESULT_FILENAME = "grading_result.json"
 JUSTIFICATION_FILENAME = "justification.md"
 
-_TOP_LEVEL_FIELDS = (
+_REQUIRED_FIELDS = (
     "schema_version",
     "criteria",
-    "raw_points",
-    "raw_max",
-    "bonus_points",
-    "bonus_max",
     "overall_comment",
 )
+# Authored by the grader as a self-check; validated for consistency in
+# sums_report(), never required and never authoritative.
+_SUM_FIELDS = ("raw_points", "raw_max", "bonus_points", "bonus_max")
 _ABS_TOL = 1e-6
 
 
@@ -37,12 +40,16 @@ def _close(a: float, b: float) -> bool:
 
 
 def validate_grading_result(data: object) -> list[str]:
-    """Return every contract violation in a grading result; empty means valid."""
+    """Return every contract violation in a grading result; empty means valid.
+
+    Structural checks only: the authored sum fields are a self-check
+    compared separately by ``sums_report`` and never fail the contract.
+    """
     if not isinstance(data, dict):
         return ["grading result must be a JSON object"]
 
     errors = [
-        f"missing required field {field!r}" for field in _TOP_LEVEL_FIELDS if field not in data
+        f"missing required field {field!r}" for field in _REQUIRED_FIELDS if field not in data
     ]
 
     schema_version = data.get("schema_version")
@@ -54,44 +61,27 @@ def validate_grading_result(data: object) -> list[str]:
         errors.append(f"schema_version must be the integer {SCHEMA_VERSION}")
 
     criteria = data.get("criteria")
-    raw_points = 0.0
-    raw_max = 0.0
-    bonus_points = 0.0
-    bonus_max = 0.0
-    criteria_usable = False
     if "criteria" in data:
         if not isinstance(criteria, list) or not criteria:
             errors.append("criteria must be a non-empty list")
         else:
-            criteria_usable = True
             seen_ids: set[str] = set()
+            usable = True
             non_bonus_count = 0
             for index, entry in enumerate(criteria):
                 label = f"criteria[{index}]"
                 if not isinstance(entry, dict):
                     errors.append(f"{label} must be an object")
-                    criteria_usable = False
+                    usable = False
                     continue
                 entry_errors = _validate_criterion(label, entry, seen_ids)
                 if entry_errors:
                     errors.extend(entry_errors)
-                    criteria_usable = False
-                    continue
-                points = float(entry["points"])
-                max_points = float(entry["max_points"])
-                if entry.get("bonus", False):
-                    bonus_points += points
-                    bonus_max += max_points
-                else:
+                    usable = False
+                elif not entry.get("bonus", False):
                     non_bonus_count += 1
-                    raw_points += points
-                    raw_max += max_points
-            if criteria_usable and non_bonus_count == 0:
+            if usable and non_bonus_count == 0:
                 errors.append("at least one criterion must be non-bonus")
-                criteria_usable = False
-
-    if criteria_usable:
-        errors.extend(_validate_aggregates(data, raw_points, raw_max, bonus_points, bonus_max))
 
     comment = data.get("overall_comment")
     if "overall_comment" in data and not isinstance(comment, str):
@@ -145,34 +135,53 @@ def _validate_criterion(label: str, entry: dict[str, object], seen_ids: set[str]
     return errors
 
 
-def _validate_aggregates(
-    data: dict[str, object],
-    raw_points: float,
-    raw_max: float,
-    bonus_points: float,
-    bonus_max: float,
-) -> list[str]:
-    errors = []
-    expected = {
-        "raw_points": raw_points,
-        "raw_max": raw_max,
-        "bonus_points": bonus_points,
-        "bonus_max": bonus_max,
-    }
-    for field, value in expected.items():
-        declared = data.get(field)
-        if not _is_number(declared):
-            if field in data:
-                errors.append(f"{field} must be a number")
-        elif not _close(float(declared), value):  # type: ignore[arg-type]
-            errors.append(f"{field} is {declared}, but the criteria sum to {value}")
-    return errors
-
-
 def _as_number(value: object) -> float:
     if not isinstance(value, int | float) or isinstance(value, bool):
         raise ValueError(f"expected a number, got {value!r}")
     return float(value)
+
+
+def computed_sums(data: dict[str, object]) -> dict[str, float]:
+    """The point sums computed from the criteria — the authoritative sums.
+
+    Call only on data that passed validate_grading_result.
+    """
+    criteria = data["criteria"]
+    if not isinstance(criteria, list):
+        raise ValueError("criteria must be a list")
+    sums = dict.fromkeys(_SUM_FIELDS, 0.0)
+    for entry in criteria:
+        if not isinstance(entry, dict):
+            raise ValueError("criteria entries must be objects")
+        points = _as_number(entry["points"])
+        max_points = _as_number(entry["max_points"])
+        if entry.get("bonus", False):
+            sums["bonus_points"] += points
+            sums["bonus_max"] += max_points
+        else:
+            sums["raw_points"] += points
+            sums["raw_max"] += max_points
+    return sums
+
+
+def sums_report(data: dict[str, object]) -> dict[str, object]:
+    """Compare the grader's authored sums against the computed sums.
+
+    The authored sums are a self-check: a missing, non-numeric, or
+    mismatching value makes the report inconsistent but is never a
+    contract violation (docs/design.md, "Grading output schema"). The
+    inconsistency rate per grader configuration is a judge-quality
+    signal for the statistics layer. Call only on data that passed
+    validate_grading_result.
+    """
+    computed = computed_sums(data)
+    authored = {field: data.get(field) for field in _SUM_FIELDS}
+    consistent = True
+    for field in _SUM_FIELDS:
+        value = authored[field]
+        if not _is_number(value) or not _close(float(value), computed[field]):  # type: ignore[arg-type]
+            consistent = False
+    return {"consistent": consistent, "authored": authored, "computed": computed}
 
 
 def derive_scores(data: dict[str, object]) -> dict[str, float]:
@@ -180,16 +189,16 @@ def derive_scores(data: dict[str, object]) -> dict[str, float]:
 
     ``score_pct`` counts earned bonus points over the required maximum,
     so it can exceed 100; ``required_pct`` covers required criteria only
-    (0-100). Percentages are never authored by the grader — all division
-    lives here. Call only on data that passed validate_grading_result,
-    which guarantees the sums match the criteria and ``raw_max > 0``.
+    (0-100). Percentages are never authored by the grader, and the sums
+    they derive from are computed from the criteria, never read from the
+    authored self-check fields — all summation and division lives here.
+    Call only on data that passed validate_grading_result, which
+    guarantees a non-bonus criterion exists and so ``raw_max > 0``.
     """
-    raw_points = _as_number(data["raw_points"])
-    raw_max = _as_number(data["raw_max"])
-    bonus_points = _as_number(data["bonus_points"])
+    sums = computed_sums(data)
     return {
-        "score_pct": 100.0 * (raw_points + bonus_points) / raw_max,
-        "required_pct": 100.0 * raw_points / raw_max,
+        "score_pct": 100.0 * (sums["raw_points"] + sums["bonus_points"]) / sums["raw_max"],
+        "required_pct": 100.0 * sums["raw_points"] / sums["raw_max"],
     }
 
 

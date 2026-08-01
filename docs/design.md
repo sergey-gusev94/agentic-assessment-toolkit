@@ -4,84 +4,9 @@ This is the decision and design layer between the vision in
 [brief.md](brief.md) and implementation. [research.md](research.md) is a
 frozen research snapshot (2026-07-30) that surveys the landscape; this
 document records what was actually decided and what is being built. When the
-two disagree, this document wins.
-
-## Revisions
-
-- **2026-08-01.** Dependency policy reversed. The zero-dependency rule
-  ("other Python dependencies stay at zero; additions require a recorded
-  decision") is replaced by prefer-good-dependencies: a well-maintained
-  library is preferred over hand-rolled code whenever it replaces
-  nontrivial logic. Two standing exceptions: files shipped into task
-  containers (the verifiers and the copied `grading_schema.py`) remain
-  standalone and stdlib-only, because they execute where the package and
-  its dependencies are not installed; and tests remain deterministic,
-  local, offline, and credential-free per AGENTS.md — library randomness
-  is always explicitly seeded, and floating-point aggregates are compared
-  with tolerances, not byte-exact. Harbor remains the only
-  runtime-orchestration dependency and is still invoked exclusively
-  through its CLI. First beneficiaries: `numpy`, `scipy`, and `pandas`
-  are added as runtime dependencies for the stage 3 statistics work
-  (`metric.py`, the discrepancy report).
-- **2026-07-31 (b).** Deliverables are source-format: the solver output
-  contract requires executed notebooks and report/document *source*
-  (Markdown or LaTeX source); compiled PDFs are never required, so the
-  `latex` environment flavor is deferred and no flavor needs TeX. Grading
-  tasks always use one dedicated `grading` environment flavor with
-  document-reading tools (PDF text extraction, spreadsheet reading) —
-  handouts, reference solutions, and student submissions contain PDFs
-  that the grader must read as data. Solve flavors include the same
-  reading tools because handouts are PDFs. The optimization flavor ships
-  HiGHS as the license-free default solver and installs `gurobipy`
-  with no license baked in: Gurobi runs are enabled at run time by
-  injecting academic WLS credentials from outside the repository
-  (credentials are never committed, per
-  [data-conventions.md](data-conventions.md)). The config identity is
-  broadened to fold in the stage's verifier bytes and its rendered task
-  skeleton bytes, while each item's resolved environment template bytes
-  (and rubric bytes, for grading) fold into a per-item identity; the run
-  record gains the toolkit's own version. Small contract clarifications:
-  at least one criterion must be non-bonus (`raw_max > 0`);
-  `grading_output/` may contain extra scratch files, but the two
-  required deliverables must be present and valid; for `--from-solve`,
-  each completed solve trial with a non-empty submission artifact is one
-  gradable item (trials without one are skipped and stay visible as
-  explicit outcomes in the solve job); materialized task files are
-  byte-deterministic (no timestamps or absolute paths), so
-  golden-fixture tests compare byte-exact.
-- **2026-07-31.** Grading moved out of RewardKit verifiers and standalone
-  host runs into ordinary Harbor grading jobs, so solving and grading share
-  one orchestration path. RewardKit is descoped: its rubric machinery is
-  replaced by a grader prompt template and an output schema. `harbor job
-  regrade` is descoped: regrading is re-running the grading job over
-  unchanged artifacts. Per-assignment deterministic tests are descoped: each
-  stage keeps one generic contract verifier, and grades come from the LLM
-  grader's artifacts. Grading justifications are Markdown initially;
-  LaTeX/PDF output is a later prompt change.
-- **2026-07-31.** Full agent capability is the default in both stages:
-  public network access and the agents' normal toolset, for solving and
-  grading alike. The provider-only egress restriction on grading jobs is
-  descoped to a later-on-demand hardening option; the associated
-  credential-exposure risk is accepted explicitly in decision 9.
-- **2026-07-31.** The toolkit is a thin wrapper over Harbor at run time:
-  `aat solve` and `aat grade` materialize tasks and then invoke
-  `harbor run` as a subprocess, writing a run record (exact Harbor
-  version, agent and model configuration, effective command line, input
-  hashes) beside the job output. Harbor becomes the single version-bounded
-  runtime dependency. Repository tests still never invoke Harbor or
-  Docker; they assert on materialized files and constructed command lines.
-- **2026-07-31.** Clean-slate specification. The manual pilots and the
-  reference repositories are demoted to evidence: nothing is ported from
-  them, and every contract — grading output schema, reward semantics,
-  prompt templates, verifiers, environment templates, config identity,
-  run records — is specified fresh in this document and
-  [data-conventions.md](data-conventions.md). The reward is a derived,
-  bonus-inclusive `score_pct` that can exceed 100 (see the reward
-  semantics section); the grader authors judgments and point sums, never
-  percentages. Environment templates are
-  per-course flavors (data-science and optimization first) selected via
-  course defaults and per-assignment overrides. Experiment configs are
-  TOML files committed under `configs/`.
+two disagree, this document wins. This document is maintained in place, not
+as a changelog: superseded decisions are rewritten, not preserved as
+history.
 
 ## Decisions
 
@@ -138,12 +63,15 @@ analysis are in research.md.
    outputs, where applicable — live in the solver prompt's output
    contract and are judged by the grader, not checked mechanically. The grading verifier
    validates that `grading_result.json`
-   exists, parses, and satisfies its internal-consistency rules, then
-   derives the percentage scores from the grader's validated point sums
-   and surfaces the bonus-inclusive `score_pct` as the Harbor reward so
-   grades appear in the viewer. The grader authors judgments and sums,
-   never percentages: all division and denominator policy lives in code
-   (see the contracts section). The deliverables
+   exists, parses, and satisfies the structural contract, computes the
+   point sums from the criteria — the grader's authored sums are a
+   self-check only; a mismatch is recorded as an inconsistency flag,
+   never authoritative and never a contract failure — then derives the
+   percentage scores from the computed sums and surfaces the
+   bonus-inclusive `score_pct` as the Harbor reward so grades appear in
+   the viewer. The grader authors judgments, never percentages: all
+   summation, division, and denominator policy lives in code (see the
+   contracts section). The deliverables
    are the JSON plus a written per-problem Markdown justification.
 7. **Regrading is re-running the grader.** Solving and grading are separable
    in time because grading consumes only stored artifacts; a revised rubric
@@ -201,6 +129,7 @@ concurrency management               environment (Dockerfile) templates
 artifact + transcript capture        generic contract verifiers (2)
 ATIF trajectories                    grading output schema
 results viewer                       sanity-check task generation
+                                     results loading into tidy tables
                                      statistical metric.py
                                      discrepancy report for professors
                                      anonymization helpers for student data
@@ -219,7 +148,7 @@ status, duration, token usage
         ↓  grading-task materializer (same path as student grading)
 Harbor grading job                            → see grading pipeline below
         ↓
-metric.py: score distributions, repeat variance, pass-at-k, bootstrap CIs
+results.py + metric.py: score distributions, repeat variance, bootstrap CIs
 clustered by assignment, explicit failure accounting
 ```
 
@@ -271,21 +200,30 @@ valid.
 - `bonus_points`, `bonus_max` — sums over bonus criteria (0 when none).
 - `overall_comment` — short free-text summary.
 
-The sums are the grader's self-check, not the source of truth: the
-generic grading verifier re-derives every sum from the criteria and
-fails the contract on any mismatch, duplicate criterion id,
-out-of-range points, missing or all-bonus criteria, or empty evidence.
-Percentages are never authored by the grader — all division and
-denominator policy lives in code (`derive_scores` in
-`grading_schema.py`), so a scoring-convention change never invalidates
-stored grading results. Provenance (submission, reference, rubric, and
+The sums are the grader's self-check, never the source of truth: the
+generic grading verifier always recomputes every sum from the criteria,
+and the computed sums are authoritative everywhere — score derivation,
+the reward file, and downstream statistics. An authored sum that is
+missing, non-numeric, or disagrees with the computed value is recorded
+as a sums-consistency flag (with the authored and computed values) in
+the verifier details, not failed: an arithmetic slip does not void an
+otherwise sound judgment, and the flag's rate per grader configuration
+is itself a judge-quality signal consumed by the statistics layer.
+Structural violations remain hard contract failures: missing or
+malformed required fields, duplicate criterion ids, out-of-range or
+non-finite points, missing or all-bonus criteria, and empty evidence.
+Percentages are never authored by the grader — all summation and
+division policy lives in code (`derive_scores` in `grading_schema.py`,
+computing from the criteria), so a scoring-convention change never
+invalidates stored grading results. Provenance (submission, reference, rubric, and
 config hashes) is recorded by the materializer and the run record,
 never authored by the LLM: the grader's required output stays minimal
 to reduce parse failures.
 
 ### Reward semantics
 
-From a validated grading result the verifier derives two percentages:
+From a validated grading result the verifier derives two percentages,
+using the sums it computed from the criteria:
 
 - `score_pct` — `100 * (raw_points + bonus_points) / raw_max`, the
   gradebook score: required and bonus criteria use the same raw-point
@@ -298,8 +236,11 @@ From a validated grading result the verifier derives two percentages:
 
 `score_pct` is surfaced as the primary Harbor reward so grades appear
 in the viewer; `required_pct` is written beside it in the verifier's
-reward file and details. Any contract violation yields reward 0.0.
-Downstream aggregation (per-student or per-agent totals, final course
+reward file and details. Any contract violation yields reward 0.0 —
+but such a trial is a failed measurement, not a harsh grade: it never
+counts as graded for doneness (see run records and idempotence), and
+the statistics layer counts it as a failure category, never as a zero
+score. Downstream aggregation (per-student or per-agent totals, final course
 scores, bonus caps) reads the per-criterion judgments in
 `grading_result.json`, so it never depends on the reward convention.
 The solve verifier's reward remains the 0/1 output-contract check.
@@ -407,8 +348,7 @@ Every environment includes `file` and `jq` for basic file-type and JSON
 inspection. Every solve flavor also includes PDF text-extraction tools
 (poppler-utils, pypdf), because assignment handouts are routinely PDFs
 that the agent must read. A `latex` flavor is deferred: the output contract
-requires document source, never compiled PDFs, so no image needs TeX
-(revision 2026-07-31 (b)).
+requires document source, never compiled PDFs, so no image needs TeX.
 
 Images pin their Python package versions; base-image digest pinning is
 deferred to reportable runs. Solver licenses (Gurobi WLS) are
@@ -442,27 +382,121 @@ edit changes the config identity by construction.
 
 Each `aat` invocation creates one job directory —
 `<utc-timestamp>__<config-name>__<identity-prefix8>/` — under `runs/`
-(solve) or `grading/` (grading) in the data root, containing Harbor's
-job output plus `aat-run.json`: the exact `harbor --version`, the
-toolkit's own version, agent and model configuration, effective command
-line, requested items with their per-item identities, config identity,
-and input hashes (assignment, prompt, environment template, verifier,
-rubric, submission, reference solution, grading schema — as
-applicable). On a rare same-second collision the job directory name
-gains a `-N` suffix; a job's identity lives in `aat-run.json`, never in
-the directory name.
+(solve) or `grading/` (grading) in the data root. The AAT job directory
+**is** the Harbor job directory: `aat` passes the stage parent as
+Harbor's jobs directory and the AAT directory name as the Harbor job
+name, so Harbor's own `config.json`, `result.json`, logs, and per-trial
+directories live directly inside it, and `aat` writes `aat-run.json`
+and the generated Harbor job config beside them (the filenames do not
+collide, and materialized task directories carry no per-trial result
+files, so Harbor's tooling ignores them). `aat-run.json` records the
+exact `harbor --version`, the toolkit's own version, agent and model
+configuration, effective command line, requested items with their
+per-item identities, config identity, and input hashes (assignment,
+prompt, environment template, verifier, rubric, submission, reference
+solution, grading schema — as applicable). On a rare same-second
+collision the job directory name gains a `-N` suffix; a job's identity
+lives in `aat-run.json`, never in the directory name.
 
-The exact per-job `harbor view <job-directory>` command printed by `aat`
-is the supported inspection path. The shared `runs/` and `grading/`
-parents contain AAT wrapper directories rather than Harbor jobs directly,
-so `harbor view <parent> --jobs` is not compatible with this nesting in
-Harbor 0.20.
+Because the layout is flat, Harbor's viewer works at both levels:
+`harbor view` on the shared `runs/` or `grading/` parent browses all
+jobs of a stage, and the exact per-job `harbor view <job-directory>`
+command printed by `aat` opens one job.
 
-An item is done under a config when some job directory with a matching
-config identity contains a completed, non-error Harbor trial for it,
-read from Harbor's per-trial result file — the same file Harbor's
-viewer consumes. This is the one deliberate coupling to Harbor's
-on-disk output format and is accepted as such.
+Doneness is stage-specific, read from Harbor's per-trial result file —
+the same file Harbor's viewer consumes. That file is parsed as plain
+JSON: this is the one deliberate coupling to Harbor's on-disk output
+format and is accepted as such, while Harbor's internal Python API
+(including its result models) stays unused. A **solve** item is done
+under a config when some job directory with a matching config identity
+contains a completed, non-error trial for it — including a trial whose
+contract reward is 0, because a solver that produced no acceptable
+submission is a legitimate, countable outcome of the experiment. A
+**grading** item is done only when such a trial additionally produced a
+*valid* grading result (the verifier derived scores from it): an
+invalid or missing `grading_result.json` is a failed measurement, not a
+grade, so the item stays not-done and the next incremental run regrades
+it automatically — no dedicated retry flag is needed. Failed grading
+trials remain on disk as explicit outcomes.
+
+Harbor-level retries stay at Harbor's default of zero: Harbor retries
+overwrite the failed attempt in place, which would erase the
+per-attempt history that explicit failure accounting depends on.
+Re-running an `aat` command is the retry mechanism, and it accumulates
+trials rather than overwriting them.
+
+### Results, statistics, and reporting
+
+The read side of the data conventions (roadmap stage 3). Everything
+below is read-only over the data root, derives entirely from the files
+specified above, and can be regenerated at any time. Files are the
+source of truth; there is no results database. Derived outputs land
+under `analysis/` in the data root (see
+[data-conventions.md](data-conventions.md)) and are stamped with their
+provenance: toolkit version, the config identities and job directories
+consumed, and the parameters of the computation.
+
+**Results loading (`results.py`).** One loader walks `runs/` and
+`grading/`, joins each job's `aat-run.json` with Harbor's per-trial
+`result.json` files and, for grading trials, the `grading_result.json`
+artifact, and returns two tidy pandas tables:
+
+- **Trials** — one row per trial: stage, course, assignment, item id,
+  config name and identity, item identity, model, reasoning effort,
+  job and trial names, outcome category, reward, `score_pct`,
+  `required_pct`, the sums-consistency flag, token counts (input,
+  cached, output), reported cost when present, per-phase durations
+  (environment setup, agent setup, agent execution, verification), and
+  timestamps. Grading rows additionally carry the submission source
+  (solve artifact or student folder), the solve job/trial lineage, and
+  the rubric name and hash.
+- **Criteria** — one row per (grading trial, criterion): id, title,
+  points, max points, bonus flag. Per-criterion analysis aggregates
+  over this table; totals are always recomputed from it, never read
+  from the grader's authored sums.
+
+**Outcome taxonomy.** Every trial maps to exactly one category:
+`completed` (a valid measurement), `contract_failed` (solve: output
+contract violated; grading: invalid or missing grading result),
+`agent_error` (provider and API errors, authentication, refusals,
+context or output limits), `infra_error` (environment build,
+healthcheck, and sandbox failures), `timeout`, `cancelled`, and
+`unknown` for unrecognized exception types. The mapping from Harbor's
+exception class names to categories is a fixed table in code,
+versioned with the toolkit — Harbor records only flat leaf class
+names, so the grouping into families lives here. A trial that carries
+both an exception and a reward is categorized by its exception.
+
+**Denominator policy.** Score statistics are computed over valid
+measurements only: solve contract pass rates over completed solve
+trials, grade statistics over trials with a valid grading result.
+Every aggregate is reported alongside explicit per-category counts and
+rates over all trials, so failures are never silently dropped and a
+contract-violation reward of 0.0 never enters a score mean.
+
+**Statistics (`metric.py`).** Trials pool by (item, config identity)
+across jobs. The initial metric set: per-item, per-assignment, and
+per-course score distributions and means; repeat variance and
+stability (the sanity trio's third leg); bootstrap confidence
+intervals clustered by assignment (clustered by student for the
+discrepancy report), with explicitly seeded RNGs; and failure rates
+per outcome category. Harbor's built-in aggregation (means,
+binary-reward pass@k) is not used: it counts errored trials in score
+means and cannot express graded rewards. Pass@k is deferred until a
+pass threshold on `score_pct` is actually needed and chosen.
+
+**Reporting (`report.py`, `aat report`).** The discrepancy report
+joins grading results with a professor grade export ingested under
+`tables/`: matched pairs with explicit de-duplication and documented
+exclusions, bias, MAE, RMSE, Pearson and Spearman correlation, Lin's
+concordance, and cluster-bootstrap confidence intervals, written as
+CSV tables plus a Markdown report under `analysis/`. Anonymization
+helpers keep the identity mapping inside `tables/`. MLflow (or any
+tracking UI) is not adopted: it would duplicate this layer without
+providing the statistics, and because files are the source of truth it
+remains retroactively adoptable via a backfill script if stage 4
+multi-agent scale or non-Python consumers ever require a browsable
+cross-experiment UI.
 
 ## Live validation (maintainer-only, outside repository scope)
 
@@ -519,12 +553,14 @@ what the toolkit provides, not by live runs.
    generic grading verifier; grading environment template. Complete when an
    agent solution and a real student folder both grade through the
    identical path — the vertical-slice acceptance criterion below.
-3. **Validity and statistics** — sanity-trio task generation (oracle,
-   garbage, repeat stability); `-k` repeat configurations; explicit failure
-   accounting; bootstrap confidence intervals; frozen grader-config
-   versioning for reportable runs; discrepancy report against a professor's
-   grade export; anonymization helpers; evaluation across the target
-   corpus.
+3. **Validity and statistics** — the results, statistics, and reporting
+   contract above: results loading (`results.py`), outcome taxonomy and
+   denominator policy, `metric.py` with clustered bootstrap confidence
+   intervals, `aat report` with the discrepancy report against a
+   professor's grade export, anonymization helpers; plus sanity-trio
+   task generation (oracle, garbage, repeat stability), `-k` repeat
+   configurations, frozen grader-config versioning for reportable runs,
+   and evaluation across the target corpus.
 4. **Additional agent stacks** — integrate and validate Claude Code, Gemini
    CLI, and other agents as solvers and graders; add cross-agent
    configurations and comparisons only after the complete Codex pipeline is
@@ -533,11 +569,16 @@ what the toolkit provides, not by live runs.
    change); compiled-document deliverables (a `latex`-capable flavor plus
    an output-contract line) if the "does it compile" signal is ever
    wanted; optional format-aware submission lints (e.g. notebook executed,
-   document compiled) if failure accounting shows the need; judge
+   document compiled) if failure accounting shows the need; mechanical
+   detection of grading-time input modification (a hash manifest over
+   the materialized submission and reference, reported by the grading
+   verifier as data, not enforcement) if the static-inspection prompt
+   rule is ever observed being violated; judge
    calibration if a trusted human-graded corpus emerges;
    restricted network egress, host-side hardening, or a credential broker
-   if grading ever faces adversarial submissions; MLflow if Harbor's viewer
-   becomes insufficient;
+   if grading ever faces adversarial submissions; MLflow (retroactively
+   backfillable from the data root) when stage 4 multi-agent scale or
+   non-Python consumers need a browsable cross-experiment UI;
    institutional or open-source packaging.
 
 ### First vertical slice (stages 1–2)
@@ -608,7 +649,11 @@ src/agentic_assessment_toolkit/
 ├── jobs.py                # step 9: pinned job-config emission
 ├── harbor.py              # step 10: harbor command construction,
 │                          #   subprocess invocation, run record
-├── cli.py                 # step 10: argparse, `aat solve` / `aat grade`
+├── results.py             # stage 3: trials + criteria tables
+├── metric.py              # stage 3: pooled statistics, bootstrap CIs
+├── report.py              # stage 3: discrepancy + benchmark reports
+├── cli.py                 # step 10: argparse, `aat solve` / `aat grade`;
+│                          #   stage 3 adds `aat report`
 └── templates/             # package data (importlib.resources)
     ├── prompts/           # step 3: solver.md, grader.md
     ├── verifiers/         # steps 5 + 7: two standalone scripts
@@ -642,12 +687,12 @@ Implementation rules:
   stable interface and what the pilots validated — never through its
   internal Python API. Docker and the agent CLIs remain documented
   external requirements that packaging cannot provide.
-- **Prefer good dependencies over hand-rolled code** (revision
-  2026-08-01). When a well-maintained library replaces nontrivial logic,
+- **Prefer good dependencies over hand-rolled code.** When a
+  well-maintained library replaces nontrivial logic,
   use it rather than reimplementing: `numpy`, `scipy`, and `pandas` are
-  the toolkit's statistics stack (`metric.py`: pooling and grouping
-  trials, pass-at-k, clustered bootstrap confidence intervals, the
-  discrepancy report). Hand-roll only when the code must run standalone
+  the toolkit's statistics stack (`results.py`, `metric.py`,
+  `report.py`: loading and pooling trials, clustered bootstrap
+  confidence intervals, the discrepancy report). Hand-roll only when the code must run standalone
   inside task containers, or when a dependency would be heavier than the
   code it replaces. The container exception is load-bearing: the shipped
   verifiers and `grading_schema.py` stay stdlib-only and self-contained,
@@ -688,8 +733,10 @@ frozen — any prompt or rubric edit must be a new config version, which
 the identity hash enforces automatically.
 
 Idempotence: an item is **done** under a config when at least one
-completed trial exists for (item, config identity), derived from the data
-root layout — no separate bookkeeping state. Done items are skipped by
+completed trial exists for (item, config identity) — for grading items,
+one that produced a valid grading result; a failed grading is a failed
+measurement and is regraded by the next incremental run — derived from
+the data root layout with no separate bookkeeping state. Done items are skipped by
 default, so re-running a bulk command is naturally incremental ("grade
 what was not yet graded"). `--force` never overwrites: it launches
 another job whose trials accumulate alongside the existing ones.
@@ -701,7 +748,7 @@ Regrading under a revised rubric needs no dedicated command: a new rubric
 is a new config identity, under which nothing is done yet, and prior
 results stay untouched.
 
-The surface is two commands (`--data-root PATH` selects the data root
+The surface is three commands (`--data-root PATH` selects the data root
 explicitly, falling back to `AAT_DATA_DIR`; it is location, not an
 experiment axis; a bare `--config NAME` resolves to
 `configs/NAME.toml` relative to the current working directory, so run
@@ -719,7 +766,21 @@ aat grade  (--from-solve NAME [--course ID] [--assignment ID]
            --config NAME [--data-root PATH] [--repeats N]
            [--max-concurrent-trials N] [--force]
            [--dry-run] [--materialize-only]
+
+aat report [--course ID] [--assignment ID] [--config NAME]...
+           [--grades-export PATH] [--out PATH] [--data-root PATH]
 ```
+
+`aat report` is read-only: it changes no experiment and no doneness,
+consumes job directories, and writes derived tables and reports under
+`analysis/` in the data root (`--out` overrides the destination).
+`--config` filters to named configs and is repeatable; comparisons are
+always segregated by config identity. `--grades-export` ingests a
+professor grade export (resolved under `tables/`) and adds the
+discrepancy section. Outputs are deterministic given the data root and
+a fixed seed. The exact flag set may grow with the reports it renders;
+because the command is derived-output-only, new flags here never enter
+any identity.
 
 New options must pass the axis test: if it changes the experiment, it
 belongs in a config file; if it changes selection or mechanics, a flag is

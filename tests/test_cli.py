@@ -9,7 +9,7 @@ from agentic_assessment_toolkit import cli
 from agentic_assessment_toolkit import harbor as harbor_mod
 from tests.conftest import COURSE_ID
 from tests.test_config import GRADE_TOML, SOLVE_TOML, write_config
-from tests.test_harbor import write_trial
+from tests.test_harbor import GRADED_REWARDS, write_trial
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -99,7 +99,9 @@ def test_solve_materialize_only_writes_job_dir(
     task_path = Path(job_config["tasks"][0]["path"])
     assert task_path.is_dir()
     assert (task_path / "task.toml").is_file()
-    assert job_config["jobs_dir"] == str(job_dir)
+    # Flat layout: Harbor's job directory is the AAT job directory.
+    assert job_config["jobs_dir"] == str(data_root / "runs")
+    assert job_config["job_name"] == job_dir.name
     assert job_config["n_concurrent_trials"] == 8
     assert record["command"] == ["harbor", "run", "-c", str(job_dir / "harbor-job.json"), "--yes"]
     out = capsys.readouterr().out
@@ -296,11 +298,13 @@ def test_grade_from_solve(data_root: Path, solve_config: Path, grade_config: Pat
     task_dir = grading_jobs[0] / "tasks" / item["task_dir_name"]
     assert (task_dir / "environment" / "submission" / "answer.md").is_file()
 
-    # Once a grading trial completes, the same solve trial is done and skipped.
+    # Once a grading trial completes with a valid grading result, the
+    # same solve trial is done and skipped.
     write_trial(
         grading_jobs[0],
         f"{item['task_dir_name'][:32]}__graded1",
         task_name=item["task_dir_name"],
+        rewards=GRADED_REWARDS,
     )
     assert (
         cli.main(
@@ -405,7 +409,10 @@ def test_doneness_is_per_item_not_per_identity_grading(
     assert len(record["items"]) == 2
     stu1_item = next(i for i in record["items"] if "stu1" in i["item_id"])
     write_trial(
-        job_dir, f"{stu1_item['task_dir_name'][:32]}__graded1", task_name=stu1_item["task_dir_name"]
+        job_dir,
+        f"{stu1_item['task_dir_name'][:32]}__graded1",
+        task_name=stu1_item["task_dir_name"],
+        rewards=GRADED_REWARDS,
     )
 
     capsys.readouterr()
@@ -413,6 +420,29 @@ def test_doneness_is_per_item_not_per_identity_grading(
     out = capsys.readouterr().out
     assert f"[done   ] {COURSE_ID}/stu1/HW1" in out
     assert f"[pending] {COURSE_ID}/stu2/HW1" in out
+
+
+def test_grade_invalid_result_is_regraded(
+    data_root: Path, grade_config: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A contract-violating grading trial leaves the item pending."""
+    assert (
+        cli.main(grade_args(data_root, grade_config, "--course", COURSE_ID, "--materialize-only"))
+        == 0
+    )
+    job_dir = job_dirs(data_root, "grading")[0]
+    record = json.loads((job_dir / "aat-run.json").read_text(encoding="utf-8"))
+    item = record["items"][0]
+    write_trial(
+        job_dir,
+        f"{item['task_dir_name'][:32]}__graded1",
+        task_name=item["task_dir_name"],
+        rewards={"reward": 0.0},  # violation: no required_pct, no valid result
+    )
+
+    capsys.readouterr()
+    assert cli.main(grade_args(data_root, grade_config, "--course", COURSE_ID, "--dry-run")) == 0
+    assert f"[pending] {COURSE_ID}/stu1/HW1" in capsys.readouterr().out
 
 
 def test_grade_from_solve_narrowed_by_course_is_accepted(

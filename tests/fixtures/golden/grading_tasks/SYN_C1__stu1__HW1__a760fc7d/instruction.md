@@ -72,10 +72,11 @@ A single JSON object with exactly these fields:
 - `overall_comment` — short free-text summary of the grade.
 
 Do not compute percentages or any other derived score: the verifier
-derives them from these sums. The sums are re-derived and checked
-mechanically: any arithmetic inconsistency, duplicate id, out-of-range
-points, or empty evidence invalidates the result. Compute the sums
-carefully.
+computes the authoritative sums from your criteria and derives all
+scores from them. Your four sum fields are a self-check — compute them
+carefully; a mismatch against the criteria is recorded as an
+inconsistency. Structural problems do invalidate the result: a missing
+field, duplicate id, out-of-range points, or empty evidence.
 
 ### 2. `justification.md`
 
