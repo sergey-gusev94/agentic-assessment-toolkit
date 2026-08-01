@@ -63,6 +63,10 @@ Notes:
   logs: they embed full assignment content and possibly student text.
 - `tables/` holds the only mapping between real identities and anonymized
   IDs; it never leaves the data root.
+- Student ids beginning with an underscore (e.g. `_reference`,
+  `_irrelevant`) are reserved for the grader checks' known submissions
+  (docs/design.md, results contract); grade statistics exclude them and
+  report them separately.
 - `tasks/` holds the byte-deterministic materialized task directories,
   one subdirectory per job, named like the job directory. Tasks live
   outside the job directories because Harbor's resume deletes any

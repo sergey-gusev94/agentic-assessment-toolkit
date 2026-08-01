@@ -52,9 +52,9 @@ Success for the benchmark is **validity**, not any particular score:
   stage: a submission was produced under the output contract; the grading
   stage: the grading result is structurally valid); the
   grade itself is the LLM grader's output.
-- The judge passes sanity checks that require no human grades: the reference
-  solution scores at or near full marks, an empty or irrelevant submission
-  scores near zero, and repeated judgments of the same submission are stable.
+- The judge passes the grader checks, which require no human grades: the
+  reference solution scores at or near full marks, an irrelevant submission
+  scores near zero, and repeated judgments of the same submission agree.
 
 Calibration of the judge against trusted human grading is **explicitly
 deferred**: no corpus of professor grades established as trustworthy exists
@@ -110,7 +110,7 @@ implement:
 
 It owns assignment import conventions, solver prompt/experiment
 configurations, reusable scientific environments, grader prompt
-templates, the generic contract verifiers, judge sanity checks, and
+templates, the generic contract verifiers, and
 statistical reporting.
 
 ## Constraints and design rules

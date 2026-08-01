@@ -24,7 +24,7 @@ analysis are in research.md.
    provide: the task materializers (assignments into solve tasks,
    submissions into grading tasks), solver and grader prompt templates,
    environment (Dockerfile) templates, the two generic contract verifiers,
-   the grading output schema, sanity-check task generation, results
+   the grading output schema, results
    loading and statistics, and the thin `aat solve` / `aat grade` /
    `aat report` commands. It does not
    implement an agent runner, sandbox framework, run orchestrator, model
@@ -71,12 +71,14 @@ analysis are in research.md.
 8. **Judge validity without deterministic tests.** Benchmark and
    grading-assistant scores are LLM-grader scores under one frozen grader
    configuration (prompt, model, effort, rubric), versioned with the
-   results, not proxies for professor grades. Validity comes from the
-   sanity trio — the reference solution grades at or near full marks, an
-   empty or irrelevant submission grades near zero, and repeated gradings of
-   one submission are stable — plus repeated grading for distributions and
-   explicit failure accounting. Calibration against trusted human grading is
-   deferred until a trustworthy human-graded corpus exists.
+   results, not proxies for professor grades. Validity comes from three
+   grader checks — the reference solution grades at or near full marks,
+   an irrelevant submission grades near zero, and repeated gradings of
+   one submission agree — plus repeated grading for distributions and
+   explicit failure accounting. The checks are a documented manual
+   procedure over the ordinary grading pipeline, not toolkit machinery
+   (see the results contract). Calibration against trusted human
+   grading is deferred until a trustworthy human-graded corpus exists.
 9. **Full agent capability by default; minimal trust model, accepted and
    documented.** Agents run with their normal toolset and public network
    access in both stages, because assignments and grading may legitimately
@@ -118,8 +120,7 @@ trials, jobs, -k repeats, retries    solver + grader prompt templates
 concurrency management               environment (Dockerfile) templates
 artifact + transcript capture        generic contract verifiers (2)
 ATIF trajectories                    grading output schema
-results viewer                       sanity-check task generation
-                                     results loading into tidy tables
+results viewer                       results loading into tidy tables
                                      statistical metric.py
 ```
 
@@ -487,7 +488,9 @@ tidy pandas tables:
   artifact via `sums_report`, the same shared validation module the
   verifier uses), token counts (input, cached, output), reported cost
   when present, per-phase durations (environment setup, agent setup,
-  agent execution, verification), and timestamps. Grading rows
+  agent execution, verification), and timestamps. Token and cost
+  values a run did not report load as missing, never as zero — zero
+  never means unknown. Grading rows
   additionally carry the submission source (solve artifact or student
   folder), the solve job/trial lineage, and the rubric name and hash.
 - **Criteria** — one row per (grading trial, criterion): id, title,
@@ -524,7 +527,7 @@ score mean.
 identity) across jobs — the same key as doneness, so pooling can never
 merge trials whose rubric or environment differed. The initial metric
 set: per-item, per-assignment, and per-course score distributions and
-means; repeat variance and stability (the sanity trio's third leg);
+means; variance and agreement of repeated gradings;
 bootstrap confidence intervals clustered by assignment, with
 explicitly seeded RNGs; and failure rates per outcome category. The
 bootstrap seed has a documented fixed default, is overridable with
@@ -534,10 +537,23 @@ pass@k) is not used: it counts errored trials in score means and
 cannot express graded rewards. Pass@k is deferred until a pass
 threshold on `score_pct` is actually needed and chosen.
 
+**Grader checks (a manual procedure, not machinery).** Before trusting
+a frozen grader configuration, run it through the ordinary pipeline on
+known submissions: a copy of the reference solution placed in the
+submissions tree as a pseudo-student must grade at or near full marks,
+and a submission containing only an unrelated placeholder file must
+grade near zero; `--repeats` on the same items measures whether
+repeated gradings agree. Pseudo-student ids begin with an underscore
+(e.g. `_reference`, `_irrelevant`); grade statistics exclude them and
+report them separately as the grader-check summary. No generation code
+exists or is needed: the checks reuse `aat grade` and `metric.py`
+unchanged.
+
 **Reporting (`aat report`).** The third, read-only command renders the
 benchmark statistics — score distributions and confidence intervals by
-assignment, course, and config, failure accounting, sanity-trio
-summaries — as CSV tables plus a Markdown report under `analysis/`.
+assignment, course, and config, failure accounting, and the
+grader-check summary — as CSV tables plus a Markdown report under
+`analysis/`.
 Professor-grade comparison — grade-export ingestion under `tables/`,
 the discrepancy report (matched pairs with explicit de-duplication,
 bias, MAE, RMSE, correlation and concordance, cluster-bootstrap
@@ -585,10 +601,11 @@ Detailed evidence and exact limits of completed manual checks are recorded in
 7. **Descoped (validated by construction):** regrade-by-rerun is another
    grading job over the same stored artifacts — the mechanism validated in
    item 5; no separate check is required.
-8. **Moved to roadmap stage 3:** the judge sanity trio — reference solution
-   near full marks, empty or irrelevant submission near zero, stable
-   repeated gradings — is grader-prompt calibration, not infrastructure
-   validation, and runs through the toolkit on corpus data.
+8. **Moved to roadmap stage 3:** the grader checks — reference solution
+   near full marks, irrelevant submission near zero, repeated gradings
+   agree — are grader-prompt calibration, not infrastructure
+   validation, and run through the ordinary grading pipeline on corpus
+   data.
 9. **Deferred:** Claude Code, Gemini CLI, and other agent stacks are validated
    only after the Codex pipeline and its hardening are complete.
 
@@ -611,11 +628,11 @@ what the toolkit provides, not by live runs.
 3. **Validity and statistics** — the results, statistics, and reporting
    contract above: results loading (`results.py`), outcome taxonomy and
    denominator policy, `metric.py` with clustered bootstrap confidence
-   intervals, and the read-only `aat report` command; plus sanity-trio
-   task generation (oracle, garbage, repeat stability), repeat
+   intervals, and the read-only `aat report` command; plus repeat
    configurations, frozen grader-config versioning for reportable runs,
-   and evaluation across the target corpus. Professor-grade comparison
-   is deferred (stage 5).
+   the grader checks run on the target corpus (the manual procedure in
+   the results contract), and evaluation across the corpus.
+   Professor-grade comparison is deferred (stage 5).
 4. **Additional agent stacks** — integrate and validate Claude Code, Gemini
    CLI, and other agents as solvers and graders; add cross-agent
    configurations and comparisons only after the complete Codex pipeline is
@@ -686,8 +703,8 @@ works, not templates to reproduce. Build order:
 
 Each step lands with deterministic offline tests over small synthetic
 fixtures (a fake course and a fake submission under `tests/fixtures/`),
-consistent with AGENTS.md. Stage 3 work (statistics, discrepancy report,
-anonymization, sanity-trio generation) starts after the slice passes its
+consistent with AGENTS.md. Stage 3 work (results loading, statistics,
+reporting) starts after the slice passes its
 golden-fixture acceptance tests and the maintainer live-validates one
 real assignment end to end.
 

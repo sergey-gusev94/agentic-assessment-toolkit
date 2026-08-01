@@ -187,9 +187,10 @@ solve or grade.
   without touching the task inputs. Also the revised grading semantics:
   authored-sum mismatches are flagged, not failed, and an invalid grading
   result leaves the item not-done so the next incremental run regrades it.
-- Judge sanity trio, run through the toolkit on corpus data (roadmap
-  stage 3): reference solution near full marks, empty or irrelevant
-  submission near zero, stable repeated gradings.
+- The grader checks, run through the ordinary grading pipeline on corpus
+  data (roadmap stage 3): the reference solution grades near full marks,
+  an irrelevant submission grades near zero, and repeated gradings
+  agree.
 - Repeated attempts, explicit failure accounting, and statistical reporting.
 
 Regrade-by-rerun is descoped as validated by construction: it is another
