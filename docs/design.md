@@ -29,6 +29,17 @@ two disagree, this document wins.
   hashes) beside the job output. Harbor becomes the single version-bounded
   runtime dependency. Repository tests still never invoke Harbor or
   Docker; they assert on materialized files and constructed command lines.
+- **2026-07-31.** Clean-slate specification. The manual pilots and the
+  reference repositories are demoted to evidence: nothing is ported from
+  them, and every contract — grading output schema, reward semantics,
+  prompt templates, verifiers, environment templates, config identity,
+  run records — is specified fresh in this document and
+  [data-conventions.md](data-conventions.md). Rewards are `score_pct` on
+  a 0–100 scale over required criteria; the pilot's course-style bonus
+  reward (e.g. 110.0) is superseded. Environment templates are
+  per-course flavors (data-science and optimization first) selected via
+  course defaults and per-assignment overrides. Experiment configs are
+  TOML files committed under `configs/`.
 
 ## Decisions
 
@@ -73,8 +84,7 @@ analysis are in research.md.
    task. Repeated grading for variance estimates is Harbor's native `-k`
    repeated attempts. A rubric is an optional Markdown file: when present
    it is the authority on point splits; when absent the grader defines a
-   reasonable split and must state it in the justification, matching
-   reference-repo practice.
+   reasonable split and must state it in the justification.
 6. **Grades come from the grader's artifacts, not from verifier scoring.**
    Each stage has exactly one generic contract verifier, reused across all
    tasks; per-assignment test code is never written. The solve verifier is a
@@ -87,8 +97,10 @@ analysis are in research.md.
    validates that `grading_result.json`
    exists, parses, and satisfies its internal-consistency rules, and
    surfaces its `score_pct` as the Harbor reward so grades appear in the
-   viewer. The deliverables are the JSON plus a written per-problem Markdown
-   justification.
+   viewer. `score_pct` is computed over required criteria only on a
+   0–100 scale; bonus points are recorded in the grading result but
+   never enter the reward (see the contracts section). The deliverables
+   are the JSON plus a written per-problem Markdown justification.
 7. **Regrading is re-running the grader.** Solving and grading are separable
    in time because grading consumes only stored artifacts; a revised rubric
    or grader prompt means a new grading job over the same submission
@@ -184,6 +196,136 @@ grading_result.json + per-problem Markdown justification
 discrepancy report: side-by-side scores, flagged disagreements
 ```
 
+## Contracts
+
+Concrete specifications for the vertical slice. Nothing here is ported
+from the pilots or the reference repositories; both informed these
+choices as evidence only.
+
+### Grading output schema
+
+The grader writes exactly two files to `/app/grading_output/`:
+
+- `grading_result.json` — the machine-readable judgment.
+- `justification.md` — the per-problem written justification.
+
+`grading_result.json` fields, all authored by the grader:
+
+- `schema_version` — integer, currently `1`.
+- `criteria` — non-empty list; each entry has `id` (unique string),
+  `title`, `max_points` (> 0), `points` (`0 <= points <= max_points`),
+  `evidence` (non-empty string citing what in the submission justifies
+  the score), and optional `bonus` (boolean, default false).
+- `raw_points`, `raw_max` — sums over non-bonus criteria.
+- `bonus_points`, `bonus_max` — sums over bonus criteria (0 when none).
+- `score_pct` — `100 * raw_points / raw_max`.
+- `overall_comment` — short free-text summary.
+
+The generic grading verifier re-derives every aggregate and fails the
+contract on any mismatch, duplicate criterion id, out-of-range points,
+or empty evidence. Provenance (submission, reference, rubric, and
+config hashes) is recorded by the materializer and the run record,
+never authored by the LLM: the grader's required output stays minimal
+to reduce parse failures.
+
+### Reward semantics
+
+The grading verifier surfaces `score_pct` — a 0–100 scale over required
+criteria only — as the Harbor reward. Bonus points live only inside
+`grading_result.json`. This keeps rewards comparable across assignments
+regardless of point totals or bonus availability. The solve verifier's
+reward remains the 0/1 output-contract check.
+
+### Solve task layout and verifier
+
+A materialized solve task presents the as-received assignment directory
+at `/app/assignment`, whole and unmodified; the solver prompt directs
+the agent to read it and produce its complete solution in
+`/app/submission`. No statement file is singled out and no
+per-assignment metadata is injected: the agent reads the handout as a
+student would.
+
+At materialization time the toolkit writes a manifest of input file
+hashes into the task (outside `/app/submission`). The generic solve
+verifier checks that `/app/submission` exists, is non-empty, contains
+at least one file that is new or changed relative to the manifest, and
+contains no bookkeeping entries. The bookkeeping blocklist is fixed and
+documented in the verifier: `.git`, `__pycache__`,
+`.ipynb_checkpoints`, `.DS_Store`, `node_modules`, and editor swap and
+backup files.
+
+### Grading task layout
+
+A materialized grading task presents, under `/app`:
+
+- `submission/` — the directory being graded (solve artifact or student
+  folder), copied as data.
+- `reference_solution/` — the oracle solution.
+- `rubric.md` — present when the assignment has a rubric; when absent
+  the grader defines and states its own point split (decision 5). The
+  rubric is resolved as `rubrics/<assignment_id>/<name>.md` in the data
+  root, where `<name>` comes from the grading config (default
+  `default`).
+- `grading_output/` — empty directory the grader must fill.
+
+The grader instruction states the static-inspection rule: submission
+and reference content is read as data and never executed.
+
+### Experiment configs and config identity
+
+Experiment configs are TOML files committed under `configs/` at the
+repository root (e.g. `configs/codex-high.toml`). They contain no
+course content: agent, model, reasoning effort, solver or grader prompt
+template name, rubric name, and agent-argument passthrough. Selection
+and mechanics never appear in configs (see CLI design).
+
+The config identity is `sha256` over the config file bytes concatenated
+with the referenced prompt template bytes. For grading, the per-item
+identity additionally folds in the resolved rubric file bytes, so
+editing one assignment's rubric invalidates doneness for that
+assignment alone. `--repeats` and selection flags never enter the
+identity.
+
+### Environment templates
+
+Environment templates are Dockerfiles shipped as package data, one per
+course flavor, named by capability rather than by course:
+`data-science` and `optimization` first, with `scientific-python`
+(general) and `latex` added when an assignment needs them. Images pin
+their Python package versions; base-image digest pinning is deferred to
+reportable runs.
+
+Template resolution for an assignment: the per-assignment sidecar's
+`environment` key when present, else the course default in
+`course.toml`, else a clear error. Layout details are in
+[data-conventions.md](data-conventions.md).
+
+### Prompt templates
+
+Solver and grader prompts are Markdown templates with placeholders,
+shipped as package data and written fresh for this toolkit. The solver
+prompt covers the role, the workspace layout, autonomy expectations,
+and the `/app/submission` output contract (executed notebooks, compiled
+documents, no scratch files). The grader prompt covers the
+static-inspection rule, rubric authority and the no-rubric fallback,
+evidence requirements, and the exact output schema above. Any prompt
+edit changes the config identity by construction.
+
+### Run records and idempotence
+
+Each `aat` invocation creates one job directory —
+`<utc-timestamp>__<config-name>__<identity-prefix8>/` — under `runs/`
+(solve) or `grading/` (grading) in the data root, containing Harbor's
+job output plus `aat-run.json`: the exact `harbor --version`, agent and
+model configuration, effective command line, requested items, config
+identity, and input hashes.
+
+An item is done under a config when some job directory with a matching
+config identity contains a completed, non-error Harbor trial for it,
+read from Harbor's per-trial result file — the same file Harbor's
+viewer consumes. This is the one deliberate coupling to Harbor's
+on-disk output format and is accepted as such.
+
 ## Live validation (maintainer-only, outside repository scope)
 
 No repository work — human or agent — performs or depends on live
@@ -230,7 +372,7 @@ what the toolkit provides, not by live runs.
    full course from the reference corpus into runnable Harbor tasks,
    datasets, and Codex job configs.
 2. **Grading core, Codex-first** — grading-task materializer; grader prompt
-   template ported from the reference-repo grader; grading output schema;
+   template written to the contracts section; grading output schema;
    generic grading verifier; grading environment template. Complete when an
    agent solution and a real student folder both grade through the
    identical path — the vertical-slice acceptance criterion below.
@@ -256,21 +398,25 @@ what the toolkit provides, not by live runs.
 ### First vertical slice (stages 1–2)
 
 No toolkit code exists yet; the package is empty. Stages 1 and 2 are built
-as one vertical slice with a single acceptance criterion: the toolkit
-regenerates, from data-root inputs, the equivalents of the two manually
-materialized pilot tasks recorded in
-[live-validation.md](live-validation.md) — the real-assignment solve task
-and its grading task. Build order:
+as one vertical slice with a single acceptance criterion: from a
+synthetic golden course under `tests/fixtures/`, the toolkit
+materializes a runnable Harbor solve task and, from a synthetic
+submission, a runnable Harbor grading task, both byte-exact against
+committed golden fixtures; the maintainer then live-validates the same
+paths on one real assignment from the data root. The pilots recorded in
+[live-validation.md](live-validation.md) are evidence that this shape
+works, not templates to reproduce. Build order:
 
 1. **Data-root resolution** — explicit path, then `AAT_DATA_DIR`, then a
-   clear error; a data root inside the repository tree is refused
-   ([data-conventions.md](data-conventions.md)).
+   clear error; a data root inside the toolkit's own working tree is
+   refused (precise rule in
+   [data-conventions.md](data-conventions.md)).
 2. **Grading output schema** — the `grading_result.json` fields and
    internal-consistency rules as a schema plus a validation function,
    shared by the grading verifier and later statistics.
-3. **Prompt templates** — solver and Markdown grader prompts ported from
-   the pilots and reference repositories, with placeholders and the
-   `/app/submission` output contract.
+3. **Prompt templates** — solver and grader prompts written fresh per
+   the contracts above, with placeholders and the `/app/submission`
+   output contract.
 4. **Solve-task materializer** — assignment directory → Harbor task
    directory (generated `instruction.md`, `task.toml`, environment from
    template, recorded assignment and prompt hashes).
@@ -279,10 +425,10 @@ and its grading task. Build order:
 6. **Grading-task materializer** — submission directory + reference
    solution + rubric → Harbor grading task; one code path for solve
    artifacts and student folders.
-7. **Generic grading verifier** — ported from the pilot's validated
-   verifier.
-8. **Environment template** — the pinned scientific-Python image from the
-   pilot as the first template.
+7. **Generic grading verifier** — enforces the grading output schema
+   through the shared validation module.
+8. **Environment templates** — pinned per-flavor Dockerfiles,
+   `data-science` and `optimization` first.
 9. **Job-config generation** — pinned Codex job configurations (agent,
    model, effort, `-k`, concurrency) emitted alongside materialized
    datasets.
@@ -296,8 +442,9 @@ and its grading task. Build order:
 Each step lands with deterministic offline tests over small synthetic
 fixtures (a fake course and a fake submission under `tests/fixtures/`),
 consistent with AGENTS.md. Stage 3 work (statistics, discrepancy report,
-anonymization, sanity-trio generation) starts after the slice reproduces
-the pilots.
+anonymization, sanity-trio generation) starts after the slice passes its
+golden-fixture acceptance tests and the maintainer live-validates one
+real assignment end to end.
 
 Planned module layout, mapping one-to-one onto the build order:
 
@@ -316,9 +463,12 @@ src/agentic_assessment_toolkit/
 └── templates/             # package data (importlib.resources)
     ├── prompts/           # step 3: solver.md, grader.md
     ├── verifiers/         # steps 5 + 7: two standalone scripts
-    ├── environments/      # step 8: scientific-python Dockerfile
+    ├── environments/      # step 8: one Dockerfile per flavor
     └── task/              # task.toml skeleton
 ```
+
+Experiment configs live at the repository root under `configs/`,
+committed and versioned with the code (see the contracts section).
 
 Implementation rules:
 
@@ -347,8 +497,8 @@ Every command-line option belongs to one of three axes, and the axes are
 handled differently:
 
 1. **Selection — what to run on** (CLI flags): `--course`, `--assignment`,
-   `--submissions PATH`, `--all`. Selection is not an experimental
-   variable, so convenience wins.
+   `--submissions PATH`, `--from-solve NAME`, `--all`. Selection is not
+   an experimental variable, so convenience wins.
 2. **Experiment configuration — how to run** (named config files, never
    flags): agent, model, reasoning effort, solver/grader prompt version,
    rubric version, and any agent-argument passthrough live in versioned
@@ -388,7 +538,9 @@ aat solve  [--course ID] [--assignment ID] [--all]
            --config NAME [--repeats N] [--force] [--dry-run]
            [--materialize-only]
 
-aat grade  [--submissions PATH | --course ID [--assignment ID]] [--all]
+aat grade  (--from-solve NAME [--course ID] [--assignment ID]
+            | --submissions PATH
+            | --course ID [--assignment ID] | --all)
            --config NAME [--repeats N] [--force] [--dry-run]
            [--materialize-only]
 ```
@@ -398,6 +550,9 @@ belongs in a config file; if it changes selection or mechanics, a flag is
 legitimate. Deliberately deferred: a combined solve-then-grade command
 (manual chaining is fine, and the solve/grade separation is load-bearing)
 and rich selection syntax (globs, exclusions) until a real run needs
-them. Open detail for build step 6: the exact ergonomics of pointing
-`aat grade` at Harbor solve artifacts versus student folders — two
-selection flags over the same machinery, per decision 5.
+them. Grading selection is settled: `--from-solve NAME` grades
+completed, not-yet-graded solve trials produced under the named solve
+config, optionally narrowed by `--course`/`--assignment`; without it,
+`--submissions PATH` or `--course`/`--assignment` select student
+folders from the submissions tree. One grading materializer underneath,
+two source resolvers on top, per decision 5.

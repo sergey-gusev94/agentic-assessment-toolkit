@@ -99,6 +99,15 @@ recorded; grading now runs as ordinary Harbor grading jobs, per
 [design.md](design.md). The validated results above stand as history; the
 pending list below reflects the revised design.
 
+A same-day clean-slate revision additionally demoted the pilots to
+evidence: the toolkit's contracts — grading output schema, reward
+semantics, prompt templates, verifiers, environment templates — are
+specified fresh in [design.md](design.md), and nothing is ported from
+the pilot implementations. In particular, the course-style reward
+surfaced below (`110.0`) is superseded: the toolkit's grading verifier
+surfaces `score_pct` on a 0–100 scale over required criteria, with
+bonus points recorded only inside `grading_result.json`.
+
 ### Separate Harbor grading job
 
 The saved RewardKit-pilot submission was then materialized with the assignment

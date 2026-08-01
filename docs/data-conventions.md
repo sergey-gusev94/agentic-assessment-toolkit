@@ -15,9 +15,15 @@ Resolution order:
 
 1. An explicit path passed programmatically or on the command line.
 2. The `AAT_DATA_DIR` environment variable.
-3. Otherwise: fail with a clear error. There is no default inside the
-   repository, and the toolkit must refuse a data root that resolves to a
-   path inside the repository working tree.
+3. Otherwise: fail with a clear error. There is no default.
+
+The toolkit refuses a data root inside its own repository. Precisely:
+the resolved data root must not lie inside a git working tree whose
+`pyproject.toml` declares `name = "agentic-assessment-toolkit"`; the
+check is applied to the git root of the installed package location
+(which catches editable installs) and to the git root of the current
+working directory. A data root may itself be a separate private git
+repository — only the toolkit's own tree is refused.
 
 ## Data root layout
 
@@ -25,28 +31,71 @@ Resolution order:
 $AAT_DATA_DIR/
 ├── courses/                    # immutable source-of-truth course content
 │   └── <course_id>/            #   e.g. PU_CHE456_F2025
-│       ├── assignments/        #   one directory per assignment, as received
-│       └── reference_solutions/#   instructor/oracle solutions
+│       ├── course.toml         #   course defaults (e.g. environment)
+│       ├── assignments/
+│       │   ├── <assignment_id>/      # as-received handout, exactly as given
+│       │   └── <assignment_id>.toml  # optional per-assignment overrides
+│       ├── reference_solutions/
+│       │   └── <assignment_id>/      # instructor/oracle solution
+│       └── rubrics/
+│           └── <assignment_id>/
+│               └── <name>.md         # default.md; variants are new files
 ├── submissions/                # real student submissions, as received
-│   └── <course_id>/
+│   └── <course_id>/<student_id>/<assignment_id>/
 ├── tables/                     # rosters, grade exports, identity mappings
-├── runs/                       # Harbor jobs: trials, artifacts, transcripts,
-│                               #   trajectories, verifier output
-├── grading/                    # grader outputs for any submission source
-│                               #   (benchmark artifacts or real students)
+├── runs/                       # solve jobs: Harbor output + aat-run.json
+│   └── <utc>__<config>__<hash8>/
+├── grading/                    # grading jobs, any submission source
+│   └── <utc>__<config>__<hash8>/
 └── scratch/                    # disposable working space
 ```
 
 Notes:
 
 - `courses/` content is immutable once registered; benchmark results
-  reference assignments by hash.
-- Transcripts and trajectories under `runs/` are data, not logs: they embed
-  full assignment content and possibly student text.
+  reference assignments, rubrics, and prompts by hash.
+- Transcripts and trajectories under `runs/` and `grading/` are data, not
+  logs: they embed full assignment content and possibly student text.
 - `tables/` holds the only mapping between real identities and anonymized
   IDs; it never leaves the data root.
-- Grading outputs record the path and hash of the submission directory they
-  graded, for provenance.
+
+## Course content contract
+
+- `assignments/<assignment_id>/` is the handout exactly as a student
+  would receive it: no injected metadata, no prompt, no statement file
+  singled out. The solve-task materializer copies the whole directory
+  into the task at `/app/assignment`.
+- `<assignment_id>.toml`, beside the assignment directory, is an
+  optional sidecar for per-assignment settings (e.g. `environment`,
+  resource or time overrides). Absent means course defaults apply.
+- `course.toml` holds course-wide defaults, most importantly the
+  default environment template flavor (e.g. `data-science`,
+  `optimization`). The sidecar overrides it per assignment; if neither
+  names an environment, materialization fails with a clear error.
+- `reference_solutions/<assignment_id>/` and
+  `rubrics/<assignment_id>/` share the assignment's id. Keeping them in
+  separate top-level trees — never inside the assignment directory —
+  makes it structurally impossible for the solve-task materializer to
+  leak grading material to the solver, which only ever reads
+  `assignments/`.
+- Rubrics are Markdown files named within
+  `rubrics/<assignment_id>/`; the default is `default.md`. A revised
+  rubric is a new file (e.g. `strict-v2.md`) selected by name in a
+  grading config — existing files are never edited, preserving
+  immutability and hash-based provenance.
+
+## Job directories and run records
+
+Each `aat solve` or `aat grade` invocation creates one job directory —
+`<utc-timestamp>__<config-name>__<identity-prefix8>/` — under `runs/`
+(solve jobs) or `grading/` (grading jobs, whether the submissions are
+benchmark artifacts or real student folders). The directory contains
+Harbor's job output unchanged plus `aat-run.json`, the toolkit's run
+record: exact `harbor --version`, agent and model configuration,
+effective command line, requested items, config identity, and input
+hashes (assignment, prompt, rubric, submission). Doneness of an item
+under a config is derived from these directories and Harbor's per-trial
+result files; there is no separate bookkeeping state.
 
 ## What is committable and what is not
 
@@ -56,7 +105,7 @@ Notes:
 | Documentation | Reference/oracle solutions |
 | Rubric templates | Student submissions |
 | Solver prompt templates | Rosters, grade exports, identity maps |
-| Experiment/job config templates | Harbor runs, transcripts, trajectories |
+| Experiment configs (`configs/`) | Harbor runs, transcripts, trajectories |
 | Environment (Dockerfile) templates | Grading outputs for real submissions |
 | Small fully synthetic example assignments and fixtures | Credentials and auth files |
 
