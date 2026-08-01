@@ -8,6 +8,21 @@ two disagree, this document wins.
 
 ## Revisions
 
+- **2026-08-01.** Dependency policy reversed. The zero-dependency rule
+  ("other Python dependencies stay at zero; additions require a recorded
+  decision") is replaced by prefer-good-dependencies: a well-maintained
+  library is preferred over hand-rolled code whenever it replaces
+  nontrivial logic. Two standing exceptions: files shipped into task
+  containers (the verifiers and the copied `grading_schema.py`) remain
+  standalone and stdlib-only, because they execute where the package and
+  its dependencies are not installed; and tests remain deterministic,
+  local, offline, and credential-free per AGENTS.md — library randomness
+  is always explicitly seeded, and floating-point aggregates are compared
+  with tolerances, not byte-exact. Harbor remains the only
+  runtime-orchestration dependency and is still invoked exclusively
+  through its CLI. First beneficiaries: `numpy`, `scipy`, and `pandas`
+  are added as runtime dependencies for the stage 3 statistics work
+  (`metric.py`, the discrepancy report).
 - **2026-07-31 (b).** Deliverables are source-format: the solver output
   contract requires executed notebooks and report/document *source*
   (Markdown or LaTeX source); compiled PDFs are never required, so the
@@ -622,13 +637,24 @@ Implementation rules:
   stays paths-in, files-out; tests exercise materialization fully and
   assert on the constructed Harbor command line without executing it
   (decision 13, AGENTS.md).
-- **Harbor is the single runtime dependency**, version-bounded in
-  `pyproject.toml` and invoked through its CLI — its stable interface and
-  what the pilots validated — never through its internal Python API.
-  Docker and the agent CLIs remain documented external requirements that
-  packaging cannot provide. Other Python dependencies stay at zero
-  (argparse over click, hand-rolled validation over pydantic or
-  jsonschema); additions require a recorded decision.
+- **Harbor is the single runtime-orchestration dependency**,
+  version-bounded in `pyproject.toml` and invoked through its CLI — its
+  stable interface and what the pilots validated — never through its
+  internal Python API. Docker and the agent CLIs remain documented
+  external requirements that packaging cannot provide.
+- **Prefer good dependencies over hand-rolled code** (revision
+  2026-08-01). When a well-maintained library replaces nontrivial logic,
+  use it rather than reimplementing: `numpy`, `scipy`, and `pandas` are
+  the toolkit's statistics stack (`metric.py`: pooling and grouping
+  trials, pass-at-k, clustered bootstrap confidence intervals, the
+  discrepancy report). Hand-roll only when the code must run standalone
+  inside task containers, or when a dependency would be heavier than the
+  code it replaces. The container exception is load-bearing: the shipped
+  verifiers and `grading_schema.py` stay stdlib-only and self-contained,
+  so `grading_schema.py` remains the single source of truth for grading
+  result validation both as a package import and copied into grading
+  tasks. Deterministic tests are unaffected: library RNGs are explicitly
+  seeded, and floating-point aggregates are asserted with tolerances.
 
 ### CLI design
 
