@@ -29,15 +29,16 @@ The experimental object is a complete agent stack (scaffold + model + prompt +
 effort + tools + limits), not a bare language model. Each trial takes an
 immutable assignment directory, materializes it into an isolated workspace,
 lets the agent solve it autonomously, preserves all artifacts and transcripts,
-and grades the result later with deterministic checks plus rubric-based LLM
-judgment.
+and grades the result later with a separate LLM grading run over the stored
+artifacts.
 
 Success for the benchmark is **validity**, not any particular score:
 
 - Results are reproducible: pinned agent/CLI/framework versions, recorded
   model identifiers, hashed assignments, prompts, and rubrics.
-- Solving and grading are separable in time: recorded solutions can be
-  regraded under a revised rubric without rerunning the solver.
+- Solving and grading are separable in time: grading consumes only stored
+  artifacts, so recorded solutions can be regraded under a revised rubric by
+  re-running the grading job, never the solver.
 - Failures (timeouts, refusals, parse errors, infrastructure errors) are
   explicit outcomes, never silently dropped.
 - Repeated attempts yield distributions and confidence intervals, not single
@@ -46,9 +47,11 @@ Success for the benchmark is **validity**, not any particular score:
   proxies for professor grades. Comparisons between agents are made within one
   frozen judge configuration (prompt, model, effort, rubric), which is
   versioned with the results.
-- Deterministic checks against the reference solution carry as much of the
-  grade as possible; the LLM judge is reserved for genuinely semantic
-  criteria.
+- Per-assignment deterministic tests are never written. Each stage has one
+  generic contract check, agnostic to the deliverable format (the solve
+  stage: a submission was produced under the output contract; the grading
+  stage: the grading result is well-formed and internally consistent); the
+  grade itself is the LLM grader's output.
 - The judge passes sanity checks that require no human grades: the reference
   solution scores at or near full marks, an empty or irrelevant submission
   scores near zero, and repeated judgments of the same submission are stable.
@@ -62,8 +65,8 @@ be reintroduced.
 ## Use case 2: grading assistant for professors and TAs
 
 For student submissions, the toolkit produces an independent grade,
-per-criterion scores, and a written justification against the reference
-solution and rubric. Its value is informational:
+per-criterion scores, and a written Markdown justification against the
+reference solution and rubric. Its value is informational:
 
 - Where the LLM grade and a professor's grade disagree, the disagreement
   itself is the signal — it can surface grading inconsistencies, rubric
@@ -96,7 +99,7 @@ handwritten or scanned submissions, and web/GUI assignment tracks.
 
 ### Non-goals
 
-The toolkit is a thin domain-specific layer over Harbor and RewardKit (see
+The toolkit is a thin domain-specific layer over Harbor (see
 [research.md](research.md)). It does not implement:
 
 - a new agent runner, sandbox framework, or model-provider abstraction;
@@ -105,8 +108,9 @@ The toolkit is a thin domain-specific layer over Harbor and RewardKit (see
 - policy decisions about how grades are used.
 
 It owns assignment import conventions, solver prompt/experiment
-configurations, reusable scientific environments, rubric templates, task and
-oracle validation, and statistical reporting.
+configurations, reusable scientific environments, grader prompt and rubric
+templates, the generic contract verifiers, judge sanity checks, and
+statistical reporting.
 
 ## Constraints and design rules
 
@@ -117,11 +121,14 @@ oracle validation, and statistical reporting.
   prompts, and efforts.
 - **Solve and grade are separate stages.** Everything needed for grading is
   captured as artifacts at solve time; regrading never reruns the solver.
-- **Trust model differs by submission source.** Benchmark tasks are
+- **Minimal trust model, accepted and documented.** Benchmark tasks are
   professor-authored and trusted, so subscription credentials may exist inside
-  the agent sandbox. Student submissions are untrusted: credentials must never
-  be present in any environment that executes student code. Student work is
-  graded by static inspection or from a sanitized, read-only evidence bundle.
+  the solver sandbox with public network access. Grading reads untrusted
+  submission content, so it is static inspection by prompt rule — submission
+  code is never intentionally executed — inside disposable containers with
+  restricted (provider-only) egress. The residual risk of a prompt-injected
+  grader is accepted at current scale and must be revisited before any
+  adversarial or institutional deployment.
 - **Strict code–data separation.** The repository contains only code,
   documentation, templates, and synthetic test fixtures, and must always be
   safe to publish. All real data — assignments, reference solutions, student

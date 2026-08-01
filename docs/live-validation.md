@@ -92,19 +92,25 @@ artifacts were collected. This validates RewardKit's shared-environment,
 multi-dimension Harbor integration, not scientific correctness or a rubric
 judge.
 
+### Design revision, 2026-07-31
+
+RewardKit and `harbor job regrade` were descoped after the checks above were
+recorded; grading now runs as ordinary Harbor grading jobs, per
+[design.md](design.md). The validated results above stand as history; the
+pending list below reflects the revised design.
+
 ### Pending
 
 - Automatic real-assignment materialization by the toolkit importer.
-- A separate verifier environment.
-- Mixed deterministic and rubric criteria in one verifier.
-- Regrading recorded artifacts without rerunning Codex.
-- Standalone RewardKit grading through cached Codex authentication.
-- Oracle, empty-submission, and irrelevant-submission judge sanity checks.
+- A Harbor grading job grades a Harbor-produced submission directory using
+  cached Codex authentication, producing a valid `grading_result.json` and
+  Markdown justification, with the generic grading verifier surfacing the
+  score as the reward.
+- The same grading task re-run with a revised rubric over unchanged
+  artifacts (regrade-by-rerun).
+- Judge sanity trio: reference solution near full marks, empty or
+  irrelevant submission near zero, stable repeated gradings.
 - Repeated attempts, explicit failure accounting, and statistical reporting.
-
-The installed Harbor `0.20.0` does not expose `harbor job regrade`; regrade
-validation requires a deliberately pinned Harbor version that contains the
-command.
 
 ### Deferred by project priority
 

@@ -21,8 +21,8 @@ other agent stacks and cross-agent comparisons are added. See the
 ## Documentation
 
 - [Project brief](docs/brief.md) — vision, use cases, scope, and constraints.
-- [Design](docs/design.md) — decisions, architecture of the two pipelines,
-  and roadmap.
+- [Design](docs/design.md) — decisions, architecture of the solving and
+  grading pipelines, and roadmap.
 - [Live validation](docs/live-validation.md) — maintainer-run integration
   checks and the exact limits of what they establish.
 - [Research](docs/research.md) — frozen research snapshot: alternatives

@@ -32,7 +32,8 @@ $AAT_DATA_DIR/
 ├── tables/                     # rosters, grade exports, identity mappings
 ├── runs/                       # Harbor jobs: trials, artifacts, transcripts,
 │                               #   trajectories, verifier output
-├── grading/                    # grading-assistant outputs for real students
+├── grading/                    # grader outputs for any submission source
+│                               #   (benchmark artifacts or real students)
 └── scratch/                    # disposable working space
 ```
 
@@ -44,6 +45,8 @@ Notes:
   full assignment content and possibly student text.
 - `tables/` holds the only mapping between real identities and anonymized
   IDs; it never leaves the data root.
+- Grading outputs record the path and hash of the submission directory they
+  graded, for provenance.
 
 ## What is committable and what is not
 
@@ -54,7 +57,7 @@ Notes:
 | Rubric templates | Student submissions |
 | Solver prompt templates | Rosters, grade exports, identity maps |
 | Experiment/job config templates | Harbor runs, transcripts, trajectories |
-| Environment (Dockerfile) templates | Grading outputs for real students |
+| Environment (Dockerfile) templates | Grading outputs for real submissions |
 | Small fully synthetic example assignments and fixtures | Credentials and auth files |
 
 The research document's sketch layout places `benchmarks/.../tasks/` inside
