@@ -24,6 +24,8 @@ ENV MAMBA_ROOT_PREFIX=/opt/conda \
 RUN micromamba install -y -n base -c conda-forge \
         python=3.12.11 \
         pip=25.1.1 \
+        file \
+        jq \
         pyomo=6.9.2 \
         ipopt=3.14.17 \
         highspy=1.11.0 \

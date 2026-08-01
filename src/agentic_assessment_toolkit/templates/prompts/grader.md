@@ -13,8 +13,9 @@ evidence-cited justifications. You grade by static inspection only.
 - `/app/grading_output/` — where you must write your two output files.
 
 Some files are PDFs, spreadsheets, or notebooks; read them with the tools
-installed in this environment (`pdftotext`, `pypdf`, `openpyxl`,
-`pandas`, `nbformat` — notebooks are JSON and can also be read directly).
+installed in this environment (`file`, `jq`, `pdftotext`, `pypdf`,
+`openpyxl`, `pandas`, `nbformat` — notebooks are JSON and can also be
+read directly).
 
 ## Static inspection rule
 

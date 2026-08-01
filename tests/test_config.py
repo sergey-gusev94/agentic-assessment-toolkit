@@ -110,6 +110,13 @@ def test_environment_flavors_resolve() -> None:
         config_mod.environment_path("latex")
 
 
+def test_environment_flavors_include_basic_inspection_tools() -> None:
+    for flavor in config_mod.ENVIRONMENT_FLAVORS:
+        dockerfile = config_mod.environment_path(flavor).read_text(encoding="utf-8")
+        assert "\n        file \\" in dockerfile
+        assert "\n        jq \\" in dockerfile
+
+
 def test_template_paths_exist() -> None:
     assert config_mod.prompt_path("solver").is_file()
     assert config_mod.prompt_path("grader").is_file()

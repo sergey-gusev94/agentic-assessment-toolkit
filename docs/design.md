@@ -273,8 +273,10 @@ to reduce parse failures.
 From a validated grading result the verifier derives two percentages:
 
 - `score_pct` — `100 * (raw_points + bonus_points) / raw_max`, the
-  gradebook score: graded out of 100% of the required points, with
-  earned bonus counting on top, so it can exceed 100.
+  gradebook score: required and bonus criteria use the same raw-point
+  scale, and earned bonus counts above the required maximum. It can
+  exceed 100; for example, 10/10 required plus 1 bonus point is 110,
+  while 90/90 required plus 10 bonus points is approximately 111.11.
 - `required_pct` — `100 * raw_points / raw_max`, a 0–100 scale over
   required criteria only, comparable across assignments regardless of
   bonus availability.
@@ -386,11 +388,12 @@ derived from the packages the reference corpus actually uses:
   nbformat for notebooks). No scientific stack: nothing is executed
   during grading. The image creates `/app/grading_output/`.
 
-Every solve flavor also includes PDF text-extraction tools
+Every environment includes `file` and `jq` for basic file-type and JSON
+inspection. Every solve flavor also includes PDF text-extraction tools
 (poppler-utils, pypdf), because assignment handouts are routinely PDFs
-that the agent must read. A `latex` flavor is deferred: the output
-contract requires document source, never compiled PDFs, so no image
-needs TeX (revision 2026-07-31 (b)).
+that the agent must read. A `latex` flavor is deferred: the output contract
+requires document source, never compiled PDFs, so no image needs TeX
+(revision 2026-07-31 (b)).
 
 Images pin their Python package versions; base-image digest pinning is
 deferred to reportable runs. Solver licenses (Gurobi WLS) are
@@ -434,6 +437,12 @@ applicable). On a rare same-second collision the job directory name
 gains a `-N` suffix; a job's identity lives in `aat-run.json`, never in
 the directory name.
 
+The exact per-job `harbor view <job-directory>` command printed by `aat`
+is the supported inspection path. The shared `runs/` and `grading/`
+parents contain AAT wrapper directories rather than Harbor jobs directly,
+so `harbor view <parent> --jobs` is not compatible with this nesting in
+Harbor 0.20.
+
 An item is done under a config when some job directory with a matching
 config identity contains a completed, non-error Harbor trial for it,
 read from Harbor's per-trial result file — the same file Harbor's
@@ -464,14 +473,19 @@ Detailed evidence and exact limits of completed manual checks are recorded in
    `grading_result.json` and Markdown justification covering all rubric
    criteria, and has the generic grading verifier surface the score as the
    reward.
-6. **Descoped (validated by construction):** regrade-by-rerun is another
+6. **Validated:** the implemented `aat solve` and `aat grade --from-solve`
+   commands automatically materialize and complete the real HW5 solve-to-grade
+   path. That run also exposed an older reward contract that excluded bonus
+   points and two missing inspection utilities; the corrected image and reward
+   need one post-change smoke run.
+7. **Descoped (validated by construction):** regrade-by-rerun is another
    grading job over the same stored artifacts — the mechanism validated in
    item 5; no separate check is required.
-7. **Moved to roadmap stage 3:** the judge sanity trio — reference solution
+8. **Moved to roadmap stage 3:** the judge sanity trio — reference solution
    near full marks, empty or irrelevant submission near zero, stable
    repeated gradings — is grader-prompt calibration, not infrastructure
    validation, and runs through the toolkit on corpus data.
-8. **Deferred:** Claude Code, Gemini CLI, and other agent stacks are validated
+9. **Deferred:** Claude Code, Gemini CLI, and other agent stacks are validated
    only after the Codex pipeline and its hardening are complete.
 
 ## Roadmap
@@ -653,6 +667,10 @@ root layout — no separate bookkeeping state. Done items are skipped by
 default, so re-running a bulk command is naturally incremental ("grade
 what was not yet graded"). `--force` never overwrites: it launches
 another job whose trials accumulate alongside the existing ones.
+Consequently, `--force --repeats N` adds N trials rather than bringing
+the historical total to N. A later `grade --from-solve` selects newly
+completed solver trials that do not yet have a completed grade; `--force`
+on `grade` adds independent grader trials for already-graded submissions.
 Regrading under a revised rubric needs no dedicated command: a new rubric
 is a new config identity, under which nothing is done yet, and prior
 results stay untouched.

@@ -2,7 +2,8 @@
 #
 # Baseline for data-science coursework: numpy/pandas/matplotlib,
 # scikit-learn, CPU-only PyTorch, spreadsheet reading, the notebook
-# toolchain, and PDF text extraction (handouts are routinely PDFs).
+# toolchain, PDF text extraction (handouts are routinely PDFs), and
+# basic file/JSON inspection utilities.
 # Package versions are pinned (docs/design.md, "Environment templates");
 # base-image digest pinning is deferred to reportable runs.
 
@@ -16,8 +17,10 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
+        file \
         fonts-dejavu-core \
         git \
+        jq \
         poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 

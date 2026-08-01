@@ -109,6 +109,15 @@ applicable). Doneness of an item under a config is derived from these
 directories and Harbor's per-trial result files; there is no separate
 bookkeeping state.
 
+Use the exact `harbor view <specific-job-directory>` command printed by
+`aat` to inspect a job. Do not use `harbor view --jobs` on the shared
+`runs/` or `grading/` parent: those directories contain AAT wrapper
+directories, while Harbor's own job is nested beneath each wrapper, and
+Harbor 0.20 tries to parse that nested job as a trial. Harbor may also print
+an `upload` suggestion after a run; do not upload real-course jobs unless
+all assignment, reference, submission, grading, and transcript content is
+authorized for disclosure or has been sanitized.
+
 ## What is committable and what is not
 
 | Committable (repository) | Never committed (data root) |

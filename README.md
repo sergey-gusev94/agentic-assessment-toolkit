@@ -54,6 +54,37 @@ trials default to 8. Already-done items are skipped by default, so bulk
 commands are naturally incremental. See the
 [design](docs/design.md) for the full CLI contract.
 
+To repeat a completed item, add `--force`. Repeats are additional trials;
+they never replace prior results:
+
+```bash
+# Add one new solver trial.
+aat solve --course PU_CHE597DS_S2026 --assignment HW5 \
+  --config codex-high --force
+
+# Add three new solver trials in one job.
+aat solve --course PU_CHE597DS_S2026 --assignment HW5 \
+  --config codex-high --force --repeats 3
+```
+
+A subsequent `aat grade --from-solve codex-high ...` automatically selects
+new solver trials that have not yet been graded. To run another independent
+grader trial over an already-graded submission, use `--force` on `aat grade`
+(and optionally `--repeats N`).
+
+Inspect a run with the exact per-job command printed by `aat`, for example:
+
+```bash
+harbor view "$AAT_DATA_DIR/grading/20260801T044338Z__codex-grader-high__44292e75"
+```
+
+Do not point `harbor view --jobs` at the shared `runs/` or `grading/` parent:
+those directories contain AAT job wrappers, with each Harbor job nested one
+level deeper, and Harbor 0.20 misidentifies the nested job as a trial. Also do
+not use Harbor's suggested `upload` command for real coursework unless the
+assignment, reference solution, submissions, and transcripts are authorized
+for disclosure or have been sanitized.
+
 ## Development
 
 Requires Python 3.12+. Install and validate with:

@@ -117,8 +117,9 @@ per-problem Markdown justification.
 
 - One trial completed in 4m23s with no exception or retry.
 - The result covered all 18 rubric criteria and awarded 90/90 required raw
-  points, normalized to 100/100, plus 10/10 optional bonus points. The verifier
-  therefore surfaced the intended course-style reward of `110.0`.
+  points plus 10/10 optional bonus points. That pilot's verifier surfaced
+  `110.0` under its assignment-specific convention; this is historical pilot
+  behavior, not the toolkit's current same-raw-point-scale formula.
 - The generic grading verifier returned `grading_output_valid = 1.0`, reported
   no consistency errors, and had empty stderr.
 - Harbor retained both grading artifacts, and the artifact manifest reported
@@ -132,9 +133,51 @@ This validates the manually materialized solve-to-grade path, structured grader
 output, generic grading contract verifier, and artifact collection. It does not
 yet establish grader calibration or repeat stability across tasks.
 
+## 2026-08-01: Toolkit-materialized HW5 end-to-end run
+
+The maintainer ran the implemented `aat solve` and `aat grade --from-solve`
+commands on `PU_CHE597DS_S2026/HW5`, using toolkit version `0.1.0` at commit
+`8ad8635`. Both jobs used Harbor `0.20.0`, Codex with
+`openai/gpt-5.6-sol`, high reasoning effort, one attempt, and concurrency 1.
+The recorded config identities were `3a0386e9...` for `codex-high` and
+`44292e75...` for `codex-grader-high`.
+
+- `aat solve` automatically materialized one task and completed in 10m39s
+  with no exception or retry and reward `1.0`. Harbor retained the complete
+  submission artifact. The notebook had 10 sequential executed code cells,
+  no saved error outputs, and 8 saved plots; the source data was unchanged.
+- `aat grade --from-solve codex-high` automatically discovered that solver
+  trial, materialized one grading task, and completed in 4m23s with no
+  exception or retry. Harbor retained `grading_result.json` and
+  `justification.md`; the artifact manifest reported `status: "ok"`.
+- The grader used static inspection, covered all 18 rubric criteria, and
+  produced internally consistent sums of 90/90 required points plus 10/10
+  bonus points. The verifier accepted the output with no contract errors.
+- A manual provenance audit recomputed the recorded assignment, submission,
+  reference-solution, rubric, prompt, environment, verifier, grading-schema,
+  and config hashes; all matched the run records.
+
+The grading job surfaced reward `100.0` because that revision's contract
+excluded bonus points from the reward. The run therefore validated the
+pipeline while exposing an older scoring-policy defect. The repository now
+treats required and bonus criteria as points on the same raw scale and derives
+the reward as `100 * (raw_points + bonus_points) / raw_max`. Consequently,
+90/90 required plus 10 bonus points is approximately 111.11. That post-run
+correction still needs one maintainer smoke run.
+
+The grader also attempted `file` and `jq`, found neither installed, and
+successfully recovered with Python-based inspection. Both utilities are now
+part of every environment template. Separately, Harbor 0.20's multi-job
+viewer cannot parse the AAT wrapper nesting when pointed at the shared
+`grading/` parent; viewing the specific job directory printed by `aat` is the
+supported inspection path. Neither observation invalidated the completed
+solve or grade.
+
 ### Pending
 
-- Automatic real-assignment materialization by the toolkit importer.
+- One post-change smoke run confirming the derived `111.11...` reward for the
+  recorded 90/90 plus 10 result and the presence of `file` and `jq` in the
+  built solve and grading images.
 - Judge sanity trio, run through the toolkit on corpus data (roadmap
   stage 3): reference solution near full marks, empty or irrelevant
   submission near zero, stable repeated gradings.

@@ -2,8 +2,9 @@
 #
 # Grading is static inspection: nothing from the submission or the
 # reference solution is ever executed, so this image carries only
-# document-reading tools — PDF text extraction, spreadsheet and tabular
-# reading, and notebook parsing — not a scientific stack.
+# document-reading tools — file/JSON inspection, PDF text extraction,
+# spreadsheet and tabular reading, and notebook parsing — not a
+# scientific stack.
 
 FROM python:3.12.11-slim-bookworm
 
@@ -13,6 +14,8 @@ ENV PIP_NO_CACHE_DIR=1 \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        file \
+        jq \
         poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 

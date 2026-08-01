@@ -2,9 +2,10 @@
 #
 # General scientific-Python baseline: numpy/scipy/pandas/matplotlib,
 # sympy, python-control (control-systems coursework), spreadsheet
-# reading, the notebook toolchain, and PDF text extraction. slycot is
-# deliberately omitted (it needs a Fortran toolchain); python-control
-# covers standard coursework without it.
+# reading, the notebook toolchain, PDF text extraction, and basic
+# file/JSON inspection utilities. slycot is deliberately omitted (it
+# needs a Fortran toolchain); python-control covers standard coursework
+# without it.
 
 FROM python:3.12.11-slim-bookworm
 
@@ -16,8 +17,10 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
+        file \
         fonts-dejavu-core \
         git \
+        jq \
         poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 

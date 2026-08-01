@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from agentic_assessment_toolkit.grading_schema import (
     derive_scores,
     load_grading_result,
@@ -149,6 +151,18 @@ def test_derive_scores_can_exceed_100() -> None:
     data.update(raw_points=10, bonus_points=1)
     assert validate_grading_result(data) == []
     assert derive_scores(data) == {"score_pct": 110.0, "required_pct": 100.0}
+
+
+def test_derive_scores_uses_same_scale_for_required_and_bonus_points() -> None:
+    data = valid_result()
+    data["criteria"][0].update(max_points=70, points=70)
+    data["criteria"][1].update(max_points=20, points=20)
+    data["criteria"][2].update(max_points=10, points=10)
+    data.update(raw_points=90, raw_max=90, bonus_points=10, bonus_max=10)
+    assert validate_grading_result(data) == []
+    scores = derive_scores(data)
+    assert scores["required_pct"] == 100.0
+    assert scores["score_pct"] == pytest.approx(111.11111111111111)
 
 
 def test_float_accumulation_tolerated() -> None:
