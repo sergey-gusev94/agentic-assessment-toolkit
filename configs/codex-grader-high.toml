@@ -1,0 +1,10 @@
+# Pinned Codex grading configuration (docs/design.md, "Experiment
+# configs and config identity"). The frozen judge configuration of
+# design decision 8: any edit here, to the grader prompt template, or to
+# the selected rubric is a new config identity by construction.
+stage = "grade"
+agent = "codex"
+model = "openai/gpt-5.6-sol"
+reasoning_effort = "high"
+prompt = "grader"
+rubric = "default"

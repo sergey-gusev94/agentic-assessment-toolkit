@@ -17,6 +17,9 @@ dependencies = [
   "harbor>=0.20,<0.21",
 ]
 
+[project.scripts]
+aat = "agentic_assessment_toolkit.cli:main"
+
 [project.optional-dependencies]
 dev = [
   "build>=1.2",
@@ -40,6 +43,7 @@ include = [
   "/LICENSE",
   "/Makefile",
   "/README.md",
+  "/configs",
   "/docs",
   "/pyproject.toml",
   "/src",
@@ -50,6 +54,8 @@ include = [
 line-length = 100
 target-version = "py312"
 src = ["src", "tests"]
+# Golden fixtures are byte-exact expected output, not code to restyle.
+extend-exclude = ["tests/fixtures"]
 
 [tool.ruff.lint]
 select = [
@@ -85,3 +91,11 @@ mypy_path = "src"
 files = ["src", "tests"]
 warn_return_any = true
 warn_unused_ignores = true
+# Verifier templates are standalone stdlib-only scripts that run inside
+# task containers, outside this package; they are exercised by tests as
+# subprocesses instead of being type-checked as package modules. Golden
+# fixtures contain byte-exact copies of them.
+exclude = [
+  "src/agentic_assessment_toolkit/templates/verifiers/",
+  "tests/fixtures/",
+]

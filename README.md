@@ -31,6 +31,28 @@ other agent stacks and cross-agent comparisons are added. See the
   this repository is always safe to publish; all real course and student data
   lives in an external data root and is never committed.
 
+## Usage
+
+The `aat` command materializes Harbor tasks from a data root (external
+to this repository, see [data conventions](docs/data-conventions.md))
+and launches `harbor run`:
+
+```bash
+export AAT_DATA_DIR=/path/to/data-root
+
+aat solve --course PU_CHE597DS_S2026 --config codex-high
+aat grade --from-solve codex-high --config codex-grader-high
+aat grade --course PU_CHE597DS_S2026 --config codex-grader-high  # student folders
+```
+
+Experiment configs live under [`configs/`](configs/); a bare
+`--config NAME` resolves to `configs/NAME.toml` relative to the current
+working directory, so run from the repository root or pass an explicit
+path. Selection and mechanics (`--repeats`, `--force`, `--dry-run`,
+`--materialize-only`) are CLI flags. Already-done items are skipped by
+default, so bulk commands are naturally incremental. See the
+[design](docs/design.md) for the full CLI contract.
+
 ## Development
 
 Requires Python 3.12+. Install and validate with:

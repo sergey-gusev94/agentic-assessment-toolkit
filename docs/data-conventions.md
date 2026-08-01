@@ -2,9 +2,9 @@
 
 This document specifies the concrete conventions behind the "strict code–data
 separation" constraint in [brief.md](brief.md). The repository must always be
-safe to publish; all real data lives outside it. The repository-side guards
-below are in place; the data-root resolution is a specification for future
-implementation.
+safe to publish; all real data lives outside it. Both the repository-side
+guards and the data-root resolution and refusal rules below are implemented
+(`src/agentic_assessment_toolkit/data_root.py`).
 
 ## Data root
 
@@ -21,8 +21,10 @@ The toolkit refuses a data root inside its own repository. Precisely:
 the resolved data root must not lie inside a git working tree whose
 `pyproject.toml` declares `name = "agentic-assessment-toolkit"`; the
 check is applied to the git root of the installed package location
-(which catches editable installs) and to the git root of the current
-working directory. A data root may itself be a separate private git
+(which catches editable installs), to the git root of the current
+working directory, and to the git root of the resolved data root
+itself (which catches pointing `AAT_DATA_DIR` into any other checkout
+of the toolkit). A data root may itself be a separate private git
 repository — only the toolkit's own tree is refused.
 
 ## Data root layout
@@ -58,6 +60,11 @@ Notes:
   logs: they embed full assignment content and possibly student text.
 - `tables/` holds the only mapping between real identities and anonymized
   IDs; it never leaves the data root.
+- Solver licenses (e.g. a Gurobi WLS license file or its
+  `GRB_WLSACCESSID`/`GRB_WLSSECRET`/`GRB_LICENSEID` values) are
+  credentials: they live outside the repository — in the data root or
+  the maintainer's environment — and are injected into containers at
+  run time, never baked into images or committed.
 
 ## Course content contract
 
@@ -87,15 +94,19 @@ Notes:
 ## Job directories and run records
 
 Each `aat solve` or `aat grade` invocation creates one job directory —
-`<utc-timestamp>__<config-name>__<identity-prefix8>/` — under `runs/`
-(solve jobs) or `grading/` (grading jobs, whether the submissions are
-benchmark artifacts or real student folders). The directory contains
-Harbor's job output unchanged plus `aat-run.json`, the toolkit's run
-record: exact `harbor --version`, agent and model configuration,
-effective command line, requested items, config identity, and input
-hashes (assignment, prompt, rubric, submission). Doneness of an item
-under a config is derived from these directories and Harbor's per-trial
-result files; there is no separate bookkeeping state.
+`<utc-timestamp>__<config-name>__<identity-prefix8>/` (with a rare `-N`
+suffix on same-second collisions) — under `runs/` (solve jobs) or
+`grading/` (grading jobs, whether the submissions are benchmark
+artifacts or real student folders). The directory contains Harbor's job
+output unchanged plus `aat-run.json`, the toolkit's run record: the
+exact `harbor --version`, the toolkit's own version, agent and model
+configuration, effective command line, repeats and executed flag,
+requested items with their per-item identities, config identity, and
+input hashes (assignment, prompt, environment template, verifier,
+rubric, submission, reference solution, grading schema — as
+applicable). Doneness of an item under a config is derived from these
+directories and Harbor's per-trial result files; there is no separate
+bookkeeping state.
 
 ## What is committable and what is not
 

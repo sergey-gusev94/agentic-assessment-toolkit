@@ -1,0 +1,208 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from agentic_assessment_toolkit.grading_schema import (
+    load_grading_result,
+    validate_grading_result,
+)
+
+
+def valid_result() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "criteria": [
+            {
+                "id": "p1",
+                "title": "Problem 1",
+                "max_points": 8,
+                "points": 6,
+                "evidence": "answer.md reports slope 2 with the fit shown",
+            },
+            {
+                "id": "p2",
+                "title": "Problem 2",
+                "max_points": 2,
+                "points": 2,
+                "evidence": "method stated in answer.md",
+            },
+            {
+                "id": "extra",
+                "title": "Bonus plot",
+                "max_points": 1,
+                "points": 0.5,
+                "evidence": "plot present but unlabeled",
+                "bonus": True,
+            },
+        ],
+        "raw_points": 8,
+        "raw_max": 10,
+        "bonus_points": 0.5,
+        "bonus_max": 1,
+        "score_pct": 80.0,
+        "overall_comment": "Good work; method could be clearer.",
+    }
+
+
+def test_valid_result_passes() -> None:
+    assert validate_grading_result(valid_result()) == []
+
+
+def test_non_object_is_rejected() -> None:
+    assert validate_grading_result([1, 2]) == ["grading result must be a JSON object"]
+
+
+def test_missing_fields_are_reported() -> None:
+    errors = validate_grading_result({})
+    assert "missing required field 'criteria'" in errors
+    assert "missing required field 'score_pct'" in errors
+
+
+def test_wrong_schema_version() -> None:
+    data = valid_result()
+    data["schema_version"] = 2
+    assert any("schema_version" in e for e in validate_grading_result(data))
+
+
+def test_boolean_schema_version_is_rejected() -> None:
+    data = valid_result()
+    data["schema_version"] = True
+    assert any("schema_version" in e for e in validate_grading_result(data))
+
+
+def test_empty_criteria_rejected() -> None:
+    data = valid_result()
+    data["criteria"] = []
+    assert any("non-empty list" in e for e in validate_grading_result(data))
+
+
+def test_duplicate_ids_rejected() -> None:
+    data = valid_result()
+    data["criteria"][1]["id"] = "p1"
+    assert any("duplicate criterion id" in e for e in validate_grading_result(data))
+
+
+def test_points_above_max_rejected() -> None:
+    data = valid_result()
+    data["criteria"][0]["points"] = 9
+    assert any("0 <= points <= max_points" in e for e in validate_grading_result(data))
+
+
+def test_negative_points_rejected() -> None:
+    data = valid_result()
+    data["criteria"][0]["points"] = -1
+    assert any("0 <= points <= max_points" in e for e in validate_grading_result(data))
+
+
+def test_zero_max_points_rejected() -> None:
+    data = valid_result()
+    data["criteria"][0]["max_points"] = 0
+    assert any("max_points must be a finite number > 0" in e for e in validate_grading_result(data))
+
+
+def test_boolean_points_rejected() -> None:
+    data = valid_result()
+    data["criteria"][0]["points"] = True
+    assert any("points must be a finite number" in e for e in validate_grading_result(data))
+
+
+def test_empty_evidence_rejected() -> None:
+    data = valid_result()
+    data["criteria"][0]["evidence"] = "   "
+    assert any("evidence" in e for e in validate_grading_result(data))
+
+
+def test_non_boolean_bonus_rejected() -> None:
+    data = valid_result()
+    data["criteria"][2]["bonus"] = "yes"
+    assert any("bonus must be a boolean" in e for e in validate_grading_result(data))
+
+
+def test_all_bonus_criteria_rejected() -> None:
+    data = valid_result()
+    for entry in data["criteria"]:
+        entry["bonus"] = True
+    data.update(raw_points=0, raw_max=0, bonus_points=8.5, bonus_max=11, score_pct=0)
+    assert any(
+        "at least one criterion must be non-bonus" in e for e in validate_grading_result(data)
+    )
+
+
+def test_aggregate_mismatch_rejected() -> None:
+    data = valid_result()
+    data["raw_points"] = 9
+    errors = validate_grading_result(data)
+    assert any("raw_points is 9" in e for e in errors)
+
+
+def test_score_pct_mismatch_rejected() -> None:
+    data = valid_result()
+    data["score_pct"] = 92.0
+    assert any("score_pct is 92.0" in e for e in validate_grading_result(data))
+
+
+def test_float_accumulation_tolerated() -> None:
+    criteria = [
+        {
+            "id": f"c{i}",
+            "title": f"Criterion {i}",
+            "max_points": 0.1,
+            "points": 0.1,
+            "evidence": "shown in the notebook",
+        }
+        for i in range(10)
+    ]
+    data = {
+        "schema_version": 1,
+        "criteria": criteria,
+        "raw_points": 1.0,
+        "raw_max": 1.0,
+        "bonus_points": 0,
+        "bonus_max": 0,
+        "score_pct": 100.0,
+        "overall_comment": "ok",
+    }
+    assert validate_grading_result(data) == []
+
+
+def test_non_string_comment_rejected() -> None:
+    data = valid_result()
+    data["overall_comment"] = 5
+    assert any("overall_comment" in e for e in validate_grading_result(data))
+
+
+def test_load_missing_file(tmp_path: Path) -> None:
+    data, errors = load_grading_result(tmp_path / "grading_result.json")
+    assert data is None
+    assert any("cannot read" in e for e in errors)
+
+
+def test_load_invalid_json(tmp_path: Path) -> None:
+    path = tmp_path / "grading_result.json"
+    path.write_text("{not json", encoding="utf-8")
+    data, errors = load_grading_result(path)
+    assert data is None
+    assert any("not valid JSON" in e for e in errors)
+
+
+def test_load_valid_file(tmp_path: Path) -> None:
+    path = tmp_path / "grading_result.json"
+    path.write_text(json.dumps(valid_result()), encoding="utf-8")
+    data, errors = load_grading_result(path)
+    assert errors == []
+    assert data is not None and data["score_pct"] == 80.0
+
+
+def test_non_finite_points_rejected() -> None:
+    for bad in (float("inf"), float("-inf"), float("nan")):
+        data = valid_result()
+        data["criteria"][0]["points"] = bad
+        assert any("finite" in e for e in validate_grading_result(data)), bad
+
+
+def test_non_finite_max_points_rejected() -> None:
+    data = valid_result()
+    data["criteria"][0]["max_points"] = float("inf")
+    assert any("finite" in e for e in validate_grading_result(data))
