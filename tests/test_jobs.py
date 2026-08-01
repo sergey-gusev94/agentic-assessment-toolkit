@@ -23,12 +23,13 @@ def test_job_config_shape(tmp_path: Path) -> None:
         task_dirs=[tmp_path / "tasks" / "t1", tmp_path / "tasks" / "t2"],
         job_dir=job_dir,
         repeats=3,
+        max_concurrent_trials=5,
     )
     assert job_config == {
         "jobs_dir": str(job_dir),
         "job_name": "harbor",
         "n_attempts": 3,
-        "n_concurrent_trials": 1,
+        "n_concurrent_trials": 5,
         "agents": [
             {
                 "name": "codex",

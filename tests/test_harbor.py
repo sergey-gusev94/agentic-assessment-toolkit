@@ -70,6 +70,7 @@ def write_job(
         command=["harbor", "run"],
         executed=True,
         repeats=1,
+        max_concurrent_trials=8,
         items=items,
     )
     return job_dir
@@ -111,6 +112,8 @@ def test_run_record_roundtrip(tmp_path: Path) -> None:
     record: dict[str, Any] | None = read_run_record(job_dir)
     assert record is not None
     assert record["stage"] == "solve"
+    assert record["schema_version"] == 1
+    assert record["max_concurrent_trials"] == 8
     assert record["toolkit_version"]
     assert record["harbor_version"].startswith("0.20.")
     assert record["items"][0]["item_id"] == "C1/HW1"

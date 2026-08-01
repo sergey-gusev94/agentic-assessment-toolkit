@@ -357,7 +357,9 @@ immutable — a revision is a new file selected by name in the config
 (see [data-conventions.md](data-conventions.md)) — so folding rubric
 bytes into the per-item identity is defense in depth, and a different
 rubric selection changes doneness for exactly the assignments it
-applies to. `--repeats` and selection flags never enter the identity.
+applies to. Mechanics such as `--repeats` and
+`--max-concurrent-trials`, and all selection flags, never enter the
+identity.
 
 ### Environment templates
 
@@ -632,8 +634,9 @@ handled differently:
    different named configs, so results are segregated and labeled by
    construction.
 3. **Mechanics** (CLI flags): `--repeats N` (Harbor's `-k`; sampling
-   depth, see below), `--force`, `--dry-run` (list what would run, then
-   exit), `--materialize-only`.
+   depth, see below), `--max-concurrent-trials N` (Harbor's job-wide
+   `n_concurrent_trials`, default 8), `--force`, `--dry-run` (list what
+   would run, then exit), `--materialize-only`.
 
 Sampling depth is not experiment identity. `--repeats` changes how many
 trials are drawn, not the system under test or the judge, so it is
@@ -662,13 +665,15 @@ from the repository root or pass an explicit path):
 
 ```text
 aat solve  [--course ID] [--assignment ID] [--all]
-           --config NAME [--data-root PATH] [--repeats N] [--force]
+           --config NAME [--data-root PATH] [--repeats N]
+           [--max-concurrent-trials N] [--force]
            [--dry-run] [--materialize-only]
 
 aat grade  (--from-solve NAME [--course ID] [--assignment ID]
             | --submissions PATH
             | --course ID [--assignment ID] | --all)
-           --config NAME [--data-root PATH] [--repeats N] [--force]
+           --config NAME [--data-root PATH] [--repeats N]
+           [--max-concurrent-trials N] [--force]
            [--dry-run] [--materialize-only]
 ```
 

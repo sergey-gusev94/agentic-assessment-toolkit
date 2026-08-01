@@ -100,7 +100,8 @@ suffix on same-second collisions) — under `runs/` (solve jobs) or
 artifacts or real student folders). The directory contains Harbor's job
 output unchanged plus `aat-run.json`, the toolkit's run record: the
 exact `harbor --version`, the toolkit's own version, agent and model
-configuration, effective command line, repeats and executed flag,
+configuration, effective command line, repeats, maximum concurrent trials,
+and executed flag,
 requested items with their per-item identities, config identity, and
 input hashes (assignment, prompt, environment template, verifier,
 rubric, submission, reference solution, grading schema — as

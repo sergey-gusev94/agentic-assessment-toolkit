@@ -17,9 +17,7 @@ from .config import ConfigError, ExperimentConfig
 HARBOR_JOB_NAME = "harbor"
 HARBOR_JOB_CONFIG_FILENAME = "harbor-job.json"
 
-# Conservative default: subscription capacity is the scarce resource
-# (docs/research.md, "Development runs").
-N_CONCURRENT_TRIALS = 1
+DEFAULT_MAX_CONCURRENT_TRIALS = 8
 
 
 def agent_kwargs(config: ExperimentConfig) -> dict[str, str]:
@@ -40,6 +38,7 @@ def build_harbor_job_config(
     task_dirs: list[Path],
     job_dir: Path,
     repeats: int,
+    max_concurrent_trials: int,
 ) -> dict[str, object]:
     """A Harbor JobConfig document (harbor.models.job.config:JobConfig)."""
     agent: dict[str, object] = {"name": config.agent, "model_name": config.model}
@@ -50,7 +49,7 @@ def build_harbor_job_config(
         "jobs_dir": str(job_dir),
         "job_name": HARBOR_JOB_NAME,
         "n_attempts": repeats,
-        "n_concurrent_trials": N_CONCURRENT_TRIALS,
+        "n_concurrent_trials": max_concurrent_trials,
         "agents": [agent],
         "tasks": [{"path": str(task_dir)} for task_dir in task_dirs],
     }

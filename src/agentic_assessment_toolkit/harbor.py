@@ -104,6 +104,7 @@ def write_run_record(
     command: list[str],
     executed: bool,
     repeats: int,
+    max_concurrent_trials: int,
     items: list[RunRecordItem],
     cli_version: str | None = None,
 ) -> Path:
@@ -126,6 +127,7 @@ def write_run_record(
         },
         "config_identity": config_identity,
         "repeats": repeats,
+        "max_concurrent_trials": max_concurrent_trials,
         "command": command,
         "executed": executed,
         "items": [asdict(item) for item in items],

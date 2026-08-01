@@ -71,6 +71,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Harbor attempts per item (sampling depth, not identity)",
     )
     common.add_argument(
+        "--max-concurrent-trials",
+        type=_positive_int,
+        default=jobs_mod.DEFAULT_MAX_CONCURRENT_TRIALS,
+        metavar="N",
+        help=(
+            "maximum Harbor trials running concurrently "
+            f"(default: {jobs_mod.DEFAULT_MAX_CONCURRENT_TRIALS})"
+        ),
+    )
+    common.add_argument(
         "--force",
         action="store_true",
         help="include already-done items; never overwrites, trials accumulate",
@@ -425,7 +435,10 @@ def _execute(
             status = "done" if item.done else "pending"
             marker = "run " if (args.force or not item.done) else "skip"
             print(f"{marker} [{status:7}] {item.item_id}")
-        print(f"would run {len(to_run)} of {len(planned)} item(s)")
+        print(
+            f"would run {len(to_run)} of {len(planned)} item(s); "
+            f"max concurrent trials: {args.max_concurrent_trials}"
+        )
         return 0
 
     if not to_run:
@@ -442,6 +455,7 @@ def _execute(
         task_dirs=[tasks_dir / item.task_dir_name for item in record_items],
         job_dir=job_dir,
         repeats=args.repeats,
+        max_concurrent_trials=args.max_concurrent_trials,
     )
     job_config_path = jobs_mod.write_harbor_job_config(job_dir, job_config)
     command = harbor_mod.build_harbor_command(job_config_path)
@@ -457,12 +471,14 @@ def _execute(
         command=command,
         executed=not args.materialize_only,
         repeats=args.repeats,
+        max_concurrent_trials=args.max_concurrent_trials,
         items=record_items,
         cli_version=cli_version,
     )
 
     print(f"job directory: {job_dir}")
     print(f"materialized {len(record_items)} task(s)")
+    print(f"max concurrent trials: {args.max_concurrent_trials}")
     if args.materialize_only:
         print(f"materialize-only; harbor not invoked. command: {shlex.join(command)}")
         return 0

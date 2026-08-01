@@ -91,6 +91,7 @@ def test_solve_materialize_only_writes_job_dir(
     record = json.loads((job_dir / "aat-run.json").read_text(encoding="utf-8"))
     assert record["stage"] == "solve"
     assert record["executed"] is False
+    assert record["max_concurrent_trials"] == 8
     assert len(record["items"]) == 1
     assert record["items"][0]["item_id"] == f"{COURSE_ID}/HW1"
 
@@ -99,9 +100,34 @@ def test_solve_materialize_only_writes_job_dir(
     assert task_path.is_dir()
     assert (task_path / "task.toml").is_file()
     assert job_config["jobs_dir"] == str(job_dir)
+    assert job_config["n_concurrent_trials"] == 8
     assert record["command"] == ["harbor", "run", "-c", str(job_dir / "harbor-job.json"), "--yes"]
     out = capsys.readouterr().out
     assert "materialize-only" in out
+
+
+def test_grade_max_concurrent_trials_is_forwarded_and_recorded(
+    data_root: Path, grade_config: Path
+) -> None:
+    assert (
+        cli.main(
+            grade_args(
+                data_root,
+                grade_config,
+                "--course",
+                COURSE_ID,
+                "--max-concurrent-trials",
+                "3",
+                "--materialize-only",
+            )
+        )
+        == 0
+    )
+    job_dir = job_dirs(data_root, "grading")[0]
+    record = json.loads((job_dir / "aat-run.json").read_text(encoding="utf-8"))
+    job_config = json.loads((job_dir / "harbor-job.json").read_text(encoding="utf-8"))
+    assert record["max_concurrent_trials"] == 3
+    assert job_config["n_concurrent_trials"] == 3
 
 
 def test_solve_doneness_skips_completed_items(

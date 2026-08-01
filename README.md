@@ -48,9 +48,10 @@ aat grade --course PU_CHE597DS_S2026 --config codex-grader-high  # student folde
 Experiment configs live under [`configs/`](configs/); a bare
 `--config NAME` resolves to `configs/NAME.toml` relative to the current
 working directory, so run from the repository root or pass an explicit
-path. Selection and mechanics (`--repeats`, `--force`, `--dry-run`,
-`--materialize-only`) are CLI flags. Already-done items are skipped by
-default, so bulk commands are naturally incremental. See the
+path. Selection and mechanics (`--repeats`, `--max-concurrent-trials`,
+`--force`, `--dry-run`, `--materialize-only`) are CLI flags. Concurrent
+trials default to 8. Already-done items are skipped by default, so bulk
+commands are naturally incremental. See the
 [design](docs/design.md) for the full CLI contract.
 
 ## Development
