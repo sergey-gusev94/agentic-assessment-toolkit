@@ -99,13 +99,33 @@ recorded; grading now runs as ordinary Harbor grading jobs, per
 [design.md](design.md). The validated results above stand as history; the
 pending list below reflects the revised design.
 
+### Separate Harbor grading job
+
+The saved RewardKit-pilot submission was then materialized with the assignment
+rubric and reference solution as a separate Harbor grading task. A Codex grader
+inspected the notebooks statically and wrote `grading_result.json` plus a
+per-problem Markdown justification.
+
+- One trial completed in 4m23s with no exception or retry.
+- The result covered all 18 rubric criteria and awarded 90/90 required raw
+  points, normalized to 100/100, plus 10/10 optional bonus points. The verifier
+  therefore surfaced the intended course-style reward of `110.0`.
+- The generic grading verifier returned `grading_output_valid = 1.0`, reported
+  no consistency errors, and had empty stderr.
+- Harbor retained both grading artifacts, and the artifact manifest reported
+  `status: "ok"` for `/app/grading_output`.
+- Trajectory review confirmed that the grader parsed notebook JSON and saved
+  outputs without executing submission or reference code. Manual review found
+  the criterion evidence specific and consistent with the saved work and
+  reference solution.
+
+This validates the manually materialized solve-to-grade path, structured grader
+output, generic grading contract verifier, and artifact collection. It does not
+yet establish grader calibration or repeat stability across tasks.
+
 ### Pending
 
 - Automatic real-assignment materialization by the toolkit importer.
-- A Harbor grading job grades a Harbor-produced submission directory using
-  cached Codex authentication, producing a valid `grading_result.json` and
-  Markdown justification, with the generic grading verifier surfacing the
-  score as the reward.
 - The same grading task re-run with a revised rubric over unchanged
   artifacts (regrade-by-rerun).
 - Judge sanity trio: reference solution near full marks, empty or

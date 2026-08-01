@@ -190,10 +190,11 @@ Detailed evidence and exact limits of completed manual checks are recorded in
 4. **Validated:** RewardKit runs seven programmatic dimensions in Harbor's
    shared task environment. (RewardKit has since been descoped; the result
    stands as recorded history.)
-5. **Pending:** a Harbor grading job grades a Harbor-produced submission
-   directory using cached authentication, producing a valid
-   `grading_result.json` and Markdown justification, with the generic
-   grading verifier surfacing the score as the reward.
+5. **Validated:** a separate Harbor grading job statically grades a
+   Harbor-produced submission using cached authentication, produces a valid
+   `grading_result.json` and Markdown justification covering all rubric
+   criteria, and has the generic grading verifier surface the score as the
+   reward.
 6. **Pending:** the same grading task re-run with a revised rubric over
    unchanged artifacts (regrade-by-rerun).
 7. **Pending:** judge sanity trio — reference solution near full marks,
