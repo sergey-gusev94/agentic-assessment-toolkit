@@ -17,6 +17,11 @@ two disagree, this document wins.
   stage keeps one generic contract verifier, and grades come from the LLM
   grader's artifacts. Grading justifications are Markdown initially;
   LaTeX/PDF output is a later prompt change.
+- **2026-07-31.** Full agent capability is the default in both stages:
+  public network access and the agents' normal toolset, for solving and
+  grading alike. The provider-only egress restriction on grading jobs is
+  descoped to a later-on-demand hardening option; the associated
+  credential-exposure risk is accepted explicitly in decision 9.
 
 ## Decisions
 
@@ -85,16 +90,22 @@ analysis are in research.md.
    one submission are stable — plus repeated grading for distributions and
    explicit failure accounting. Calibration against trusted human grading is
    deferred until a trustworthy human-graded corpus exists.
-9. **Minimal trust model, accepted and documented.** The grader is
-   instructed never to execute submission code; grading is static inspection
-   by prompt rule, which is soft enforcement, accepted deliberately.
-   Exposure is bounded structurally: grading containers are disposable, run
-   with restricted (provider-only) egress, and mount nothing beyond the
-   materialized task. The residual risk — a prompt-injected grader leaking
-   the in-container subscription credential — is accepted at current scale
-   (personal research over historical data) and must be revisited before any
-   adversarial or institutional deployment. No injection scanners,
-   credential brokers, or sanitized evidence bundles are in scope.
+9. **Full agent capability by default; minimal trust model, accepted and
+   documented.** Agents run with their normal toolset and public network
+   access in both stages, because assignments and grading may legitimately
+   require web research, downloads, or checking cited sources. The
+   effective network policy is an experiment condition recorded with every
+   job; any restriction (offline solving, provider-only egress) is a
+   deliberate, recorded choice made later, never a default. The grader is
+   instructed never to execute submission code; grading is static
+   inspection by prompt rule, which is soft enforcement, accepted
+   deliberately. Grading containers are disposable and mount nothing beyond
+   the materialized task. The residual prompt-injection risk — including a
+   prompt-injected grader leaking the in-container subscription credential
+   — is accepted at current scale (personal research over historical data)
+   and must be revisited before any adversarial or institutional
+   deployment. No injection scanners, credential brokers, or sanitized
+   evidence bundles are in scope.
 10. **Strict code–data separation.** The repository is always publishable;
     all real data lives in an external data root. Specified in
     [data-conventions.md](data-conventions.md).
@@ -152,7 +163,7 @@ submission directory
            + rubric + grader instruction (static inspection; submission
            and reference are read as data, never executed)
 Harbor grading job: grader agent in isolated container
-  (provider-only egress, -k repeats for variance)
+  (public network, -k repeats for variance)
         ↓  generic grading verifier: validate grading_result.json,
            surface score_pct as the reward
 grading_result.json + per-problem Markdown justification
@@ -219,6 +230,7 @@ what the toolkit provides, not by live runs.
    change); optional format-aware submission lints (e.g. notebook executed,
    document compiled) if failure accounting shows the need; judge
    calibration if a trusted human-graded corpus emerges;
-   host-side hardening or a credential broker if grading ever faces
-   adversarial submissions; MLflow if Harbor's viewer becomes insufficient;
+   restricted network egress, host-side hardening, or a credential broker
+   if grading ever faces adversarial submissions; MLflow if Harbor's viewer
+   becomes insufficient;
    institutional or open-source packaging.

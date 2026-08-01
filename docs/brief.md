@@ -121,14 +121,17 @@ statistical reporting.
   prompts, and efforts.
 - **Solve and grade are separate stages.** Everything needed for grading is
   captured as artifacts at solve time; regrading never reruns the solver.
-- **Minimal trust model, accepted and documented.** Benchmark tasks are
-  professor-authored and trusted, so subscription credentials may exist inside
-  the solver sandbox with public network access. Grading reads untrusted
-  submission content, so it is static inspection by prompt rule — submission
-  code is never intentionally executed — inside disposable containers with
-  restricted (provider-only) egress. The residual risk of a prompt-injected
-  grader is accepted at current scale and must be revisited before any
-  adversarial or institutional deployment.
+- **Full agent capability by default; minimal trust model, accepted and
+  documented.** Agents run with their normal toolset and public network
+  access in both stages: assignments and grading may legitimately require
+  web research, downloads, or checking cited sources. Grading reads
+  untrusted submission content, so it is static inspection by prompt rule —
+  submission code is never intentionally executed — inside disposable
+  containers. The residual prompt-injection risk, including possible
+  credential exposure from the grading container, is accepted at current
+  scale and must be revisited before any adversarial or institutional
+  deployment; any network restriction is a deliberate later choice, never a
+  default.
 - **Strict code–data separation.** The repository contains only code,
   documentation, templates, and synthetic test fixtures, and must always be
   safe to publish. All real data — assignments, reference solutions, student
