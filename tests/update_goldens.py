@@ -42,6 +42,7 @@ def main() -> None:
     grading_dir = GOLDEN_DIR / "grading_tasks"
     grading_dir.mkdir(parents=True)
     materialize_grading_task(
+        assignment_dir=course_dir / "assignments" / "HW1",
         submission_dir=FIXTURES_DIR / "submission",
         reference_solution_dir=course_dir / "reference_solutions" / "HW1",
         rubric_path=course_dir / "rubrics" / "HW1" / "default.md",

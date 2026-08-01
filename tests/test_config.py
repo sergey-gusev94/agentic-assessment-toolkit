@@ -92,7 +92,7 @@ def test_config_identity_differs_between_stages(tmp_path: Path) -> None:
     assert config_identity(solve) != config_identity(grade)
 
 
-def test_item_identity_folds_environment_and_rubric() -> None:
+def test_item_identity_folds_environment_rubric_and_assignment() -> None:
     base = "0" * 64
     env_a = item_identity(base, b"FROM python:3.12-slim")
     env_b = item_identity(base, b"FROM python:3.13-slim")
@@ -101,6 +101,9 @@ def test_item_identity_folds_environment_and_rubric() -> None:
     without_rubric = item_identity(base, b"FROM x")
     assert with_rubric != without_rubric
     assert item_identity(base, b"FROM x", b"# rubric") == with_rubric
+    with_assignment = item_identity(base, b"FROM x", b"# rubric", "a" * 64)
+    assert with_assignment != with_rubric
+    assert item_identity(base, b"FROM x", b"# rubric", "b" * 64) != with_assignment
 
 
 def test_environment_flavors_resolve() -> None:

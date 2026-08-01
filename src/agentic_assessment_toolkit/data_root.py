@@ -189,6 +189,17 @@ def _optional_str(data: dict[str, object], key: str, path: Path) -> str | None:
     return value
 
 
+def assignment_dir(root: Path, course_id: str, assignment_id: str) -> Path:
+    """The as-received handout directory; grading tasks present it too."""
+    directory = root / "courses" / course_id / "assignments" / assignment_id
+    if not directory.is_dir():
+        raise DataRootError(
+            f"no assignment directory for {course_id}/{assignment_id} under "
+            f"{root / 'courses' / course_id / 'assignments'}"
+        )
+    return directory
+
+
 def reference_solution_dir(root: Path, course_id: str, assignment_id: str) -> Path:
     directory = root / "courses" / course_id / "reference_solutions" / assignment_id
     if not directory.is_dir():

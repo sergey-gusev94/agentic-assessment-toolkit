@@ -1,12 +1,13 @@
 """Materialize a submission into a Harbor grading task.
 
 One code path for both submission sources — a Harbor solve artifact or a
-real student folder (design decision 5). The task presents submission,
-reference solution, and rubric under /app as data; the grader writes
-into /app/grading_output; the generic grading verifier validates the
-output schema and derives score_pct as the reward. Grading never starts
-without a rubric (decision 5): a missing or unparseable rubric fails
-materialization before anything is written.
+real student folder (design decision 5). The task presents the
+assignment handout, submission, reference solution, and rubric under
+/app as data; the grader writes into /app/grading_output; the generic
+grading verifier validates the output schema and derives score_pct as
+the reward. Grading never starts without a rubric (decision 5): a
+missing or unparseable rubric fails materialization before anything is
+written.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ class MaterializedGradingTask:
 
 def materialize_grading_task(
     *,
+    assignment_dir: Path,
     submission_dir: Path,
     reference_solution_dir: Path,
     rubric_path: Path,
@@ -56,6 +58,7 @@ def materialize_grading_task(
 
     environment_template = config.environment_path(config.GRADING_FLAVOR)
     copy_lines = [
+        "COPY assignment /app/assignment",
         "COPY submission /app/submission",
         "COPY reference_solution /app/reference_solution",
         "COPY rubric.md /app/rubric.md",
@@ -63,6 +66,7 @@ def materialize_grading_task(
     _common.write_dockerfile(task_dir, environment_template.read_bytes(), copy_lines)
 
     environment_dir = task_dir / "environment"
+    _common.copy_tree(assignment_dir, environment_dir / "assignment")
     _common.copy_tree(submission_dir, environment_dir / "submission")
     _common.copy_tree(reference_solution_dir, environment_dir / "reference_solution")
     (environment_dir / "rubric.md").write_bytes(rubric_path.read_bytes())
@@ -74,6 +78,7 @@ def materialize_grading_task(
     (task_dir / "tests" / "grading_schema.py").write_bytes(schema_path.read_bytes())
 
     input_hashes = {
+        "assignment": sha256_dir(assignment_dir),
         "submission": sha256_dir(submission_dir),
         "reference_solution": sha256_dir(reference_solution_dir),
         "rubric": sha256_file(rubric_path),

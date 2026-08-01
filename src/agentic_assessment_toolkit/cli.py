@@ -26,6 +26,7 @@ from pathlib import Path
 from . import config as config_mod
 from . import data_root as data_root_mod
 from . import harbor as harbor_mod
+from . import hashing
 from . import jobs as jobs_mod
 from . import metrics as metrics_mod
 from . import report as report_mod
@@ -321,6 +322,7 @@ def _plan_grade(
 
     planned = []
     for source in sources:
+        assignment = data_root_mod.assignment_dir(root, source.course_id, source.assignment_id)
         reference = data_root_mod.reference_solution_dir(
             root, source.course_id, source.assignment_id
         )
@@ -341,13 +343,20 @@ def _plan_grade(
             rubric_mod.parse_rubric_file(rubric)
         except rubric_mod.RubricError as error:
             raise CliError(str(error)) from error
-        identity = config_mod.item_identity(config_identity, template_bytes, rubric.read_bytes())
+        identity = config_mod.item_identity(
+            config_identity,
+            template_bytes,
+            rubric.read_bytes(),
+            hashing.sha256_dir(assignment),
+        )
         planned.append(
             _PlannedItem(
                 item_id=source.item_id,
                 item_identity=identity,
                 done=(source.item_id, identity) in done,
-                materialize=_grade_materializer(source, reference, rubric, config, identity),
+                materialize=_grade_materializer(
+                    source, assignment, reference, rubric, config, identity
+                ),
             )
         )
     return planned
@@ -355,6 +364,7 @@ def _plan_grade(
 
 def _grade_materializer(
     source: _GradeSource,
+    assignment: Path,
     reference: Path,
     rubric: Path,
     config: ExperimentConfig,
@@ -362,6 +372,7 @@ def _grade_materializer(
 ) -> Callable[[Path], harbor_mod.RunRecordItem]:
     def materialize(tasks_dir: Path) -> harbor_mod.RunRecordItem:
         task = materialize_grading_task(
+            assignment_dir=assignment,
             submission_dir=source.submission_dir,
             reference_solution_dir=reference,
             rubric_path=rubric,

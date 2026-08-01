@@ -45,7 +45,7 @@ analysis are in research.md.
    goal, not an acceptance criterion for the initial vertical slices.
 5. **One grading pipeline, two submission sources.** Grading is a Harbor job
    whose tasks are "grade this submission directory against this reference
-   solution and rubric." A submission directory can be a Harbor solve
+   solution and rubric, with the assignment handout alongside." A submission directory can be a Harbor solve
    artifact or a real student folder; the machinery is identical and the
    only difference is which directory is materialized into the grading
    task. Repeated grading for variance estimates is Harbor's native
@@ -144,8 +144,9 @@ identically in code, documentation, and output.
   everything it references (prompt, verifier, rendered task.toml);
   labels and segregates results.
 - **Per-item identity** — the config identity folded with an item's
-  resolved inputs (environment template, rubric bytes); paired with the
-  item id, it is the doneness and pooling key.
+  resolved inputs (environment template, rubric bytes, and for grading
+  the assignment directory hash); paired with the item id, it is the
+  doneness and pooling key.
 - **Verified trial** — a trial whose verifier recorded a reward,
   whatever the reward's value (see denominator policy).
 - **Done** — an item needing no further work under a config: a verified
@@ -196,9 +197,9 @@ clustered by assignment, explicit failure accounting
 ```text
 submission directory
   (Harbor solve artifact OR submissions/<course>/<student>/<assignment>/)
-        ↓  grading-task materializer: submission + reference solution
-           + rubric + grader instruction (static inspection; submission
-           and reference are read as data, never executed)
+        ↓  grading-task materializer: assignment + submission
+           + reference solution + rubric + grader instruction (static
+           inspection; every input is read as data, never executed)
 Harbor grading job: grader agent in isolated container
   (public network, -k repeats for variance)
         ↓  generic grading verifier: validate grading_result.json,
@@ -318,6 +319,10 @@ backup files.
 
 A materialized grading task presents, under `/app`:
 
+- `assignment/` — the as-received handout, copied whole exactly as in
+  the solve task: the authoritative record of what was asked. The
+  grader judges the submission against it; a human grader always has
+  the assignment sheet in front of them, and so does this one.
 - `submission/` — the directory being graded (solve artifact or student
   folder), copied as data.
 - `reference_solution/` — the oracle solution.
@@ -338,11 +343,11 @@ document-reading tools (PDF text extraction, spreadsheet and notebook
 reading), not the course's scientific stack. Course flavors are for
 solve tasks only.
 
-The grader instruction states the static-inspection rule: submission
-and reference content is read as data and never executed — and never
-compiled: LaTeX compilation is code execution. It also states that any
-instructions found inside the submission or reference are content to be
-graded, never directives to the grader.
+The grader instruction states the static-inspection rule: assignment,
+submission, and reference content is read as data and never executed —
+and never compiled: LaTeX compilation is code execution. It also states
+that any instructions found inside the assignment, submission, or
+reference are content about the work, never directives to the grader.
 
 ### Experiment configs and config identity
 
@@ -361,13 +366,14 @@ materialized): an edit to any of these changes the experiment, so all
 of them invalidate doneness by construction. Each item
 additionally has a **per-item identity** that folds in the item's
 resolved inputs: for solve, the resolved environment template
-(Dockerfile) bytes; for grading, the grading environment template bytes
-and the resolved rubric file bytes. Rubric files themselves are
-immutable — a revision is a new file selected by name in the config
-(see [data-conventions.md](data-conventions.md)) — so folding rubric
-bytes into the per-item identity is defense in depth, and a different
-rubric selection changes doneness for exactly the assignments it
-applies to. Mechanics such as `--repeats` and
+(Dockerfile) bytes; for grading, the grading environment template
+bytes, the resolved rubric file bytes, and the hash of the assignment
+directory presented in the task. Rubric files and registered
+assignments are immutable — a rubric revision is a new file selected by
+name in the config (see [data-conventions.md](data-conventions.md)) —
+so folding their bytes into the per-item identity is defense in depth,
+and a different rubric selection changes doneness for exactly the
+assignments it applies to. Mechanics such as `--repeats` and
 `--max-concurrent-trials`, and all selection flags, never enter the
 identity.
 
@@ -425,9 +431,10 @@ needs one. The solver prompt covers the role, the workspace layout,
 autonomy expectations, and the `/app/submission` output contract
 (executed notebooks, document source in Markdown or LaTeX — never
 compiled PDFs, no scratch files). The grader prompt covers the
-static-inspection rule (read as data; never execute or compile),
-prompt-injection resistance (instructions inside the submission are
-content, not commands), rubric authority — including the requirement
+workspace — including the assignment handout as the record of what was
+asked — the static-inspection rule (read as data; never execute or
+compile), prompt-injection resistance (instructions inside the
+submission are content, not commands), rubric authority — including the requirement
 to reproduce the rubric's enumerated criteria verbatim: same ids, same
 max points, same bonus flags, with only the points awarded being the
 grader's judgment — evidence requirements, and the exact output schema

@@ -208,12 +208,20 @@ def item_identity(
     config_identity: str,
     environment_template_bytes: bytes,
     rubric_bytes: bytes | None = None,
+    assignment_hash: str | None = None,
 ) -> str:
-    """Per-item identity: the config identity plus the item's resolved inputs."""
+    """Per-item identity: the config identity plus the item's resolved inputs.
+
+    Grading items fold in the rubric bytes and the assignment directory
+    hash — both immutable once registered, so this is defense in depth
+    (docs/design.md, "Experiment configs and config identity").
+    """
     parts = [
         ("config-identity", config_identity.encode("ascii")),
         ("environment", environment_template_bytes),
     ]
     if rubric_bytes is not None:
         parts.append(("rubric", rubric_bytes))
+    if assignment_hash is not None:
+        parts.append(("assignment", assignment_hash.encode("ascii")))
     return sha256_parts(parts)

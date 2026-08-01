@@ -39,6 +39,7 @@ def test_solve_task_matches_golden(tmp_path: Path) -> None:
 
 def test_grading_task_matches_golden(tmp_path: Path) -> None:
     materialize_grading_task(
+        assignment_dir=COURSE_DIR / "assignments" / "HW1",
         submission_dir=FIXTURES_DIR / "submission",
         reference_solution_dir=COURSE_DIR / "reference_solutions" / "HW1",
         rubric_path=COURSE_DIR / "rubrics" / "HW1" / "default.md",
@@ -77,6 +78,7 @@ def test_solve_task_structure(tmp_path: Path) -> None:
 
 def test_grading_task_structure(tmp_path: Path) -> None:
     task = materialize_grading_task(
+        assignment_dir=COURSE_DIR / "assignments" / "HW1",
         submission_dir=FIXTURES_DIR / "submission",
         reference_solution_dir=COURSE_DIR / "reference_solutions" / "HW1",
         rubric_path=COURSE_DIR / "rubrics" / "HW1" / "default.md",
@@ -87,9 +89,12 @@ def test_grading_task_structure(tmp_path: Path) -> None:
     )
     task_dir = task.task_dir
     dockerfile = (task_dir / "environment" / "Dockerfile").read_text(encoding="utf-8")
+    assert "COPY assignment /app/assignment" in dockerfile
     assert "COPY rubric.md /app/rubric.md" in dockerfile
+    assert (task_dir / "environment" / "assignment" / "statement.md").is_file()
     assert (task_dir / "environment" / "rubric.md").is_file()
     assert set(task.input_hashes) == {
+        "assignment",
         "submission",
         "reference_solution",
         "rubric",
@@ -108,6 +113,7 @@ def test_grading_task_missing_rubric_is_an_error(tmp_path: Path) -> None:
     """HW2 has no rubric; grading never starts without one (decision 5)."""
     with pytest.raises(MaterializeError, match="cannot read rubric"):
         materialize_grading_task(
+            assignment_dir=COURSE_DIR / "assignments" / "HW2",
             submission_dir=FIXTURES_DIR / "submission",
             reference_solution_dir=COURSE_DIR / "reference_solutions" / "HW2",
             rubric_path=COURSE_DIR / "rubrics" / "HW2" / "default.md",
@@ -126,6 +132,7 @@ def test_grading_task_unparseable_rubric_is_an_error(tmp_path: Path) -> None:
     tasks_dir.mkdir()
     with pytest.raises(MaterializeError, match="line 1"):
         materialize_grading_task(
+            assignment_dir=COURSE_DIR / "assignments" / "HW1",
             submission_dir=FIXTURES_DIR / "submission",
             reference_solution_dir=COURSE_DIR / "reference_solutions" / "HW1",
             rubric_path=rubric,
@@ -141,6 +148,7 @@ def test_grading_schema_copy_is_verbatim(tmp_path: Path) -> None:
     from agentic_assessment_toolkit.config import grading_schema_source_path
 
     task = materialize_grading_task(
+        assignment_dir=COURSE_DIR / "assignments" / "HW1",
         submission_dir=FIXTURES_DIR / "submission",
         reference_solution_dir=COURSE_DIR / "reference_solutions" / "HW1",
         rubric_path=COURSE_DIR / "rubrics" / "HW1" / "default.md",
@@ -172,6 +180,7 @@ def test_existing_task_dir_is_an_error(tmp_path: Path) -> None:
 def test_missing_submission_dir_is_an_error(tmp_path: Path) -> None:
     with pytest.raises(MaterializeError, match="not a directory"):
         materialize_grading_task(
+            assignment_dir=COURSE_DIR / "assignments" / "HW1",
             submission_dir=tmp_path / "missing",
             reference_solution_dir=COURSE_DIR / "reference_solutions" / "HW1",
             rubric_path=COURSE_DIR / "rubrics" / "HW1" / "default.md",
