@@ -73,8 +73,8 @@ class Assessment:
 @dataclass(frozen=True)
 class Course:
     """One loaded ``course.toml``; ``assessments`` is None when the
-    registry has not been authored yet (distinct from authored-empty,
-    which the array-of-tables syntax cannot express)."""
+    registry has not been authored yet (an explicit ``assessments = []``
+    is rejected at load time, so an authored registry is never empty)."""
 
     title: str | None
     institution: str | None
@@ -92,8 +92,8 @@ class Course:
 def load_course(path: Path) -> Course:
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError as error:
-        raise CourseError(f"cannot read {path}: {error}") from error
+    except (OSError, UnicodeDecodeError) as error:
+        raise CourseError(f"cannot read {path} as UTF-8: {error}") from error
     try:
         data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as error:
@@ -118,6 +118,11 @@ def load_course(path: Path) -> Course:
     if raw_assessments is not None:
         if not isinstance(raw_assessments, list):
             raise CourseError(f"{path}: 'assessments' must be an array of tables")
+        if not raw_assessments:
+            raise CourseError(
+                f"{path}: 'assessments = []' says nothing: omit the key entirely "
+                "until the registry is authored (absent means unauthored)"
+            )
         entries = [
             _parse_assessment(entry, index, path) for index, entry in enumerate(raw_assessments)
         ]
@@ -172,11 +177,12 @@ def _parse_assessment(entry: object, index: int, path: Path) -> Assessment:
         raise CourseError(f"{path}: {where}: 'ai_use_possible' must be a boolean")
 
     due = entry.get("due")
-    if due is not None:
-        if isinstance(due, datetime.datetime):
-            due = due.date()
-        elif not isinstance(due, datetime.date):
-            raise CourseError(f"{path}: {where}: 'due' must be a TOML date")
+    # datetime is a date subclass: reject it explicitly rather than
+    # silently truncating a stated time.
+    if due is not None and (
+        isinstance(due, datetime.datetime) or not isinstance(due, datetime.date)
+    ):
+        raise CourseError(f"{path}: {where}: 'due' must be a plain TOML date (e.g. 2026-02-06)")
 
     return Assessment(
         id=assessment_id,

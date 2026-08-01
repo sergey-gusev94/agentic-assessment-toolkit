@@ -54,9 +54,11 @@ nothing else — no other courses, no `submissions/`, no `tables/`, and
 never anything inside `raw/`, which is read-only evidence.
 
 If `courses/<course_id>/` already exists, this is an incremental run:
-**never modify an existing file or directory** — add new assignments,
-new registry entries, and new rubric files only. If something existing
-looks wrong, record it in `intake-notes.md` instead of fixing it.
+**never modify an existing artifact** — an assignment directory, a
+reference solution, or a rubric file — only add new ones.
+`course.toml`, `intake-notes.md`, and `syllabus/` are amendable: extend
+the registry and the notes in place. If an existing artifact looks
+wrong, record that in `intake-notes.md` instead of fixing it.
 
 Produce this layout (authoritative spec:
 `docs/data-conventions.md` in the toolkit repository):

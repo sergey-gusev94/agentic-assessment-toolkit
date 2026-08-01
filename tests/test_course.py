@@ -83,7 +83,8 @@ def test_top_level_environment_is_rejected(tmp_path: Path) -> None:
         ("[[assessments]]\nid = 'HW1'\nweight_pct = -1\n", "finite and >= 0"),
         ("[[assessments]]\nid = 'HW1'\nweight_pct = true\n", "must be a number"),
         ("[[assessments]]\nid = 'HW1'\nai_use_possible = 'yes'\n", "must be a boolean"),
-        ("[[assessments]]\nid = 'HW1'\ndue = '2026-02-06'\n", "must be a TOML date"),
+        ("[[assessments]]\nid = 'HW1'\ndue = '2026-02-06'\n", "must be a plain TOML date"),
+        ("[[assessments]]\nid = 'HW1'\ndue = 2026-02-06T10:00:00Z\n", "must be a plain TOML date"),
         ("[[assessments]]\nid = 'HW1'\nexcluded = ''\n", "non-empty string"),
         ("[[assessments]]\nid = 'HW1'\npoints = 3\n", "unknown keys: points"),
         ("[[assessments]]\nid = 'HW1'\n[[assessments]]\nid = 'HW1'\n", "duplicate assessment id"),
@@ -101,3 +102,15 @@ def test_invalid_course_toml(tmp_path: Path, body: str, match: str) -> None:
 def test_missing_file_is_an_error(tmp_path: Path) -> None:
     with pytest.raises(CourseError, match="cannot read"):
         load_course(tmp_path / "absent.toml")
+
+
+def test_non_utf8_file_is_an_error_not_a_crash(tmp_path: Path) -> None:
+    path = tmp_path / "course.toml"
+    path.write_bytes(b'title = "caf\xe9"\n')  # latin-1, invalid UTF-8
+    with pytest.raises(CourseError, match="as UTF-8"):
+        load_course(path)
+
+
+def test_empty_assessments_array_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(CourseError, match="omit the key"):
+        load_course(write(tmp_path, "assessments = []\n"))

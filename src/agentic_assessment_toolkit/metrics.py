@@ -521,8 +521,8 @@ def _resolved_rubric_shape(
 
     None means the trial is unresolvable: a lineage field is missing,
     the rubric file is missing or unparseable, or its bytes do not hash
-    to the recorded ``rubric_sha256`` (rubrics are immutable, so a
-    mismatch means this file is not the rubric the trial was graded
+    to the recorded ``rubric_sha256`` (a rubric freezes at first use, so
+    a mismatch means this file is not the rubric the trial was graded
     against).
     """
     fields = (course_id, assignment_id, rubric_name, rubric_sha256)

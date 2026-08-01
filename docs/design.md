@@ -160,9 +160,9 @@ identically in code, documentation, and output.
   everything it references (prompt, verifier, rendered task.toml);
   labels and segregates results.
 - **Per-item identity** — the config identity folded with an item's
-  resolved inputs (environment template, rubric bytes, and for grading
-  the assignment directory hash); paired with the item id, it is the
-  doneness and pooling key.
+  resolved inputs (the environment template; for grading also the
+  rubric bytes and the assignment directory hash); paired with the
+  item id, it is the doneness and pooling key.
 - **Verified trial** — a trial whose verifier recorded a reward,
   whatever the reward's value (see denominator policy).
 - **Done** — an item needing no further work under a config: a verified
@@ -203,7 +203,7 @@ results viewer                       results loading into tidy tables
 ### Benchmark pipeline
 
 ```text
-data root: courses/<id>/assignments/<n>/     (immutable, hashed)
+data root: courses/<id>/assignments/<n>/     (frozen at first use, hashed)
         ↓  solve-task materializer + solver prompt (experiment config)
 Harbor solve job: agent solves in isolated container
   (public network, credential inside, trusted professor-authored task)
@@ -393,12 +393,12 @@ additionally has a **per-item identity** that folds in the item's
 resolved inputs: for solve, the resolved environment template
 (Dockerfile) bytes; for grading, the grading environment template
 bytes, the resolved rubric file bytes, and the hash of the assignment
-directory presented in the task. Rubric files and registered
-assignments are immutable — a rubric revision is a new file selected by
-name in the config (see [data-conventions.md](data-conventions.md)) —
-so folding their bytes into the per-item identity is defense in depth,
-and a different rubric selection changes doneness for exactly the
-assignments it applies to. Mechanics such as `--repeats` and
+directory presented in the task. Rubric files and assignment
+directories freeze at first use — a rubric revision after that is a
+new file selected by name in the config (see
+[data-conventions.md](data-conventions.md)) — so folding their bytes
+into the per-item identity is defense in depth, and a different rubric
+selection changes doneness for exactly the assignments it applies to. Mechanics such as `--repeats` and
 `--max-concurrent-trials`, and all selection flags, never enter the
 identity.
 

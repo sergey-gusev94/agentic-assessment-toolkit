@@ -17,6 +17,7 @@ It changes no experiment and no doneness, and never writes.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -25,6 +26,18 @@ from .course import Course, CourseError, load_course
 from .rubric import RubricError, parse_rubric_file
 
 WEIGHT_SUM_TOLERANCE = 0.01
+
+
+def _has_files(directory: Path) -> bool:
+    """Whether any file exists under ``directory``.
+
+    Follows directory symlinks, matching what the materializers copy
+    (``shutil.copytree`` and ``hashing.file_manifest`` both follow
+    links), so the checker never calls a directory empty that the
+    pipeline would materialize with content.
+    """
+    return any(filenames for _, _, filenames in os.walk(directory, followlinks=True))
+
 
 _EXPECTED_COURSE_ENTRIES = frozenset(
     {
@@ -97,17 +110,29 @@ def _check_assignments(course_dir: Path, course: Course | None, report: CourseCh
     if not assignments_dir.is_dir():
         report.gaps.append("assignments/ is missing: no solvable material yet")
         return []
-    ids = []
-    for entry in sorted(assignments_dir.iterdir(), key=lambda p: p.name):
-        if not entry.is_dir():
-            continue
-        ids.append(entry.name)
-        if not any(path.is_file() for path in entry.rglob("*")):
-            report.violations.append(
-                f"assignments/{entry.name} is empty: an assignment directory "
-                "must hold the as-received handout"
+    entries = sorted(assignments_dir.iterdir(), key=lambda p: p.name)
+    ids = [entry.name for entry in entries if entry.is_dir()]
+    for entry in entries:
+        if entry.is_dir():
+            if not _has_files(entry):
+                report.violations.append(
+                    f"assignments/{entry.name} is empty: an assignment directory "
+                    "must hold the as-received handout"
+                )
+            _check_environment(entry.name, course_dir, course, report)
+        elif entry.suffix == ".toml":
+            # A sidecar whose assignment directory does not exist would
+            # silently never apply — the worst kind of misnaming.
+            if entry.stem not in ids:
+                report.violations.append(
+                    f"assignments/{entry.name} is a sidecar for a missing "
+                    f"assignment directory assignments/{entry.stem}"
+                )
+        else:
+            report.gaps.append(
+                f"stray file assignments/{entry.name}: assignments/ holds only "
+                "handout directories and <id>.toml sidecars"
             )
-        _check_environment(entry.name, course_dir, course, report)
     return ids
 
 
@@ -174,7 +199,7 @@ def _check_registry(course: Course | None, assignment_ids: list[str], report: Co
             report.violations.append(
                 f"assessment weights sum to {total:g}, not 100 (tolerance {WEIGHT_SUM_TOLERANCE})"
             )
-    for key in ("type", "ai_policy"):
+    for key in ("type", "ai_policy", "ai_use_possible"):
         absent = [entry.id for entry in course.assessments if getattr(entry, key) is None]
         if absent:
             report.gaps.append(f"assessments without {key!r}: {', '.join(absent)}")
@@ -190,6 +215,10 @@ def _check_rubrics(
     if rubrics_dir.is_dir():
         for entry in sorted(rubrics_dir.iterdir(), key=lambda p: p.name):
             if not entry.is_dir():
+                report.gaps.append(
+                    f"stray file rubrics/{entry.name}: rubrics live in "
+                    "rubrics/<assignment_id>/<name>.md"
+                )
                 continue
             if entry.name not in known:
                 report.violations.append(
@@ -217,14 +246,19 @@ def _check_reference_solutions(
         known |= {entry.id for entry in course.assessments}
     if references_dir.is_dir():
         for entry in sorted(references_dir.iterdir(), key=lambda p: p.name):
-            if entry.is_dir() and entry.name not in known:
+            if not entry.is_dir():
+                report.gaps.append(
+                    f"stray file reference_solutions/{entry.name}: reference "
+                    "solutions live in reference_solutions/<assignment_id>/"
+                )
+            elif entry.name not in known:
                 report.violations.append(
                     f"reference_solutions/{entry.name} matches no assignment "
                     "directory and no registry entry"
                 )
     for assignment_id in assignment_ids:
         reference = references_dir / assignment_id
-        if not (reference.is_dir() and any(p.is_file() for p in reference.rglob("*"))):
+        if not (reference.is_dir() and _has_files(reference)):
             report.gaps.append(
                 f"assignments/{assignment_id} has no reference solution under "
                 f"reference_solutions/{assignment_id}: gradable only after one exists"
@@ -233,7 +267,7 @@ def _check_reference_solutions(
 
 def _check_syllabus(course_dir: Path, report: CourseCheck) -> None:
     syllabus_dir = course_dir / "syllabus"
-    if not syllabus_dir.is_dir() or not any(p.is_file() for p in syllabus_dir.rglob("*")):
+    if not (syllabus_dir.is_dir() and _has_files(syllabus_dir)):
         report.gaps.append("syllabus/ is missing or empty: registry facts have no stored source")
 
 
@@ -251,7 +285,10 @@ def _check_unexpected_entries(course_dir: Path, report: CourseCheck) -> None:
 def _read_notes(course_dir: Path, report: CourseCheck) -> None:
     notes = course_dir / "intake-notes.md"
     if notes.is_file():
-        report.notes = notes.read_text(encoding="utf-8")
+        try:
+            report.notes = notes.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            report.violations.append(f"cannot read intake-notes.md as UTF-8: {error}")
 
 
 def _summarize_coverage(
@@ -270,9 +307,15 @@ def _summarize_coverage(
         f"{len(with_materials)} of {len(entries)} registered assessments have "
         f"materials; {len(excluded)} excluded by reason"
     )
-    if all(entry.weight_pct is not None for entry in entries):
+    if all(entry.weight_pct is not None for entry in with_materials):
         covered = sum(entry.weight_pct or 0.0 for entry in with_materials)
-        report.coverage.append(f"materials cover {covered:g}% of the final grade")
+        if all(entry.weight_pct is not None for entry in entries):
+            report.coverage.append(f"materials cover {covered:g}% of the final grade")
+        else:
+            report.coverage.append(
+                f"materials cover at least {covered:g}% of the final grade "
+                "(some assessments have no weight yet)"
+            )
 
 
 def format_report(report: CourseCheck) -> str:

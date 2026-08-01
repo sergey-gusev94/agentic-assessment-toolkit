@@ -87,7 +87,7 @@ def _declares_toolkit(pyproject: Path) -> bool:
 
 @dataclass(frozen=True)
 class Assignment:
-    """One immutable assignment resolved from the data root."""
+    """One assignment resolved from the data root (frozen at first use)."""
 
     course_id: str
     assignment_id: str
@@ -170,6 +170,8 @@ def sidecar_flavor(sidecar: Path) -> str | None:
 def _load_toml(path: Path) -> dict[str, object]:
     try:
         return tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError) as error:
+        raise DataRootError(f"cannot read {path} as UTF-8: {error}") from error
     except tomllib.TOMLDecodeError as error:
         raise DataRootError(f"{path} is not valid TOML: {error}") from error
 

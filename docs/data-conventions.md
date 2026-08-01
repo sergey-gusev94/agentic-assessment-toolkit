@@ -109,8 +109,9 @@ Notes:
   singled out. The solve-task materializer copies the whole directory
   into the task at `/app/assignment`.
 - `<assignment_id>.toml`, beside the assignment directory, is an
-  optional sidecar for per-assignment settings (e.g. `environment`,
-  resource or time overrides). Absent means course defaults apply.
+  optional sidecar for per-assignment settings; its only key today is
+  `environment`, the flavor override. Absent means course defaults
+  apply.
 - `course.toml` holds the course record and the assessment registry,
   parsed by `src/agentic_assessment_toolkit/course.py` and checked by
   `aat check-course`. The rule for what goes where: settings that
@@ -119,7 +120,11 @@ Notes:
   per-assignment sidecar; facts that describe the course (weights,
   policies, dates) live in the registry. The pipeline consumes only the
   environment default; every other field is informational until a
-  consumer is deliberately added. A fact the materials do not state is
+  consumer is deliberately added. The pipeline still loads
+  `course.toml` through the same strict parser, so a schema-invalid
+  file fails `aat solve` and `aat grade` planning immediately — one
+  parser, one set of rules; `aat check-course` gives the detailed
+  report. A fact the materials do not state is
   left **absent** — never a sentinel value — and noted in
   `intake-notes.md`.
 

@@ -90,6 +90,8 @@ def test_partial_weights_skip_the_sum_and_report_a_gap(data_root: Path) -> None:
     report = check_course(data_root, COURSE_ID)
     assert report.ok
     assert any("without 'weight_pct': EXAM1" in gap for gap in report.gaps)
+    # The materials-covered figure survives: HW1 and HW2 are weighted.
+    assert any("at least 80% of the final grade" in line for line in report.coverage)
 
 
 def test_unparseable_rubric_is_a_violation(data_root: Path) -> None:
@@ -110,6 +112,34 @@ def test_orphan_rubric_and_reference_are_violations(data_root: Path) -> None:
     assert any("reference_solutions/GHOST2 matches no" in v for v in found)
 
 
+def test_orphan_sidecar_is_a_violation(data_root: Path) -> None:
+    sidecar = course_dir(data_root) / "assignments" / "HW01.toml"
+    sidecar.write_text('environment = "data-science"\n', encoding="utf-8")
+    assert any(
+        "HW01.toml is a sidecar for a missing assignment directory" in v
+        for v in violations(data_root)
+    )
+
+
+def test_stray_files_are_gaps(data_root: Path) -> None:
+    (course_dir(data_root) / "assignments" / "notes.pdf").write_text("x\n", encoding="utf-8")
+    (course_dir(data_root) / "rubrics" / "todo.md").write_text("x\n", encoding="utf-8")
+    (course_dir(data_root) / "reference_solutions" / "sol.md").write_text("x\n", encoding="utf-8")
+    report = check_course(data_root, COURSE_ID)
+    assert report.ok
+    assert any("stray file assignments/notes.pdf" in gap for gap in report.gaps)
+    assert any("stray file rubrics/todo.md" in gap for gap in report.gaps)
+    assert any("stray file reference_solutions/sol.md" in gap for gap in report.gaps)
+
+
+def test_missing_ai_use_possible_is_a_gap(data_root: Path) -> None:
+    toml_path = course_dir(data_root) / "course.toml"
+    text = toml_path.read_text(encoding="utf-8").replace("ai_use_possible = false\n", "")
+    toml_path.write_text(text, encoding="utf-8")
+    report = check_course(data_root, COURSE_ID)
+    assert any("without 'ai_use_possible': EXAM1" in gap for gap in report.gaps)
+
+
 def test_grading_flavor_for_an_assignment_is_a_violation(data_root: Path) -> None:
     sidecar = course_dir(data_root) / "assignments" / "HW1.toml"
     sidecar.write_text('environment = "grading"\n', encoding="utf-8")
@@ -125,6 +155,24 @@ def test_unknown_flavor_is_a_violation(data_root: Path) -> None:
 def test_invalid_course_toml_is_a_violation(data_root: Path) -> None:
     (course_dir(data_root) / "course.toml").write_text("not toml [", encoding="utf-8")
     assert any("not valid TOML" in v for v in violations(data_root))
+
+
+def test_non_utf8_files_are_violations_not_crashes(data_root: Path) -> None:
+    (course_dir(data_root) / "course.toml").write_bytes(b'title = "caf\xe9"\n')
+    (course_dir(data_root) / "intake-notes.md").write_bytes(b"caf\xe9\n")
+    found = violations(data_root)
+    assert any("course.toml as UTF-8" in v for v in found)
+    assert any("intake-notes.md as UTF-8" in v for v in found)
+
+
+def test_symlinked_assignment_content_is_not_empty(data_root: Path) -> None:
+    """Emptiness must agree with the pipeline, which follows symlinks."""
+    shared = data_root / "shared_src"
+    shared.mkdir()
+    (shared / "data.csv").write_text("a,b\n", encoding="utf-8")
+    hw1 = course_dir(data_root) / "assignments" / "HW1"
+    (hw1 / "linked").symlink_to(shared, target_is_directory=True)
+    assert not any("HW1 is empty" in v for v in violations(data_root))
 
 
 def test_missing_reference_solution_is_a_gap(data_root: Path) -> None:

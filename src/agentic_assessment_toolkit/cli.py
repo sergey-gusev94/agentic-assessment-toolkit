@@ -339,8 +339,12 @@ def _plan_grade(
         raise CliError(f"config {config.name!r} names no rubric")
 
     planned = []
+    # Many submissions share one assignment; hash each handout once.
+    assignment_hashes: dict[Path, str] = {}
     for source in sources:
         assignment = data_root_mod.assignment_dir(root, source.course_id, source.assignment_id)
+        if assignment not in assignment_hashes:
+            assignment_hashes[assignment] = hashing.sha256_dir(assignment)
         reference = data_root_mod.reference_solution_dir(
             root, source.course_id, source.assignment_id
         )
@@ -365,7 +369,7 @@ def _plan_grade(
             config_identity,
             template_bytes,
             rubric.read_bytes(),
-            hashing.sha256_dir(assignment),
+            assignment_hashes[assignment],
         )
         planned.append(
             _PlannedItem(

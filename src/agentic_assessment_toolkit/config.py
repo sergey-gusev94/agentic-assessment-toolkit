@@ -6,7 +6,8 @@ prompt template, rubric name, agent-argument passthrough — never what to
 run on or mechanics. The config identity hashes the config bytes, the
 referenced prompt template bytes, and the stage's generic verifier
 bytes; per-item identities additionally fold in each item's resolved
-inputs (environment template bytes, rubric bytes).
+inputs (environment template bytes; for grading also rubric bytes and
+the assignment directory hash).
 """
 
 from __future__ import annotations
@@ -213,7 +214,7 @@ def item_identity(
     """Per-item identity: the config identity plus the item's resolved inputs.
 
     Grading items fold in the rubric bytes and the assignment directory
-    hash — both immutable once registered, so this is defense in depth
+    hash — both frozen at first use, so this is defense in depth
     (docs/design.md, "Experiment configs and config identity").
     """
     parts = [
