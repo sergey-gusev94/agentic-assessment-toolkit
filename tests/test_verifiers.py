@@ -159,6 +159,17 @@ def test_grading_verifier_flags_inconsistent_sums(tmp_path: Path) -> None:
     assert result["rewards_file"] == {"reward": 85.0, "required_pct": 80.0}
 
 
+def test_grading_verifier_emits_strict_json_for_nan_sums(tmp_path: Path) -> None:
+    """A NaN authored sum must not leak into the details as invalid JSON."""
+    flagged = valid_result()
+    flagged["raw_points"] = float("nan")
+    output_dir = make_grading_output(tmp_path, flagged)
+    result = run_grading_verifier(tmp_path, output_dir)
+    assert result["reward"] == 85.0
+    assert result["details"]["sums_consistent"] is False
+    assert result["details"]["sums"]["authored"]["raw_points"] == "nan"
+
+
 def test_grading_verifier_rejects_structural_violation(tmp_path: Path) -> None:
     bad = valid_result()
     bad["criteria"][0]["evidence"] = ""

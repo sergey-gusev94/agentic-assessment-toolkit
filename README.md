@@ -95,7 +95,8 @@ make check
 ```
 
 Harbor is the package's runtime-orchestration dependency; `numpy`,
-`scipy`, and `pandas` back the statistics and reporting layer. Running
+`scipy`, and `pandas` back the statistics and reporting layer
+(roadmap stage 3). Running
 actual jobs additionally requires Docker and the agent CLIs (Codex CLI
 first), which are external tools packaging cannot provide; repository
 tests never invoke any of them.

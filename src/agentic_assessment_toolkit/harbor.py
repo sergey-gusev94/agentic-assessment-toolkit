@@ -86,11 +86,18 @@ def job_dir_name(config_name: str, config_identity: str, now: datetime | None = 
 
 @dataclass(frozen=True)
 class RunRecordItem:
-    """One requested item: its identity and the exact input hashes."""
+    """One requested item: identity, lineage, and the exact input hashes.
+
+    ``course_id`` and ``assignment_id`` are recorded explicitly so every
+    run record is self-describing — for solve-derived grading items the
+    ``item_id`` is ``<solve-job>/<trial>`` and carries neither.
+    """
 
     item_id: str
     task_dir_name: str
     item_identity: str
+    course_id: str
+    assignment_id: str
     input_hashes: dict[str, str]
 
 
@@ -208,15 +215,6 @@ def is_graded_trial(result: dict[str, object]) -> bool:
     return isinstance(rewards, dict) and "required_pct" in rewards
 
 
-def _done_check(stage: object) -> Callable[[dict[str, object]], bool]:
-    """The per-stage doneness predicate for a run record's stage value.
-
-    Solve failures (reward 0) are countable experimental outcomes and
-    stay done; grading requires a valid grading result.
-    """
-    return is_graded_trial if stage == "grade" else is_completed_trial
-
-
 def completed_task_names(
     job_dir: Path, check: Callable[[dict[str, object]], bool] = is_completed_trial
 ) -> set[str]:
@@ -236,20 +234,24 @@ def _record_items(record: dict[str, object]) -> list[dict[str, object]]:
     return [item for item in items if isinstance(item, dict)]
 
 
-def completed_items(jobs_root: Path) -> set[tuple[str, str]]:
+def completed_items(jobs_root: Path, stage: Stage) -> set[tuple[str, str]]:
     """(item_id, item_identity) pairs with at least one done trial.
 
     Doneness is keyed on the pair, per docs/design.md: the identity alone
     is not item-specific (it hashes config + environment + rubric bytes),
     so distinct items routinely share one identity. The per-trial check
-    is stage-specific, read from each job's run record.
+    is stage-specific: solve failures (reward 0) are countable outcomes
+    and stay done; grading requires a valid grading result. Fails
+    closed: a job whose recorded stage does not match contributes
+    nothing to doneness.
     """
+    check = is_graded_trial if stage == "grade" else is_completed_trial
     done = set()
     for job_dir in job_dirs(jobs_root):
         record = read_run_record(job_dir)
-        if record is None:
+        if record is None or record.get("stage") != stage:
             continue
-        completed = completed_task_names(job_dir, _done_check(record.get("stage")))
+        completed = completed_task_names(job_dir, check)
         for item in _record_items(record):
             item_id = item.get("item_id")
             task_dir_name = item.get("task_dir_name")
@@ -298,16 +300,17 @@ def completed_solve_submissions(
         config = record.get("config")
         if not isinstance(config, dict) or config.get("name") != solve_config_name:
             continue
-        items_by_task_dir = {
-            item.get("task_dir_name"): item.get("item_id") for item in _record_items(record)
-        }
+        items_by_task_dir = {item.get("task_dir_name"): item for item in _record_items(record)}
         for trial_dir, result in trial_results(job_dir):
             if not is_completed_trial(result):
                 continue
-            item_id = items_by_task_dir.get(result.get("task_name"))
-            if not isinstance(item_id, str) or "/" not in item_id:
+            item = items_by_task_dir.get(result.get("task_name"))
+            if item is None:
                 continue
-            item_course_id, item_assignment_id = item_id.split("/", 1)
+            item_course_id = item.get("course_id")
+            item_assignment_id = item.get("assignment_id")
+            if not isinstance(item_course_id, str) or not isinstance(item_assignment_id, str):
+                continue
             if course_id is not None and item_course_id != course_id:
                 continue
             if assignment_id is not None and item_assignment_id != assignment_id:

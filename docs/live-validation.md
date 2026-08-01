@@ -105,8 +105,8 @@ semantics, prompt templates, verifiers, environment templates — are
 specified fresh in [design.md](design.md), and nothing is ported from
 the pilot implementations. The toolkit's grading verifier derives the
 reward in code from point sums computed from the grader's criteria: a
-bonus-inclusive `score_pct` that can exceed 100 (the course-style
-reward surfaced below), with a required-only `required_pct` beside it.
+bonus-inclusive `score_pct` that can exceed 100, with a required-only
+`required_pct` beside it.
 
 ### Separate Harbor grading job
 
@@ -179,13 +179,14 @@ solve or grade.
 - One post-change smoke run confirming the derived `111.11...` reward for the
   recorded 90/90 plus 10 result and the presence of `file` and `jq` in the
   built solve and grading images.
-- One smoke run of the flattened job layout (the AAT job directory is the
-  Harbor job directory; `harbor view` works on the shared `runs/` and
-  `grading/` parents), including confirming that Harbor 0.20 accepts a job
-  directory that already contains the materialized tasks and AAT files, and
-  of the revised grading semantics: authored-sum mismatches are flagged, not
-  failed, and an invalid grading result leaves the item not-done so the next
-  incremental run regrades it.
+- One smoke run of the flattened job layout: the AAT job directory is the
+  Harbor job directory (holding only Harbor output plus `aat-run.json` and
+  `harbor-job.json`), tasks are materialized under `tasks/<job-name>/`
+  outside it, `harbor view` works on the shared `runs/` and `grading/`
+  parents, and re-running the recorded command resumes an interrupted job
+  without touching the task inputs. Also the revised grading semantics:
+  authored-sum mismatches are flagged, not failed, and an invalid grading
+  result leaves the item not-done so the next incremental run regrades it.
 - Judge sanity trio, run through the toolkit on corpus data (roadmap
   stage 3): reference solution near full marks, empty or irrelevant
   submission near zero, stable repeated gradings.

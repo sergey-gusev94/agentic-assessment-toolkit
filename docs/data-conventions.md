@@ -45,6 +45,8 @@ $AAT_DATA_DIR/
 ├── submissions/                # real student submissions, as received
 │   └── <course_id>/<student_id>/<assignment_id>/
 ├── tables/                     # rosters, grade exports, identity mappings
+├── tasks/                      # materialized Harbor task inputs, per job
+│   └── <utc>__<config>__<hash8>/
 ├── runs/                       # solve jobs (Harbor job dirs + aat-run.json)
 │   └── <utc>__<config>__<hash8>/
 ├── grading/                    # grading jobs, any submission source
@@ -61,11 +63,17 @@ Notes:
   logs: they embed full assignment content and possibly student text.
 - `tables/` holds the only mapping between real identities and anonymized
   IDs; it never leaves the data root.
-- `analysis/` holds only derived outputs: statistics tables, discrepancy
-  reports, exported summaries. Everything in it is regenerable from
-  `runs/`, `grading/`, and `tables/`, and every output records its
-  provenance (toolkit version, config identities, and the job
-  directories consumed). It is a cache, never a source of truth.
+- `tasks/` holds the byte-deterministic materialized task directories,
+  one subdirectory per job, named like the job directory. Tasks live
+  outside the job directories because Harbor's resume deletes any
+  job-directory subdirectory without a per-trial result file as a
+  stale trial; `harbor-job.json` references them by absolute path.
+- `analysis/` holds only derived outputs: statistics tables and
+  reports. Everything in it is regenerable from `runs/`, `grading/`,
+  and `tables/`; each report invocation writes one timestamped
+  subdirectory containing its tables, Markdown report, and provenance
+  (toolkit version, config identities, job directories consumed, and
+  the bootstrap seed). It is a cache, never a source of truth.
 - Solver licenses (e.g. a Gurobi WLS license file or its
   `GRB_WLSACCESSID`/`GRB_WLSSECRET`/`GRB_LICENSEID` values) are
   credentials: they live outside the repository — in the data root or
@@ -104,13 +112,18 @@ Each `aat solve` or `aat grade` invocation creates one job directory —
 suffix on same-second collisions) — under `runs/` (solve jobs) or
 `grading/` (grading jobs, whether the submissions are benchmark
 artifacts or real student folders). The AAT job directory is itself the
-Harbor job directory: Harbor's `config.json`, `result.json`, logs, and
-per-trial directories live directly inside it, beside `aat-run.json`
-(the toolkit's run record) and the generated Harbor job config. The
-run record holds the exact `harbor --version`, the toolkit's own
-version, agent and model configuration, effective command line,
+Harbor job directory: Harbor's `config.json`, `lock.json`,
+`result.json`, `job.log`, and per-trial directories live directly
+inside it, beside exactly two AAT files — `aat-run.json` (the run
+record) and `harbor-job.json` (the generated Harbor job config).
+Materialized tasks live under `tasks/<job-name>/` (see above), so
+re-running the recorded command safely resumes an interrupted job. The
+run record holds the Harbor version (read from the binary for executed
+runs, from package metadata for materialize-only runs), the toolkit's
+own version, agent and model configuration, effective command line,
 repeats, maximum concurrent trials, and executed flag,
-requested items with their per-item identities, config identity, and
+requested items with their per-item identities and explicit course and
+assignment ids, config identity, and
 input hashes (assignment, prompt, environment template, verifier,
 rubric, submission, reference solution, grading schema — as
 applicable). Doneness of an item under a config is derived from these
@@ -135,7 +148,7 @@ authorized for disclosure or has been sanitized.
 |---|---|
 | Package code and tests | Real assignments and handouts |
 | Documentation | Reference/oracle solutions |
-| Rubric templates | Student submissions |
+| Grader prompt templates | Student submissions |
 | Solver prompt templates | Rosters, grade exports, identity maps |
 | Experiment configs (`configs/`) | Harbor runs, transcripts, trajectories |
 | Environment (Dockerfile) templates | Grading outputs for real submissions |

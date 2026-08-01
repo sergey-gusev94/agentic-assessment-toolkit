@@ -147,12 +147,12 @@ def _run(args: argparse.Namespace) -> int:
         )
     base_identity = config_mod.config_identity(config)
     jobs_root = root / (SOLVE_JOBS_DIRNAME if stage == "solve" else GRADING_JOBS_DIRNAME)
-    done = harbor_mod.completed_items(jobs_root)
+    done = harbor_mod.completed_items(jobs_root, stage)
     if stage == "solve":
         planned = _plan_solve(root, config, base_identity, done, args)
     else:
         planned = _plan_grade(root, config, base_identity, done, args)
-    return _execute(stage, jobs_root, config, base_identity, planned, args)
+    return _execute(stage, root, jobs_root, config, base_identity, planned, args)
 
 
 def _config_path(value: str) -> Path:
@@ -194,6 +194,12 @@ def _plan_solve(
             if not assignments:
                 raise CliError(f"assignment {args.assignment!r} not found in course {course_id!r}")
         for assignment in assignments:
+            if assignment.environment == config_mod.GRADING_ENVIRONMENT:
+                raise CliError(
+                    f"assignment {assignment.item_id!r} resolves environment 'grading', "
+                    "which is reserved for grading tasks; course flavors are for solve "
+                    "tasks only (docs/design.md, environment templates)"
+                )
             environment_bytes = config_mod.environment_path(assignment.environment).read_bytes()
             identity = config_mod.item_identity(base_identity, environment_bytes)
             planned.append(
@@ -225,6 +231,8 @@ def _solve_materializer(
             item_id=task.item_id,
             task_dir_name=task.task_dir_name,
             item_identity=identity,
+            course_id=assignment.course_id,
+            assignment_id=assignment.assignment_id,
             input_hashes=task.input_hashes,
         )
 
@@ -261,6 +269,16 @@ def _plan_grade(
         rubric = data_root_mod.find_rubric(
             root, source.course_id, source.assignment_id, rubric_name
         )
+        # An absent default rubric is the legitimate no-rubric case; an
+        # absent explicitly-named rubric silently changing the frozen
+        # judge configuration is not (docs/design.md, grading task
+        # layout).
+        if rubric is None and rubric_name != "default":
+            raise CliError(
+                f"rubric {rubric_name!r} not found for "
+                f"{source.course_id}/{source.assignment_id} (expected "
+                f"courses/{source.course_id}/rubrics/{source.assignment_id}/{rubric_name}.md)"
+            )
         rubric_bytes = rubric.read_bytes() if rubric is not None else None
         identity = config_mod.item_identity(base_identity, environment_bytes, rubric_bytes)
         planned.append(
@@ -295,6 +313,8 @@ def _grade_materializer(
             item_id=task.item_id,
             task_dir_name=task.task_dir_name,
             item_identity=identity,
+            course_id=source.course_id,
+            assignment_id=source.assignment_id,
             input_hashes=task.input_hashes,
         )
 
@@ -424,6 +444,7 @@ def _create_job_dir(jobs_root: Path, base_name: str) -> Path:
 
 def _execute(
     stage: Stage,
+    root: Path,
     jobs_root: Path,
     config: ExperimentConfig,
     base_identity: str,
@@ -448,8 +469,12 @@ def _execute(
         return 0
 
     job_dir = _create_job_dir(jobs_root, harbor_mod.job_dir_name(config.name, base_identity))
-    tasks_dir = job_dir / "tasks"
-    tasks_dir.mkdir()
+    # Tasks live outside the Harbor job directory: on resume, Harbor
+    # deletes any job-dir subdirectory without a per-trial result.json
+    # as a stale trial, which would destroy the task inputs
+    # (docs/data-conventions.md, "Job directories and run records").
+    tasks_dir = root / "tasks" / job_dir.name
+    tasks_dir.mkdir(parents=True)
 
     record_items = [item.materialize(tasks_dir) for item in to_run]
     job_config = jobs_mod.build_harbor_job_config(

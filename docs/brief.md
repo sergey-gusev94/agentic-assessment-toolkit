@@ -50,7 +50,7 @@ Success for the benchmark is **validity**, not any particular score:
 - Per-assignment deterministic tests are never written. Each stage has one
   generic contract check, agnostic to the deliverable format (the solve
   stage: a submission was produced under the output contract; the grading
-  stage: the grading result is well-formed and internally consistent); the
+  stage: the grading result is structurally valid); the
   grade itself is the LLM grader's output.
 - The judge passes sanity checks that require no human grades: the reference
   solution scores at or near full marks, an empty or irrelevant submission
@@ -99,8 +99,9 @@ handwritten or scanned submissions, and web/GUI assignment tracks.
 
 ### Non-goals
 
-The toolkit is a thin domain-specific layer over Harbor (see
-[research.md](research.md)). It does not implement:
+The toolkit is a thin domain-specific layer over Harbor (see the
+frozen research snapshot, [research.md](research.md)). It does not
+implement:
 
 - a new agent runner, sandbox framework, or model-provider abstraction;
 - a new transcript schema, experiment database, or results viewer;
@@ -108,7 +109,7 @@ The toolkit is a thin domain-specific layer over Harbor (see
 - policy decisions about how grades are used.
 
 It owns assignment import conventions, solver prompt/experiment
-configurations, reusable scientific environments, grader prompt and rubric
+configurations, reusable scientific environments, grader prompt
 templates, the generic contract verifiers, judge sanity checks, and
 statistical reporting.
 

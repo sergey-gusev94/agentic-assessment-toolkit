@@ -2,10 +2,16 @@
 
 ## Project purpose
 
-Agentic Assessment Toolkit is a Python package for building assessment agents.
+Agentic Assessment Toolkit is a Python toolkit for benchmarking coding
+agents on university coursework and for LLM-assisted grading of student
+submissions, built as a thin layer over Harbor.
 The distribution is named `agentic-assessment-toolkit`; the Python import
 package is `agentic_assessment_toolkit`. Documentation and examples may use
 `aat` as a local import alias.
+
+Decisions and contracts live under `docs/` (start with `docs/design.md`).
+Documentation is maintained in place, not as a changelog: superseded
+decisions are rewritten, not preserved as history.
 
 ## Development
 

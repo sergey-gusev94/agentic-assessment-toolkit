@@ -99,6 +99,8 @@ def test_solve_materialize_only_writes_job_dir(
     task_path = Path(job_config["tasks"][0]["path"])
     assert task_path.is_dir()
     assert (task_path / "task.toml").is_file()
+    # Tasks live outside the Harbor job directory (resume safety).
+    assert task_path.parent == data_root / "tasks" / job_dir.name
     # Flat layout: Harbor's job directory is the AAT job directory.
     assert job_config["jobs_dir"] == str(data_root / "runs")
     assert job_config["job_name"] == job_dir.name
@@ -219,8 +221,10 @@ def test_grade_student_submissions_materialize_only(data_root: Path, grade_confi
     record = json.loads((jobs[0] / "aat-run.json").read_text(encoding="utf-8"))
     assert record["stage"] == "grade"
     assert record["items"][0]["item_id"] == f"{COURSE_ID}/stu1/HW1"
+    assert record["items"][0]["course_id"] == COURSE_ID
+    assert record["items"][0]["assignment_id"] == "HW1"
     assert "rubric" in record["items"][0]["input_hashes"]
-    task_dir = jobs[0] / "tasks" / record["items"][0]["task_dir_name"]
+    task_dir = data_root / "tasks" / jobs[0].name / record["items"][0]["task_dir_name"]
     assert (task_dir / "environment" / "submission" / "answer.md").is_file()
     assert (task_dir / "environment" / "rubric.md").is_file()
 
@@ -295,7 +299,10 @@ def test_grade_from_solve(data_root: Path, solve_config: Path, grade_config: Pat
     assert len(grade_record["items"]) == 1
     item = grade_record["items"][0]
     assert item["item_id"].startswith(solve_job.name)
-    task_dir = grading_jobs[0] / "tasks" / item["task_dir_name"]
+    # Lineage is recorded explicitly; the item_id carries no course/assignment.
+    assert item["course_id"] == COURSE_ID
+    assert item["assignment_id"] == "HW1"
+    task_dir = data_root / "tasks" / grading_jobs[0].name / item["task_dir_name"]
     assert (task_dir / "environment" / "submission" / "answer.md").is_file()
 
     # Once a grading trial completes with a valid grading result, the
@@ -420,6 +427,27 @@ def test_doneness_is_per_item_not_per_identity_grading(
     out = capsys.readouterr().out
     assert f"[done   ] {COURSE_ID}/stu1/HW1" in out
     assert f"[pending] {COURSE_ID}/stu2/HW1" in out
+
+
+def test_missing_named_rubric_is_an_error(
+    data_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A configured non-default rubric must exist; only 'default' may be absent."""
+    config = write_config(tmp_path, GRADE_TOML + 'rubric = "strict-v2"\n', "codex-grader-strict")
+    assert cli.main(grade_args(data_root, config, "--course", COURSE_ID, "--materialize-only")) == 2
+    assert "strict-v2" in capsys.readouterr().err
+
+
+def test_grading_flavor_is_rejected_for_solve(
+    data_root: Path, solve_config: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sidecar = data_root / "courses" / COURSE_ID / "assignments" / "HW1.toml"
+    sidecar.write_text('environment = "grading"\n', encoding="utf-8")
+    assert (
+        cli.main(solve_args(data_root, solve_config, "--course", COURSE_ID, "--assignment", "HW1"))
+        == 2
+    )
+    assert "reserved for grading" in capsys.readouterr().err
 
 
 def test_grade_invalid_result_is_regraded(

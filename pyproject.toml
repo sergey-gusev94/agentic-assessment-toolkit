@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "agentic-assessment-toolkit"
 dynamic = ["version"]
-description = "Toolkit for building assessment agents"
+description = "Benchmarking coding agents on coursework and LLM-assisted grading, over Harbor"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"

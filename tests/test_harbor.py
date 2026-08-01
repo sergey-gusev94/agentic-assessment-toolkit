@@ -47,11 +47,19 @@ def test_job_dir_name_format() -> None:
     assert job_dir_name("codex-high", "a" * 64, moment) == "20260731T123005Z__codex-high__aaaaaaaa"
 
 
-def make_item(task_dir_name: str, item_id: str, identity: str) -> RunRecordItem:
+def make_item(
+    task_dir_name: str,
+    item_id: str,
+    identity: str,
+    course_id: str = "C1",
+    assignment_id: str = "HW1",
+) -> RunRecordItem:
     return RunRecordItem(
         item_id=item_id,
         task_dir_name=task_dir_name,
         item_identity=identity,
+        course_id=course_id,
+        assignment_id=assignment_id,
         input_hashes={"assignment": "0" * 64},
     )
 
@@ -127,6 +135,8 @@ def test_run_record_roundtrip(tmp_path: Path) -> None:
     assert record["toolkit_version"]
     assert record["harbor_version"].startswith("0.20.")
     assert record["items"][0]["item_id"] == "C1/HW1"
+    assert record["items"][0]["course_id"] == "C1"
+    assert record["items"][0]["assignment_id"] == "HW1"
 
 
 def test_read_run_record_handles_garbage(tmp_path: Path) -> None:
@@ -162,6 +172,8 @@ def test_is_graded_trial() -> None:
         {"exception_info": None, "verifier_result": {"rewards": {"reward": 0.0}}}
     )
     assert not is_graded_trial({"exception_info": None, "verifier_result": None})
+    # A non-dict rewards value completes the trial but is never a grade.
+    assert not is_graded_trial({"exception_info": None, "verifier_result": {"rewards": [1.0]}})
 
 
 def test_completed_items(tmp_path: Path) -> None:
@@ -180,8 +192,30 @@ def test_completed_items(tmp_path: Path) -> None:
     )
     write_trial(job_dir, "t1__abc1234", task_name="t1", completed=True)
     write_trial(job_dir, "t2__def5678", task_name="t2", completed=False)
-    assert completed_items(jobs_root) == {("C1/HW1", "done-identity")}
-    assert completed_items(tmp_path / "absent") == set()
+    assert completed_items(jobs_root, "solve") == {("C1/HW1", "done-identity")}
+    assert completed_items(tmp_path / "absent", "solve") == set()
+    # Fails closed: a record whose stage does not match contributes nothing.
+    assert completed_items(jobs_root, "grade") == set()
+
+
+def test_job_level_files_and_tasks_dir_are_not_trials(tmp_path: Path) -> None:
+    """Flat layout: only subdirectories with a result.json are trials."""
+    config_path = write_config(tmp_path, SOLVE_TOML, "codex-high")
+    jobs_root = tmp_path / "runs"
+    job_dir = write_job(
+        jobs_root,
+        "20260731T000000Z__codex-high__cccccccc",
+        stage="solve",
+        config_path=config_path,
+        items=[make_item("t1", "C1/HW1", "i1")],
+    )
+    # Harbor's job-level result.json is a file, never a trial.
+    (job_dir / "result.json").write_text(json.dumps({"stats": {}}), encoding="utf-8")
+    (job_dir / "config.json").write_text("{}", encoding="utf-8")
+    # A stray directory without result.json (e.g. an interrupted trial).
+    (job_dir / "t1__interrup").mkdir()
+    write_trial(job_dir, "t1__abc1234", task_name="t1")
+    assert completed_items(jobs_root, "solve") == {("C1/HW1", "i1")}
 
 
 def test_solve_contract_failure_counts_done(tmp_path: Path) -> None:
@@ -196,7 +230,7 @@ def test_solve_contract_failure_counts_done(tmp_path: Path) -> None:
         items=[make_item("t1", "C1/HW1", "i1")],
     )
     write_trial(job_dir, "t1__abc1234", task_name="t1", rewards={"reward": 0.0})
-    assert completed_items(jobs_root) == {("C1/HW1", "i1")}
+    assert completed_items(jobs_root, "solve") == {("C1/HW1", "i1")}
 
 
 def test_grading_doneness_requires_valid_result(tmp_path: Path) -> None:
@@ -215,7 +249,7 @@ def test_grading_doneness_requires_valid_result(tmp_path: Path) -> None:
     )
     write_trial(job_dir, "t1__abc1234", task_name="t1", rewards=GRADED_REWARDS)
     write_trial(job_dir, "t2__def5678", task_name="t2", rewards={"reward": 0.0})
-    assert completed_items(jobs_root) == {("C1/stu1/HW1", "i1")}
+    assert completed_items(jobs_root, "grade") == {("C1/stu1/HW1", "i1")}
 
 
 def test_completed_solve_submissions(tmp_path: Path) -> None:
@@ -228,7 +262,7 @@ def test_completed_solve_submissions(tmp_path: Path) -> None:
         config_path=config_path,
         items=[
             make_item("t1", "C1/HW1", "i1"),
-            make_item("t2", "C1/HW2", "i2"),
+            make_item("t2", "C1/HW2", "i2", assignment_id="HW2"),
         ],
     )
     write_trial(job_dir, "t1__abc1234", task_name="t1", submission_files={"answer.md": "42"})

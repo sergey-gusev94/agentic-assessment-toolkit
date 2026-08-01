@@ -71,12 +71,9 @@ A single JSON object with exactly these fields:
 - `bonus_max` — sum of `max_points` over bonus criteria (0 if none).
 - `overall_comment` — short free-text summary of the grade.
 
-Do not compute percentages or any other derived score: the verifier
-computes the authoritative sums from your criteria and derives all
-scores from them. Your four sum fields are a self-check — compute them
-carefully; a mismatch against the criteria is recorded as an
-inconsistency. Structural problems do invalidate the result: a missing
-field, duplicate id, out-of-range points, or empty evidence.
+Do not include percentages or any other derived score: write only the
+fields specified above. Compute the four sum fields from your criteria
+and check that they match exactly.
 
 ### 2. `justification.md`
 
@@ -85,5 +82,8 @@ the submission did, how it compares to the reference solution, and why it
 earned its points, citing specific evidence. Where the grade lost points,
 say precisely what is missing or wrong.
 
-Verify `grading_result.json` parses as valid JSON and its sums are
-consistent before you finish, then stop.
+Before you finish, verify your output: `grading_result.json` parses as
+valid JSON and contains exactly the fields specified above; every
+criterion has a unique id, points within `0 <= points <= max_points`,
+and specific evidence; the four sums match your criteria; and
+`justification.md` covers every criterion. Then stop.

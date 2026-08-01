@@ -164,6 +164,22 @@ def computed_sums(data: dict[str, object]) -> dict[str, float]:
     return sums
 
 
+def _finite_number(value: object) -> float | None:
+    """The value as a finite float; None for anything else.
+
+    Authored sums are untrusted JSON: booleans, non-numbers, NaN and
+    Infinity (json.loads accepts the bare literals), and integers too
+    large for a float (OverflowError) all yield None.
+    """
+    if not _is_number(value):
+        return None
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except OverflowError:
+        return None
+    return number if math.isfinite(number) else None
+
+
 def sums_report(data: dict[str, object]) -> dict[str, object]:
     """Compare the grader's authored sums against the computed sums.
 
@@ -175,11 +191,18 @@ def sums_report(data: dict[str, object]) -> dict[str, object]:
     validate_grading_result.
     """
     computed = computed_sums(data)
-    authored = {field: data.get(field) for field in _SUM_FIELDS}
+    authored: dict[str, object] = {}
     consistent = True
     for field in _SUM_FIELDS:
-        value = authored[field]
-        if not _is_number(value) or not _close(float(value), computed[field]):  # type: ignore[arg-type]
+        value = data.get(field)
+        # Non-finite floats are not valid strict JSON; record their repr
+        # so the report stays serializable everywhere.
+        if isinstance(value, float) and not math.isfinite(value):
+            authored[field] = repr(value)
+        else:
+            authored[field] = value
+        number = _finite_number(value)
+        if number is None or not _close(number, computed[field]):
             consistent = False
     return {"consistent": consistent, "authored": authored, "computed": computed}
 

@@ -155,6 +155,26 @@ def test_missing_sums_are_valid_but_inconsistent() -> None:
     assert report["authored"]["raw_points"] is None
 
 
+def test_non_finite_authored_sum_is_flagged_and_json_safe() -> None:
+    data = valid_result()
+    data["raw_points"] = float("nan")
+    assert validate_grading_result(data) == []
+    report: dict[str, Any] = sums_report(data)
+    assert report["consistent"] is False
+    # Recorded as its repr so the report stays strict-JSON serializable.
+    assert report["authored"]["raw_points"] == "nan"
+    json.dumps(report, allow_nan=False)  # must not raise
+
+
+def test_huge_int_authored_sum_does_not_crash() -> None:
+    data = valid_result()
+    data["raw_points"] = 10**400  # float() would raise OverflowError
+    assert validate_grading_result(data) == []
+    report: dict[str, Any] = sums_report(data)
+    assert report["consistent"] is False
+    assert report["authored"]["raw_points"] == 10**400
+
+
 def test_consistent_sums_report() -> None:
     report = sums_report(valid_result())
     assert report["consistent"] is True
