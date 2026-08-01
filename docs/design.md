@@ -195,10 +195,13 @@ Detailed evidence and exact limits of completed manual checks are recorded in
    `grading_result.json` and Markdown justification covering all rubric
    criteria, and has the generic grading verifier surface the score as the
    reward.
-6. **Pending:** the same grading task re-run with a revised rubric over
-   unchanged artifacts (regrade-by-rerun).
-7. **Pending:** judge sanity trio — reference solution near full marks,
-   empty or irrelevant submission near zero, stable repeated gradings.
+6. **Descoped (validated by construction):** regrade-by-rerun is another
+   grading job over the same stored artifacts — the mechanism validated in
+   item 5; no separate check is required.
+7. **Moved to roadmap stage 3:** the judge sanity trio — reference solution
+   near full marks, empty or irrelevant submission near zero, stable
+   repeated gradings — is grader-prompt calibration, not infrastructure
+   validation, and runs through the toolkit on corpus data.
 8. **Deferred:** Claude Code, Gemini CLI, and other agent stacks are validated
    only after the Codex pipeline and its hardening are complete.
 
@@ -235,3 +238,45 @@ what the toolkit provides, not by live runs.
    if grading ever faces adversarial submissions; MLflow if Harbor's viewer
    becomes insufficient;
    institutional or open-source packaging.
+
+### First vertical slice (stages 1–2)
+
+No toolkit code exists yet; the package is empty. Stages 1 and 2 are built
+as one vertical slice with a single acceptance criterion: the toolkit
+regenerates, from data-root inputs, the equivalents of the two manually
+materialized pilot tasks recorded in
+[live-validation.md](live-validation.md) — the real-assignment solve task
+and its grading task. Build order:
+
+1. **Data-root resolution** — explicit path, then `AAT_DATA_DIR`, then a
+   clear error; a data root inside the repository tree is refused
+   ([data-conventions.md](data-conventions.md)).
+2. **Grading output schema** — the `grading_result.json` fields and
+   internal-consistency rules as a schema plus a validation function,
+   shared by the grading verifier and later statistics.
+3. **Prompt templates** — solver and Markdown grader prompts ported from
+   the pilots and reference repositories, with placeholders and the
+   `/app/submission` output contract.
+4. **Solve-task materializer** — assignment directory → Harbor task
+   directory (generated `instruction.md`, `task.toml`, environment from
+   template, recorded assignment and prompt hashes).
+5. **Generic solve verifier** — the 0/1 output-contract script included in
+   every materialized solve task.
+6. **Grading-task materializer** — submission directory + reference
+   solution + rubric → Harbor grading task; one code path for solve
+   artifacts and student folders.
+7. **Generic grading verifier** — ported from the pilot's validated
+   verifier.
+8. **Environment template** — the pinned scientific-Python image from the
+   pilot as the first template.
+9. **Job-config generation** — pinned Codex job configurations (agent,
+   model, effort, `-k`, concurrency) emitted alongside materialized
+   datasets.
+10. **Thin CLI** — `materialize-solve` and `materialize-grading`; Harbor
+    remains the runner.
+
+Each step lands with deterministic offline tests over small synthetic
+fixtures (a fake course and a fake submission under `tests/fixtures/`),
+consistent with AGENTS.md. Stage 3 work (statistics, discrepancy report,
+anonymization, sanity-trio generation) starts after the slice reproduces
+the pilots.

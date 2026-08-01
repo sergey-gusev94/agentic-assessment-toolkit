@@ -126,11 +126,14 @@ yet establish grader calibration or repeat stability across tasks.
 ### Pending
 
 - Automatic real-assignment materialization by the toolkit importer.
-- The same grading task re-run with a revised rubric over unchanged
-  artifacts (regrade-by-rerun).
-- Judge sanity trio: reference solution near full marks, empty or
-  irrelevant submission near zero, stable repeated gradings.
+- Judge sanity trio, run through the toolkit on corpus data (roadmap
+  stage 3): reference solution near full marks, empty or irrelevant
+  submission near zero, stable repeated gradings.
 - Repeated attempts, explicit failure accounting, and statistical reporting.
+
+Regrade-by-rerun is descoped as validated by construction: it is another
+grading job over the same stored artifacts, which is the mechanism validated
+above.
 
 ### Deferred by project priority
 
