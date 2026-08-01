@@ -19,6 +19,7 @@ an already-processed course.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -73,14 +74,21 @@ def build_command(prompt: str, model: str, reasoning_effort: str) -> list[str]:
     ]
 
 
-def list_raw_courses(root: Path) -> list[IntakeCourse]:
-    """Every raw dump, with its processing status."""
+def codex_path() -> str | None:
+    """Where the codex binary is, or None when it is not installed."""
+    return shutil.which("codex")
+
+
+def list_raw_courses(root: Path, only: str | None = None) -> list[IntakeCourse]:
+    """Raw dumps with their processing status; ``only`` narrows to one
+    course before any hashing, so selecting one course never hashes the
+    other dumps."""
     raw_root = root / "raw"
     if not raw_root.is_dir():
         return []
     courses = []
     for entry in sorted(raw_root.iterdir(), key=lambda p: p.name):
-        if not entry.is_dir():
+        if not entry.is_dir() or (only is not None and entry.name != only):
             continue
         courses.append(
             IntakeCourse(course_id=entry.name, raw_dir=entry, status=_status(root, entry))
@@ -90,9 +98,14 @@ def list_raw_courses(root: Path) -> list[IntakeCourse]:
 
 def _status(root: Path, raw_dir: Path) -> str:
     course_dir = root / "courses" / raw_dir.name
+    if not record_path(root, raw_dir.name).is_file():
+        return "manual" if course_dir.is_dir() else "pending"
     record = read_record(root, raw_dir.name)
     if record is None:
-        return "manual" if course_dir.is_dir() else "pending"
+        # A receipt that exists but does not parse (e.g. a crash during
+        # its write) is treated as unprocessed: the next run performs an
+        # incremental pass and rewrites it.
+        return "pending"
     return "done" if record.get("raw_sha256") == sha256_dir(raw_dir) else "pending"
 
 
@@ -145,9 +158,17 @@ def write_record(
 
 
 def log_path_for(root: Path, course_id: str, now: datetime | None = None) -> Path:
+    """A log path that never reuses an existing file, so an immediate
+    same-second retry cannot overwrite the failure evidence."""
     moment = now if now is not None else datetime.now(UTC)
-    stamp = moment.strftime("%Y%m%dT%H%M%SZ")
-    return root / "scratch" / "intake" / f"{stamp}__{course_id}.log"
+    base = f"{moment.strftime('%Y%m%dT%H%M%SZ')}__{course_id}"
+    logs_dir = root / "scratch" / "intake"
+    candidate = logs_dir / f"{base}.log"
+    counter = 1
+    while candidate.exists():
+        candidate = logs_dir / f"{base}-{counter}.log"
+        counter += 1
+    return candidate
 
 
 def execute(command: list[str], cwd: Path, log_path: Path) -> int:
@@ -160,6 +181,7 @@ def execute(command: list[str], cwd: Path, log_path: Path) -> int:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
             errors="replace",
         )
         assert process.stdout is not None

@@ -76,7 +76,9 @@ Notes:
   prompt hash, model, effort, command, log path — is provenance only:
   intake output is human-reviewed, so a prompt or model change never
   invalidates a processed course. A course tree without a receipt is
-  treated as hand-built and skipped unless forced. Intake run logs are
+  treated as hand-built and skipped unless forced; a receipt that
+  exists but does not parse counts as unprocessed, so the next run
+  performs an incremental pass and rewrites it. Intake run logs are
   teed to `scratch/intake/` (disposable like everything in
   `scratch/`).
 - `courses/` content is **frozen at first use**: an artifact (an

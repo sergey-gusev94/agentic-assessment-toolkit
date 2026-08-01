@@ -270,13 +270,12 @@ def _run_intake(args: argparse.Namespace) -> int:
         return 0
 
     root = data_root_mod.resolve_data_root(args.data_root)
-    courses = intake_mod.list_raw_courses(root)
     if args.course:
-        selected = [course for course in courses if course.course_id == args.course]
+        selected = intake_mod.list_raw_courses(root, only=args.course)
         if not selected:
             raise CliError(f"no raw dump at {root / 'raw' / args.course}")
     elif args.all_items:
-        selected = courses
+        selected = intake_mod.list_raw_courses(root)
         if not selected:
             raise CliError(f"no course dumps under {root / 'raw'}")
     else:
@@ -298,8 +297,21 @@ def _run_intake(args: argparse.Namespace) -> int:
                 "intake record (built by hand?); use --force to run intake over it"
             )
     if not to_run:
-        print(f"nothing to do: {len(selected)} course dump(s) already processed")
+        done = sum(1 for course in selected if course.status == "done")
+        manual = sum(1 for course in selected if course.status == "manual")
+        parts = []
+        if done:
+            parts.append(f"{done} already processed")
+        if manual:
+            parts.append(f"{manual} hand-built (skipped)")
+        print(f"nothing to do: {', '.join(parts)}")
         return 0
+
+    if intake_mod.codex_path() is None:
+        raise CliError(
+            "codex CLI not found on PATH; install it, or use "
+            "`aat intake --course ID --print-prompt` for an interactive session"
+        )
 
     failures = []
     for course in to_run:

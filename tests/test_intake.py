@@ -119,6 +119,7 @@ def fake_execute_producing_course(data_root: Path) -> object:
 def test_successful_run_writes_receipt_and_checks(
     data_root: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(intake, "codex_path", lambda: "/fake/codex")
     monkeypatch.setattr(intake, "execute", fake_execute_producing_course(data_root))
     assert cli.main(["intake", "--all", "--data-root", str(data_root)]) == 0
     out = capsys.readouterr().out
@@ -129,12 +130,13 @@ def test_successful_run_writes_receipt_and_checks(
 
     # The receipt makes the next run a no-op.
     assert cli.main(["intake", "--all", "--data-root", str(data_root)]) == 0
-    assert "nothing to do" in capsys.readouterr().out
+    assert "nothing to do: 1 already processed" in capsys.readouterr().out
 
 
 def test_failed_agent_leaves_the_course_pending(
     data_root: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(intake, "codex_path", lambda: "/fake/codex")
     monkeypatch.setattr(intake, "execute", lambda *_args, **_kwargs: 3)
     assert cli.main(["intake", "--all", "--data-root", str(data_root)]) == 1
     out = capsys.readouterr().out
@@ -147,6 +149,7 @@ def test_failed_agent_leaves_the_course_pending(
 def test_zero_exit_without_a_course_tree_is_a_failure(
     data_root: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(intake, "codex_path", lambda: "/fake/codex")
     monkeypatch.setattr(intake, "execute", lambda *_args, **_kwargs: 0)
     assert cli.main(["intake", "--all", "--data-root", str(data_root)]) == 1
     assert "produced no courses/C_NEW_F2026" in capsys.readouterr().out
@@ -161,11 +164,12 @@ def test_manual_course_is_skipped_without_force(
     assert cli.main(["intake", "--all", "--data-root", str(data_root)]) == 0
     out = capsys.readouterr().out
     assert "built by hand?" in out
-    assert "nothing to do" in out
+    assert "nothing to do: 1 hand-built (skipped)" in out
 
 
 def test_force_runs_a_manual_course(data_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     shutil.copytree(FIXTURES_DIR / "course" / COURSE_ID, data_root / "courses" / "C_NEW_F2026")
+    monkeypatch.setattr(intake, "codex_path", lambda: "/fake/codex")
     monkeypatch.setattr(intake, "execute", lambda *_args, **_kwargs: 0)
     assert cli.main(["intake", "--all", "--force", "--data-root", str(data_root)]) == 0
     assert intake.record_path(data_root, "C_NEW_F2026").is_file()
@@ -179,3 +183,36 @@ def test_execute_tees_output_to_the_log(tmp_path: Path, capsys: pytest.CaptureFi
     assert exit_code == 7
     assert capsys.readouterr().out == "hello\noops\n"
     assert log_path.read_text(encoding="utf-8") == "hello\noops\n"
+
+
+def test_corrupt_receipt_means_pending_not_manual(data_root: Path) -> None:
+    (data_root / "courses" / "C_NEW_F2026").mkdir(parents=True)
+    intake.record_path(data_root, "C_NEW_F2026").write_text("{truncated", encoding="utf-8")
+    [course] = intake.list_raw_courses(data_root)
+    assert course.status == "pending"
+
+
+def test_missing_codex_is_a_reported_error(
+    data_root: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(intake, "codex_path", lambda: None)
+    assert cli.main(["intake", "--all", "--data-root", str(data_root)]) == 2
+    assert "codex CLI not found on PATH" in capsys.readouterr().err
+
+
+def test_course_selection_hashes_only_that_dump(data_root: Path) -> None:
+    make_dump(data_root, "C_OTHER_F2026")
+    [course] = intake.list_raw_courses(data_root, only="C_OTHER_F2026")
+    assert course.course_id == "C_OTHER_F2026"
+
+
+def test_log_path_never_reuses_an_existing_file(data_root: Path) -> None:
+    from datetime import UTC, datetime
+
+    moment = datetime(2026, 8, 1, 12, 0, 0, tzinfo=UTC)
+    first = intake.log_path_for(data_root, "C1", now=moment)
+    first.parent.mkdir(parents=True)
+    first.write_text("earlier failure\n", encoding="utf-8")
+    second = intake.log_path_for(data_root, "C1", now=moment)
+    assert second != first
+    assert second.parent == first.parent
