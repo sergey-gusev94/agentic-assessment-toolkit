@@ -23,6 +23,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import check_course as check_course_mod
 from . import config as config_mod
 from . import data_root as data_root_mod
 from . import harbor as harbor_mod
@@ -32,6 +33,7 @@ from . import metrics as metrics_mod
 from . import report as report_mod
 from . import rubric as rubric_mod
 from .config import ConfigError, ExperimentConfig, Stage
+from .course import CourseError
 from .data_root import DataRootError
 from .materialize._common import MaterializeError
 from .materialize.grading import materialize_grading_task
@@ -57,7 +59,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
         return _run(args)
-    except (CliError, ConfigError, DataRootError, MaterializeError) as error:
+    except (CliError, ConfigError, CourseError, DataRootError, MaterializeError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
@@ -136,6 +138,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="every student submission of every course",
     )
 
+    check = subparsers.add_parser(
+        "check-course",
+        help="report a course tree's contract violations, gaps, and intake notes (read-only)",
+    )
+    check.add_argument("--course", required=True, metavar="ID")
+    check.add_argument("--data-root", metavar="PATH", help="explicit data root (else AAT_DATA_DIR)")
+
     report = subparsers.add_parser(
         "report", help="render statistics tables and a Markdown report (read-only)"
     )
@@ -175,6 +184,8 @@ def _positive_int(value: str) -> int:
 def _run(args: argparse.Namespace) -> int:
     if args.command == "report":
         return _run_report(args)
+    if args.command == "check-course":
+        return _run_check_course(args)
     stage: Stage = "solve" if args.command == "solve" else "grade"
     root = data_root_mod.resolve_data_root(args.data_root)
     config = config_mod.load_config(_config_path(args.config))
@@ -207,6 +218,13 @@ def _run_report(args: argparse.Namespace) -> int:
     )
     print(f"report directory: {report_dir}")
     return 0
+
+
+def _run_check_course(args: argparse.Namespace) -> int:
+    root = data_root_mod.resolve_data_root(args.data_root)
+    report = check_course_mod.check_course(root, args.course)
+    print(check_course_mod.format_report(report))
+    return 0 if report.ok else 1
 
 
 def _config_path(value: str) -> Path:

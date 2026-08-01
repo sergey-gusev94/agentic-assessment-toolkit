@@ -13,11 +13,12 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from .course import load_course
+
 ENV_VAR = "AAT_DATA_DIR"
 
 _TOOLKIT_NAME = "agentic-assessment-toolkit"
 
-_KNOWN_COURSE_KEYS = frozenset({"environment"})
 _KNOWN_SIDECAR_KEYS = frozenset({"environment"})
 
 
@@ -131,7 +132,7 @@ def list_assignments(root: Path, course_id: str) -> list[Assignment]:
     for entry in sorted(assignments_dir.iterdir(), key=lambda p: p.name):
         if not entry.is_dir():
             continue
-        flavor = _sidecar_flavor(assignments_dir / f"{entry.name}.toml")
+        flavor = sidecar_flavor(assignments_dir / f"{entry.name}.toml")
         if flavor is None:
             flavor = course_default
         if flavor is None:
@@ -154,12 +155,11 @@ def _course_default_flavor(course_dir: Path) -> str | None:
     course_toml = course_dir / "course.toml"
     if not course_toml.is_file():
         return None
-    data = _load_toml(course_toml)
-    _reject_unknown_keys(data, _KNOWN_COURSE_KEYS, course_toml)
-    return _optional_str(data, "environment", course_toml)
+    return load_course(course_toml).environment
 
 
-def _sidecar_flavor(sidecar: Path) -> str | None:
+def sidecar_flavor(sidecar: Path) -> str | None:
+    """The sidecar's environment override; also used by `aat check-course`."""
     if not sidecar.is_file():
         return None
     data = _load_toml(sidecar)

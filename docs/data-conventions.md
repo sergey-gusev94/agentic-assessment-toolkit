@@ -31,9 +31,13 @@ repository — only the toolkit's own tree is refused.
 
 ```text
 $AAT_DATA_DIR/
-├── courses/                    # immutable source-of-truth course content
+├── raw/                        # as-collected course material dumps
+│   └── <course_id>/            #   intake's input; kept verbatim for provenance
+├── courses/                    # source-of-truth course content (frozen at first use)
 │   └── <course_id>/            #   e.g. PU_CHE456_F2025
-│       ├── course.toml         #   course defaults (e.g. environment)
+│       ├── course.toml         #   course record + assessment registry
+│       ├── intake-notes.md     #   intake's review aid: judgment calls, open items
+│       ├── syllabus/           #   syllabus file(s), copied verbatim
 │       ├── assignments/
 │       │   ├── <assignment_id>/      # as-received handout, exactly as given
 │       │   └── <assignment_id>.toml  # optional per-assignment overrides
@@ -57,8 +61,22 @@ $AAT_DATA_DIR/
 
 Notes:
 
-- `courses/` content is immutable once registered; benchmark results
-  reference assignments, rubrics, and prompts by hash.
+- `raw/<course_id>/` is the course's materials exactly as collected —
+  any shape, any format. It is read-only from the moment it is dumped:
+  intake reads it and writes `courses/<course_id>/`, and keeping the
+  dump means every extracted fact has a checkable source and intake can
+  be re-run. The intake procedure is
+  [course-intake.md](course-intake.md).
+- `courses/` content is **frozen at first use**: an artifact (an
+  assignment directory, rubric file, or reference solution) becomes
+  immutable once its hash is recorded in any job's run record, because
+  results reference it by that hash. Until then it is a draft and may
+  be edited freely — intake output is reviewed and corrected before
+  anything runs against it. `course.toml`, `intake-notes.md`, and
+  `syllabus/` are never hashed into any identity, so they may be
+  amended at any time; amending the `environment` default changes
+  per-item identities only through the resolved Dockerfile template it
+  selects.
 - Transcripts and trajectories under `solving/` and `grading/` are data, not
   logs: they embed full assignment content and possibly student text.
 - `tables/` holds the only mapping between real identities and anonymized
@@ -93,10 +111,71 @@ Notes:
 - `<assignment_id>.toml`, beside the assignment directory, is an
   optional sidecar for per-assignment settings (e.g. `environment`,
   resource or time overrides). Absent means course defaults apply.
-- `course.toml` holds course-wide defaults, most importantly the
-  default environment template flavor (e.g. `data-science`,
-  `optimization`). The sidecar overrides it per assignment; if neither
-  names an environment, materialization fails with a clear error.
+- `course.toml` holds the course record and the assessment registry,
+  parsed by `src/agentic_assessment_toolkit/course.py` and checked by
+  `aat check-course`. The rule for what goes where: settings that
+  change how tasks run (the environment flavor, future resource
+  overrides) live in `course.toml`'s `[course]` table or the
+  per-assignment sidecar; facts that describe the course (weights,
+  policies, dates) live in the registry. The pipeline consumes only the
+  environment default; every other field is informational until a
+  consumer is deliberately added. A fact the materials do not state is
+  left **absent** — never a sentinel value — and noted in
+  `intake-notes.md`.
+
+  The `[course]` table: `title`, `institution`, `term`, and
+  `environment` — the default environment template flavor (e.g.
+  `data-science`, `optimization`). The sidecar overrides the
+  environment per assignment; if neither names one, materialization
+  fails with a clear error. The course id is the directory name alone
+  (recommended shape `<institution>_<course>_<term>`, e.g.
+  `PU_CHE456_F2025`); no consumer ever parses it, which is why
+  `institution` and `term` are explicit fields.
+
+  The `[[assessments]]` registry: one entry per syllabus assessment —
+  including exams, presentations, and attendance that never get an
+  assignment directory — so weights sum to 100 and the coverage of the
+  final grade is computable. Fields, all optional except `id`:
+
+  - `id` — unique, no whitespace or `/`; for assessments with
+    materials it equals the assignment directory name. Recommended
+    style: uppercase with zero-padded numbers (`HW01`, `PSO03`,
+    `EXAM1`, `MIDTERM`, `FINAL`, `PROJECT`), so listings sort
+    naturally.
+  - `title` — the human label from the source materials (`"HW 4 —
+    Regression"`).
+  - `type` — `homework | exam | practice | project | attendance |
+    other`.
+  - `scope` — `take_home | online_exam | in_person_exam | presentation
+    | in_person`.
+  - `weight_pct` — this assessment's percent of the final grade
+    (>= 0). When every entry has one, the sum must be 100 (checked
+    with tolerance 0.01); how a category rule was split into
+    per-assessment numbers is recorded in `intake-notes.md`, and the
+    syllabus under `syllabus/` remains the authority.
+  - `category` — free label tying entries to the syllabus's grading
+    category (`"homework"`).
+  - `ai_policy` — what the course permits: `allowed | not_allowed |
+    not_applicable`.
+  - `ai_use_possible` — boolean: whether AI use was physically
+    feasible, independent of permission (an online exam may forbid AI
+    without preventing it; an in-person exam prevents it).
+  - `due` — TOML date.
+  - `excluded` — non-empty reason why this assessment has no
+    assignment directory and never will (not codeable, materials
+    lost). An entry with both an `excluded` reason and a directory is
+    a contract violation; an entry with neither is a completeness gap.
+- `syllabus/` holds the syllabus file(s) copied verbatim from the raw
+  dump — the stored source for every registry fact, at a fixed
+  location so no pointer field is needed. The solve materializer reads
+  only `assignments/`, so syllabus content never reaches a solver or
+  grader.
+- `intake-notes.md` is intake's review aid, surfaced by
+  `aat check-course`: the sources used, every judgment call (id
+  assignment, file association, weight arithmetic, rubric
+  transcription), everything intake looked for and could not find, and
+  open questions. It is read by the maintainer, never by the pipeline,
+  and is not a source of truth.
 - `reference_solutions/<assignment_id>/` and
   `rubrics/<assignment_id>/` share the assignment's id. Keeping them in
   separate top-level trees — never inside the assignment directory —
@@ -104,10 +183,11 @@ Notes:
   leak grading material to the solver, which only ever reads
   `assignments/`.
 - Rubrics are Markdown files named within
-  `rubrics/<assignment_id>/`; the default is `default.md`. A revised
-  rubric is a new file (e.g. `strict-v2.md`) selected by name in a
-  grading config — existing files are never edited, preserving
-  immutability and hash-based provenance.
+  `rubrics/<assignment_id>/`; the default is `default.md`. A rubric no
+  job has used yet is a draft and may be edited in place; once used it
+  is frozen like every other artifact, and a revision is a new file
+  (e.g. `strict-v2.md`) selected by name in a grading config —
+  preserving immutability and hash-based provenance.
 - Every assignment that will be graded must have a rubric; grading
   fails at materialization without one (docs/design.md, decision 5).
   A rubric enumerates its criteria, each with a stable id, a title,
@@ -134,11 +214,13 @@ Notes:
   criterion is not a bonus. Stable criterion ids are what make
   per-criterion statistics comparable across repeated gradings.
 - Authoring a missing rubric is a manual procedure, not toolkit
-  machinery: draft it with an agent (any interface) from the
-  assignment and reference solution, review it, and commit it as
-  `default.md`. From then on it is immutable like any other rubric,
-  and the grader checks (reference near full marks, irrelevant near
-  zero) double as a sanity check on the rubric itself.
+  machinery: course intake drafts `default.md` wherever the materials
+  state a point split ([course-intake.md](course-intake.md)), and any
+  remaining rubric is drafted the same way — with an agent (any
+  interface) from the assignment and reference solution — then
+  reviewed. A rubric freezes at first grading use, and the grader
+  checks (reference near full marks, irrelevant near zero) double as a
+  sanity check on the rubric itself.
 
 ## Job directories and run records
 

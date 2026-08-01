@@ -1,1 +1,27 @@
+[course]
+title = "Synthetic Course One"
+term = "F2025"
 environment = "scientific-python"
+
+[[assessments]]
+id = "HW1"
+type = "homework"
+weight_pct = 40.0
+ai_policy = "allowed"
+ai_use_possible = true
+
+[[assessments]]
+id = "HW2"
+type = "homework"
+weight_pct = 40.0
+ai_policy = "allowed"
+ai_use_possible = true
+
+[[assessments]]
+id = "EXAM1"
+type = "exam"
+scope = "in_person_exam"
+weight_pct = 20.0
+ai_policy = "not_allowed"
+ai_use_possible = false
+excluded = "in-person exam, no take-home materials"

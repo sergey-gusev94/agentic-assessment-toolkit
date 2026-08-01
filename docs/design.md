@@ -25,8 +25,10 @@ analysis are in research.md.
    submissions into grading tasks), solver and grader prompt templates,
    environment (Dockerfile) templates, the two generic contract verifiers,
    the grading output schema, results
-   loading and statistics, and the thin `aat solve` / `aat grade` /
-   `aat report` commands. It does not
+   loading and statistics, the course record and assessment registry
+   conventions with their intake brief and checker, and the thin
+   `aat solve` / `aat grade` / `aat report` / `aat check-course`
+   commands. It does not
    implement an agent runner, sandbox framework, run orchestrator, model
    abstraction, transcript schema, experiment database, or results viewer:
    Harbor does all orchestration; the toolkit constructs one command line
@@ -116,6 +118,20 @@ analysis are in research.md.
     network access to model providers — is performed by the maintainer
     outside this repository. Repository work never attempts live runs and
     never depends on their results.
+14. **Course intake is an agent-assisted manual procedure with a
+    deterministic checker.** Raw course materials are dumped into
+    `raw/<course_id>/` in the data root; a maintainer-run agent session
+    (plain `codex exec` or similar — never Harbor: intake is trusted,
+    interactive, one-time authoring, not a measured experiment) follows
+    the checked-in brief in [course-intake.md](course-intake.md) to
+    produce `courses/<course_id>/`, including the course record, the
+    assessment registry, and rubric drafts; the read-only
+    `aat check-course` command then reports contract violations,
+    completeness gaps, and the intake notes until the course is clean.
+    The toolkit ships the brief and the checker and never launches the
+    agent (decision 13). Facts the materials do not state are left
+    absent — never sentinel values — and surfaced by the checker.
+    Student-submission ingest is out of intake's scope and deferred.
 
 ## Vocabulary
 
@@ -157,6 +173,15 @@ identically in code, documentation, and output.
   `base_max` are their sums, the denominator of every percentage.
 - **Sidecar** — the optional `<assignment_id>.toml` beside an
   assignment directory carrying per-assignment settings.
+- **Assessment registry** — the `[[assessments]]` array in
+  `course.toml`: one entry per syllabus assessment (weights, type,
+  AI policy), including assessments that never get materials, so
+  grade coverage is computable
+  ([data-conventions.md](data-conventions.md)).
+- **Intake** — the manual, agent-assisted procedure that converts
+  `raw/<course_id>/` into `courses/<course_id>/`
+  ([course-intake.md](course-intake.md)); `aat check-course` is its
+  deterministic reviewer.
 - **Golden fixture** — a committed byte-exact expected task tree under
   `tests/fixtures/golden/`, regenerated only deliberately.
 
@@ -768,7 +793,8 @@ what the toolkit provides, not by live runs.
    (submission source, student id, solve job and trial); a full-shape
    synthetic Harbor `result.json` test fixture pinning the fields the
    loader consumes; plus authoring rubrics for every corpus assignment
-   (the manual procedure in
+   (drafted by course intake, [course-intake.md](course-intake.md),
+   and reviewed per
    [data-conventions.md](data-conventions.md)), repeat configurations
    and frozen grader-config versioning for reportable runs (both
    already provided by the config identity — no new machinery), the
@@ -865,6 +891,8 @@ src/agentic_assessment_toolkit/
 ├── hashing.py             # shared: file/dir sha256 for provenance
 ├── grading_schema.py      # step 2: fields + consistency validation
 ├── config.py              # experiment-config loading + identity
+├── course.py              # course record + assessment registry loading
+├── check_course.py        # `aat check-course`: violations/gaps/notes
 ├── materialize/
 │   ├── _common.py         # shared materializer helpers (naming,
 │   │                      #   Dockerfile/test-runner emission)
@@ -997,9 +1025,15 @@ aat grade  (--from-solve NAME [--course ID] [--assignment ID]
 
 aat report [--course ID] [--assignment ID] [--config NAME]...
            [--seed N] [--out PATH] [--data-root PATH]
+
+aat check-course --course ID [--data-root PATH]
 ```
 
-`aat report` is read-only: it changes no experiment and no doneness,
+`aat check-course` is read-only and writes nothing: it renders one
+course's contract violations (nonzero exit until fixed), completeness
+gaps, intake notes, and grade-coverage summary — the review loop of the
+intake procedure (decision 14). `aat report` is read-only: it changes
+no experiment and no doneness,
 consumes job directories, and writes derived tables and reports under
 `analysis/` in the data root. `--out` overrides the destination but
 obeys the same refusal rule as the data root — it is never allowed
