@@ -47,6 +47,7 @@ _EXPECTED_COURSE_ENTRIES = frozenset(
         "rubrics",
         "syllabus",
         "intake-notes.md",
+        "intake-record.json",
     }
 )
 

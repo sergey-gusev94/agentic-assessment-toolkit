@@ -28,6 +28,7 @@ from . import config as config_mod
 from . import data_root as data_root_mod
 from . import harbor as harbor_mod
 from . import hashing
+from . import intake as intake_mod
 from . import jobs as jobs_mod
 from . import metrics as metrics_mod
 from . import report as report_mod
@@ -138,6 +139,43 @@ def _build_parser() -> argparse.ArgumentParser:
         help="every student submission of every course",
     )
 
+    intake = subparsers.add_parser(
+        "intake", help="run the intake agent over unprocessed raw course dumps"
+    )
+    intake.add_argument("--course", metavar="ID")
+    intake.add_argument(
+        "--all",
+        action="store_true",
+        dest="all_items",
+        help="every unprocessed dump under raw/",
+    )
+    intake.add_argument(
+        "--data-root", metavar="PATH", help="explicit data root (else AAT_DATA_DIR)"
+    )
+    intake.add_argument(
+        "--model",
+        default=intake_mod.DEFAULT_MODEL,
+        metavar="NAME",
+        help=f"codex model (default: {intake_mod.DEFAULT_MODEL})",
+    )
+    intake.add_argument(
+        "--reasoning-effort",
+        default=intake_mod.DEFAULT_REASONING_EFFORT,
+        metavar="LEVEL",
+        help=f"codex reasoning effort (default: {intake_mod.DEFAULT_REASONING_EFFORT})",
+    )
+    intake.add_argument(
+        "--force",
+        action="store_true",
+        help="include processed and manually built courses (incremental pass)",
+    )
+    intake.add_argument("--dry-run", action="store_true", help="list what would run, then exit")
+    intake.add_argument(
+        "--print-prompt",
+        action="store_true",
+        help="print the rendered brief for --course (for an interactive session) and exit",
+    )
+
     check = subparsers.add_parser(
         "check-course",
         help="report a course tree's contract violations, gaps, and intake notes (read-only)",
@@ -186,6 +224,8 @@ def _run(args: argparse.Namespace) -> int:
         return _run_report(args)
     if args.command == "check-course":
         return _run_check_course(args)
+    if args.command == "intake":
+        return _run_intake(args)
     stage: Stage = "solve" if args.command == "solve" else "grade"
     root = data_root_mod.resolve_data_root(args.data_root)
     config = config_mod.load_config(_config_path(args.config))
@@ -217,6 +257,84 @@ def _run_report(args: argparse.Namespace) -> int:
         out_root=Path(args.out).expanduser().resolve() if args.out else None,
     )
     print(f"report directory: {report_dir}")
+    return 0
+
+
+def _run_intake(args: argparse.Namespace) -> int:
+    if args.all_items and args.course:
+        raise CliError("--all and --course are mutually exclusive")
+    if args.print_prompt:
+        if not args.course:
+            raise CliError("--print-prompt needs --course")
+        print(intake_mod.render_prompt(args.course))
+        return 0
+
+    root = data_root_mod.resolve_data_root(args.data_root)
+    courses = intake_mod.list_raw_courses(root)
+    if args.course:
+        selected = [course for course in courses if course.course_id == args.course]
+        if not selected:
+            raise CliError(f"no raw dump at {root / 'raw' / args.course}")
+    elif args.all_items:
+        selected = courses
+        if not selected:
+            raise CliError(f"no course dumps under {root / 'raw'}")
+    else:
+        raise CliError("select courses with --course or --all")
+
+    to_run = [c for c in selected if args.force or c.status == "pending"]
+
+    if args.dry_run:
+        for course in selected:
+            marker = "run " if course in to_run else "skip"
+            print(f"{marker} [{course.status:7}] {course.course_id}")
+        print(f"would run {len(to_run)} of {len(selected)} course(s)")
+        return 0
+
+    for course in selected:
+        if course.status == "manual" and course not in to_run:
+            print(
+                f"skip {course.course_id}: courses/{course.course_id} exists with no "
+                "intake record (built by hand?); use --force to run intake over it"
+            )
+    if not to_run:
+        print(f"nothing to do: {len(selected)} course dump(s) already processed")
+        return 0
+
+    failures = []
+    for course in to_run:
+        command = intake_mod.build_command(
+            intake_mod.render_prompt(course.course_id), args.model, args.reasoning_effort
+        )
+        log_path = intake_mod.log_path_for(root, course.course_id)
+        print(f"intake {course.course_id}: launching codex (log: {log_path})")
+        exit_code = intake_mod.execute(command, cwd=root, log_path=log_path)
+        if exit_code != 0:
+            failures.append(course.course_id)
+            print(f"intake {course.course_id}: codex exited {exit_code}; no receipt written")
+            continue
+        if not (root / "courses" / course.course_id).is_dir():
+            failures.append(course.course_id)
+            print(
+                f"intake {course.course_id}: codex exited 0 but produced no "
+                f"courses/{course.course_id}; no receipt written"
+            )
+            continue
+        intake_mod.write_record(
+            root,
+            course.course_id,
+            command=command,
+            model=args.model,
+            reasoning_effort=args.reasoning_effort,
+            log_path=log_path,
+        )
+        print(check_course_mod.format_report(check_course_mod.check_course(root, course.course_id)))
+
+    done = len(to_run) - len(failures)
+    print(f"processed {done} of {len(to_run)} course(s)")
+    if failures:
+        print(f"failed (re-run `aat intake` to retry): {', '.join(failures)}")
+        return 1
     return 0
 
 

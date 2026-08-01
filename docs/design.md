@@ -118,20 +118,28 @@ analysis are in research.md.
     network access to model providers — is performed by the maintainer
     outside this repository. Repository work never attempts live runs and
     never depends on their results.
-14. **Course intake is an agent-assisted manual procedure with a
-    deterministic checker.** Raw course materials are dumped into
-    `raw/<course_id>/` in the data root; a maintainer-run agent session
-    (plain `codex exec` or similar — never Harbor: intake is trusted,
-    interactive, one-time authoring, not a measured experiment) follows
-    the checked-in brief in [course-intake.md](course-intake.md) to
-    produce `courses/<course_id>/`, including the course record, the
-    assessment registry, and rubric drafts; the read-only
-    `aat check-course` command then reports contract violations,
-    completeness gaps, and the intake notes until the course is clean.
-    The toolkit ships the brief and the checker and never launches the
-    agent (decision 13). Facts the materials do not state are left
-    absent — never sentinel values — and surfaced by the checker.
-    Student-submission ingest is out of intake's scope and deferred.
+14. **Course intake is an agent task the toolkit launches directly,
+    with a deterministic checker.** Raw course materials are dumped
+    into `raw/<course_id>/` in the data root; `aat intake` runs the
+    Codex CLI once per unprocessed course — plain `codex exec` in a
+    workspace-write sandbox, never Harbor: intake is trusted authoring
+    with a human review gate, not a measured experiment — with the
+    rendered `intake` prompt template, producing `courses/<course_id>/`
+    (course record, assessment registry, rubric drafts). This is the
+    same thin pattern as the Harbor commands: construct one command
+    line, run it as a subprocess, record what ran. After each
+    successful run the command writes an `intake-record.json` receipt
+    and prints the `aat check-course` report — contract violations,
+    completeness gaps, intake notes — until the course is clean.
+    Intake doneness is the receipt's hash of the raw dump: new raw
+    material makes a course unprocessed again (an incremental pass
+    that never modifies existing artifacts), while the prompt template
+    and model are provenance only — intake output is human-reviewed,
+    so changing them never invalidates a processed course. Facts the
+    materials do not state are left absent — never sentinel values —
+    and surfaced by the checker. Student-submission ingest is out of
+    intake's scope and deferred. The procedure is
+    [course-intake.md](course-intake.md).
 
 ## Vocabulary
 
@@ -178,10 +186,11 @@ identically in code, documentation, and output.
   AI policy), including assessments that never get materials, so
   grade coverage is computable
   ([data-conventions.md](data-conventions.md)).
-- **Intake** — the manual, agent-assisted procedure that converts
-  `raw/<course_id>/` into `courses/<course_id>/`
-  ([course-intake.md](course-intake.md)); `aat check-course` is its
-  deterministic reviewer.
+- **Intake** — the `aat intake` procedure that converts
+  `raw/<course_id>/` into `courses/<course_id>/` by running the intake
+  agent per unprocessed course ([course-intake.md](course-intake.md));
+  `aat check-course` is its deterministic reviewer, and the
+  `intake-record.json` receipt is its doneness.
 - **Golden fixture** — a committed byte-exact expected task tree under
   `tests/fixtures/golden/`, regenerated only deliberately.
 
@@ -893,6 +902,7 @@ src/agentic_assessment_toolkit/
 ├── config.py              # experiment-config loading + identity
 ├── course.py              # course record + assessment registry loading
 ├── check_course.py        # `aat check-course`: violations/gaps/notes
+├── intake.py              # `aat intake`: codex command, receipts, doneness
 ├── materialize/
 │   ├── _common.py         # shared materializer helpers (naming,
 │   │                      #   Dockerfile/test-runner emission)
@@ -907,7 +917,7 @@ src/agentic_assessment_toolkit/
 ├── cli.py                 # step 10: argparse, `aat solve` / `aat grade`;
 │                          #   stage 3 adds `aat report`
 └── templates/             # package data (importlib.resources)
-    ├── prompts/           # step 3: solver.md, grader.md
+    ├── prompts/           # step 3: solver.md, grader.md; intake.md
     ├── verifiers/         # steps 5 + 7: two standalone scripts
     ├── environments/      # step 8: one Dockerfile per flavor
     └── task/              # task.toml template
@@ -1027,12 +1037,25 @@ aat report [--course ID] [--assignment ID] [--config NAME]...
            [--seed N] [--out PATH] [--data-root PATH]
 
 aat check-course --course ID [--data-root PATH]
+
+aat intake (--course ID | --all) [--data-root PATH]
+           [--model NAME] [--reasoning-effort LEVEL]
+           [--force] [--dry-run] [--print-prompt]
 ```
 
 `aat check-course` is read-only and writes nothing: it renders one
 course's contract violations (nonzero exit until fixed), completeness
 gaps, intake notes, and grade-coverage summary — the review loop of the
-intake procedure (decision 14). `aat report` is read-only: it changes
+intake procedure (decision 14). `aat intake` runs the intake agent
+sequentially over the selected unprocessed dumps (decision 14): model
+and effort are flags with pinned defaults, not an experiment config,
+because intake has no config identity — the receipt records them as
+provenance and doneness is the raw-dump hash alone. `--force` includes
+processed and hand-built courses; a failed agent run writes no receipt,
+so re-running the command is the retry mechanism; `--print-prompt`
+emits the rendered brief for an interactive session instead of
+launching anything. Each run's output is teed to
+`scratch/intake/<stamp>__<course>.log`. `aat report` is read-only: it changes
 no experiment and no doneness,
 consumes job directories, and writes derived tables and reports under
 `analysis/` in the data root. `--out` overrides the destination but

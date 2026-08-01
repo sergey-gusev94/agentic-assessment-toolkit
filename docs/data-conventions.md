@@ -37,6 +37,7 @@ $AAT_DATA_DIR/
 │   └── <course_id>/            #   e.g. PU_CHE456_F2025
 │       ├── course.toml         #   course record + assessment registry
 │       ├── intake-notes.md     #   intake's review aid: judgment calls, open items
+│       ├── intake-record.json  #   receipt written by `aat intake` (doneness)
 │       ├── syllabus/           #   syllabus file(s), copied verbatim
 │       ├── assignments/
 │       │   ├── <assignment_id>/      # as-received handout, exactly as given
@@ -67,6 +68,17 @@ Notes:
   dump means every extracted fact has a checkable source and intake can
   be re-run. The intake procedure is
   [course-intake.md](course-intake.md).
+- `intake-record.json` is the receipt `aat intake` writes after a
+  successful agent run — never written by the agent itself. Its
+  `raw_sha256` (the hash of the raw dump at processing time) is
+  intake's doneness: a dump whose current hash differs is unprocessed
+  again, so new material triggers an incremental pass. The rest —
+  prompt hash, model, effort, command, log path — is provenance only:
+  intake output is human-reviewed, so a prompt or model change never
+  invalidates a processed course. A course tree without a receipt is
+  treated as hand-built and skipped unless forced. Intake run logs are
+  teed to `scratch/intake/` (disposable like everything in
+  `scratch/`).
 - `courses/` content is **frozen at first use**: an artifact (an
   assignment directory, rubric file, or reference solution) becomes
   immutable once its hash is recorded in any job's run record, because
