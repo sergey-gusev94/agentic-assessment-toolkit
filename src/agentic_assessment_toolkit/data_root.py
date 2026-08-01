@@ -87,7 +87,7 @@ class Assignment:
     course_id: str
     assignment_id: str
     directory: Path
-    environment: str
+    environment_flavor: str
 
     @property
     def item_id(self) -> str:
@@ -122,15 +122,15 @@ def list_assignments(root: Path, course_id: str) -> list[Assignment]:
     assignments_dir = course_dir / "assignments"
     if not assignments_dir.is_dir():
         return []
-    course_default = _course_default_environment(course_dir)
+    course_default = _course_default_flavor(course_dir)
     assignments = []
     for entry in sorted(assignments_dir.iterdir(), key=lambda p: p.name):
         if not entry.is_dir():
             continue
-        environment = _sidecar_environment(assignments_dir / f"{entry.name}.toml")
-        if environment is None:
-            environment = course_default
-        if environment is None:
+        flavor = _sidecar_flavor(assignments_dir / f"{entry.name}.toml")
+        if flavor is None:
+            flavor = course_default
+        if flavor is None:
             raise DataRootError(
                 f"assignment {course_id}/{entry.name} names no environment: set "
                 f"'environment' in {entry.name}.toml or a course default in course.toml"
@@ -140,13 +140,13 @@ def list_assignments(root: Path, course_id: str) -> list[Assignment]:
                 course_id=course_id,
                 assignment_id=entry.name,
                 directory=entry,
-                environment=environment,
+                environment_flavor=flavor,
             )
         )
     return assignments
 
 
-def _course_default_environment(course_dir: Path) -> str | None:
+def _course_default_flavor(course_dir: Path) -> str | None:
     course_toml = course_dir / "course.toml"
     if not course_toml.is_file():
         return None
@@ -155,7 +155,7 @@ def _course_default_environment(course_dir: Path) -> str | None:
     return _optional_str(data, "environment", course_toml)
 
 
-def _sidecar_environment(sidecar: Path) -> str | None:
+def _sidecar_flavor(sidecar: Path) -> str | None:
     if not sidecar.is_file():
         return None
     data = _load_toml(sidecar)

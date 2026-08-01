@@ -105,8 +105,8 @@ semantics, prompt templates, verifiers, environment templates — are
 specified fresh in [design.md](design.md), and nothing is ported from
 the pilot implementations. The toolkit's grading verifier derives the
 reward in code from point sums computed from the grader's criteria: a
-bonus-inclusive `score_pct` that can exceed 100, with a required-only
-`required_pct` beside it.
+bonus-inclusive `score_pct` that can exceed 100, with a bonus-free
+`base_pct` beside it.
 
 ### Separate Harbor grading job
 
@@ -160,8 +160,8 @@ The recorded config identities were `3a0386e9...` for `codex-high` and
 The grading job surfaced reward `100.0` because that revision's contract
 excluded bonus points from the reward. The run therefore validated the
 pipeline while exposing an older scoring-policy defect. The repository now
-treats required and bonus criteria as points on the same raw scale and derives
-the reward as `100 * (raw_points + bonus_points) / raw_max`. Consequently,
+treats base and bonus criteria as points on the same scale and derives
+the reward as `100 * (base_points + bonus_points) / base_max`. Consequently,
 90/90 required plus 10 bonus points is approximately 111.11. That post-run
 correction still needs one maintainer smoke run.
 
@@ -182,7 +182,7 @@ solve or grade.
 - One smoke run of the flattened job layout: the AAT job directory is the
   Harbor job directory (holding only Harbor output plus `aat-run.json` and
   `harbor-job.json`), tasks are materialized under `tasks/<job-name>/`
-  outside it, `harbor view` works on the shared `runs/` and `grading/`
+  outside it, `harbor view` works on the shared `solving/` and `grading/`
   parents, and re-running the recorded command resumes an interrupted job
   without touching the task inputs. Also the revised grading semantics:
   authored-sum mismatches are flagged, not failed, and an invalid grading

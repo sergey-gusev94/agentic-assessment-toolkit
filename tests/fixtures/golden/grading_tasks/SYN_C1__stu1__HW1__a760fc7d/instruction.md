@@ -65,8 +65,8 @@ A single JSON object with exactly these fields:
     passages in the submission that justify this score.
   - `bonus` — boolean; `true` only for optional/bonus criteria. Omit or
     use `false` otherwise. At least one criterion must be non-bonus.
-- `raw_points` — sum of `points` over non-bonus criteria.
-- `raw_max` — sum of `max_points` over non-bonus criteria.
+- `base_points` — sum of `points` over non-bonus criteria.
+- `base_max` — sum of `max_points` over non-bonus criteria.
 - `bonus_points` — sum of `points` over bonus criteria (0 if none).
 - `bonus_max` — sum of `max_points` over bonus criteria (0 if none).
 - `overall_comment` — short free-text summary of the grade.

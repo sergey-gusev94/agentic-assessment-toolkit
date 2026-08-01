@@ -3,10 +3,10 @@
 Three option axes (docs/design.md, "CLI design"): selection and
 mechanics are flags; experiment configuration lives only in named config
 files. Doneness is derived from the data root — a solve item is done
-under a config when some job directory holds a completed, non-error
-trial for its per-item identity; a grading item additionally needs a
-valid grading result — so bulk commands are naturally incremental and
-failed gradings are regraded automatically.
+under a config when some job directory holds a verified trial (one
+whose verifier recorded a reward) for its per-item identity; a grading
+item additionally needs a valid grading result — so bulk commands are
+naturally incremental and failed gradings are regraded automatically.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from .materialize._common import MaterializeError
 from .materialize.grading import materialize_grading_task
 from .materialize.solve import materialize_solve_task
 
-SOLVE_JOBS_DIRNAME = "runs"
+SOLVE_JOBS_DIRNAME = "solving"
 GRADING_JOBS_DIRNAME = "grading"
 
 
@@ -114,7 +114,7 @@ def _build_parser() -> argparse.ArgumentParser:
     grade.add_argument(
         "--from-solve",
         metavar="NAME",
-        help="grade completed solve trials produced under this solve config",
+        help="grade verified solve trials produced under this solve config",
     )
     grade.add_argument(
         "--submissions", metavar="PATH", help="student folders under <data-root>/submissions"
@@ -145,14 +145,14 @@ def _run(args: argparse.Namespace) -> int:
         raise CliError(
             f"config {config.name!r} has stage {config.stage!r}; `aat {args.command}` needs a {stage!r} config"
         )
-    base_identity = config_mod.config_identity(config)
+    config_identity = config_mod.config_identity(config)
     jobs_root = root / (SOLVE_JOBS_DIRNAME if stage == "solve" else GRADING_JOBS_DIRNAME)
-    done = harbor_mod.completed_items(jobs_root, stage)
+    done = harbor_mod.done_items(jobs_root, stage)
     if stage == "solve":
-        planned = _plan_solve(root, config, base_identity, done, args)
+        planned = _plan_solve(root, config, config_identity, done, args)
     else:
-        planned = _plan_grade(root, config, base_identity, done, args)
-    return _execute(stage, root, jobs_root, config, base_identity, planned, args)
+        planned = _plan_grade(root, config, config_identity, done, args)
+    return _execute(stage, root, jobs_root, config, config_identity, planned, args)
 
 
 def _config_path(value: str) -> Path:
@@ -169,7 +169,7 @@ def _config_path(value: str) -> Path:
 def _plan_solve(
     root: Path,
     config: ExperimentConfig,
-    base_identity: str,
+    config_identity: str,
     done: set[tuple[str, str]],
     args: argparse.Namespace,
 ) -> list[_PlannedItem]:
@@ -194,14 +194,14 @@ def _plan_solve(
             if not assignments:
                 raise CliError(f"assignment {args.assignment!r} not found in course {course_id!r}")
         for assignment in assignments:
-            if assignment.environment == config_mod.GRADING_ENVIRONMENT:
+            if assignment.environment_flavor == config_mod.GRADING_FLAVOR:
                 raise CliError(
                     f"assignment {assignment.item_id!r} resolves environment 'grading', "
                     "which is reserved for grading tasks; course flavors are for solve "
                     "tasks only (docs/design.md, environment templates)"
                 )
-            environment_bytes = config_mod.environment_path(assignment.environment).read_bytes()
-            identity = config_mod.item_identity(base_identity, environment_bytes)
+            template_bytes = config_mod.environment_path(assignment.environment_flavor).read_bytes()
+            identity = config_mod.item_identity(config_identity, template_bytes)
             planned.append(
                 _PlannedItem(
                     item_id=assignment.item_id,
@@ -223,7 +223,7 @@ def _solve_materializer(
             assignment_dir=assignment.directory,
             course_id=assignment.course_id,
             assignment_id=assignment.assignment_id,
-            environment_flavor=assignment.environment,
+            environment_flavor=assignment.environment_flavor,
             prompt_name=config.prompt_name,
             tasks_dir=tasks_dir,
         )
@@ -251,12 +251,12 @@ class _GradeSource:
 def _plan_grade(
     root: Path,
     config: ExperimentConfig,
-    base_identity: str,
+    config_identity: str,
     done: set[tuple[str, str]],
     args: argparse.Namespace,
 ) -> list[_PlannedItem]:
     sources = _grade_sources(root, args)
-    environment_bytes = config_mod.environment_path(config_mod.GRADING_ENVIRONMENT).read_bytes()
+    template_bytes = config_mod.environment_path(config_mod.GRADING_FLAVOR).read_bytes()
     rubric_name = config.rubric_name
     if rubric_name is None:  # load_config defaults grading configs to "default"
         raise CliError(f"config {config.name!r} names no rubric")
@@ -280,7 +280,7 @@ def _plan_grade(
                 f"courses/{source.course_id}/rubrics/{source.assignment_id}/{rubric_name}.md)"
             )
         rubric_bytes = rubric.read_bytes() if rubric is not None else None
-        identity = config_mod.item_identity(base_identity, environment_bytes, rubric_bytes)
+        identity = config_mod.item_identity(config_identity, template_bytes, rubric_bytes)
         planned.append(
             _PlannedItem(
                 item_id=source.item_id,
@@ -343,7 +343,7 @@ def _grade_sources(root: Path, args: argparse.Namespace) -> list[_GradeSource]:
         raise CliError("--assignment requires --course or --from-solve")
 
     if args.from_solve:
-        submissions = harbor_mod.completed_solve_submissions(
+        submissions = harbor_mod.verified_solve_submissions(
             root / SOLVE_JOBS_DIRNAME,
             args.from_solve,
             course_id=args.course,
@@ -447,7 +447,7 @@ def _execute(
     root: Path,
     jobs_root: Path,
     config: ExperimentConfig,
-    base_identity: str,
+    config_identity: str,
     planned: list[_PlannedItem],
     args: argparse.Namespace,
 ) -> int:
@@ -468,7 +468,7 @@ def _execute(
         print(f"nothing to do: {len(planned)} item(s) already done under config {config.name!r}")
         return 0
 
-    job_dir = _create_job_dir(jobs_root, harbor_mod.job_dir_name(config.name, base_identity))
+    job_dir = _create_job_dir(jobs_root, harbor_mod.job_dir_name(config.name, config_identity))
     # Tasks live outside the Harbor job directory: on resume, Harbor
     # deletes any job-dir subdirectory without a per-trial result.json
     # as a stale trial, which would destroy the task inputs
@@ -494,7 +494,7 @@ def _execute(
         job_dir,
         stage=stage,
         config=config,
-        config_identity=base_identity,
+        config_identity=config_identity,
         command=command,
         executed=not args.materialize_only,
         repeats=args.repeats,

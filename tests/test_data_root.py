@@ -84,8 +84,8 @@ def test_list_courses_and_assignments(data_root: Path) -> None:
     assignments = list_assignments(data_root, COURSE_ID)
     assert [a.assignment_id for a in assignments] == ["HW1", "HW2"]
     by_id = {a.assignment_id: a for a in assignments}
-    assert by_id["HW1"].environment == "scientific-python"  # course default
-    assert by_id["HW2"].environment == "data-science"  # sidecar override
+    assert by_id["HW1"].environment_flavor == "scientific-python"  # course default
+    assert by_id["HW2"].environment_flavor == "data-science"  # sidecar override
     assert by_id["HW1"].item_id == f"{COURSE_ID}/HW1"
 
 

@@ -74,11 +74,11 @@ grader trial over an already-graded submission, use `--force` on `aat grade`
 
 Inspect a single run with the exact per-job command printed by `aat`, or
 browse a whole stage — job directories are Harbor job directories, so the
-viewer works on the shared `runs/` and `grading/` parents too:
+viewer works on the shared `solving/` and `grading/` parents too:
 
 ```bash
 harbor view "$AAT_DATA_DIR/grading/20260801T044338Z__codex-grader-high__44292e75"
-harbor view "$AAT_DATA_DIR/runs"
+harbor view "$AAT_DATA_DIR/solving"
 ```
 
 Do not use Harbor's suggested `upload` command for real coursework unless the

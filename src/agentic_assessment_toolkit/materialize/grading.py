@@ -46,7 +46,7 @@ def materialize_grading_task(
 
     (task_dir / "task.toml").write_text(config.rendered_task_toml("grade"), encoding="utf-8")
 
-    environment_template = config.environment_path(config.GRADING_ENVIRONMENT)
+    environment_template = config.environment_path(config.GRADING_FLAVOR)
     copy_lines = [
         "COPY submission /app/submission",
         "COPY reference_solution /app/reference_solution",

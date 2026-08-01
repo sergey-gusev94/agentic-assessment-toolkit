@@ -31,6 +31,7 @@ reference_repos/
 # Data must live in the external data root; keep accidental in-repo copies untracked
 data/
 runs/
+solving/
 jobs/
 grading/
 submissions/

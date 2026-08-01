@@ -122,5 +122,5 @@ def test_template_paths_exist() -> None:
     assert config_mod.prompt_path("grader").is_file()
     assert config_mod.verifier_path("solve").is_file()
     assert config_mod.verifier_path("grade").is_file()
-    assert config_mod.task_skeleton_path().is_file()
+    assert config_mod.task_template_path().is_file()
     assert config_mod.grading_schema_source_path().is_file()

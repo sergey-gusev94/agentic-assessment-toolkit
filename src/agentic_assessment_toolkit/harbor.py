@@ -59,7 +59,7 @@ def build_harbor_command(job_config_path: Path) -> list[str]:
     return ["harbor", "run", "-c", str(job_config_path), "--yes"]
 
 
-def harbor_environment(base: Mapping[str, str] | None = None) -> dict[str, str]:
+def harbor_subprocess_env(base: Mapping[str, str] | None = None) -> dict[str, str]:
     """Subprocess environment for Harbor runs.
 
     Telemetry is disabled: nothing leaves the machine except calls to
@@ -71,7 +71,7 @@ def harbor_environment(base: Mapping[str, str] | None = None) -> dict[str, str]:
 
 
 def invoke_harbor(command: list[str]) -> int:
-    completed = subprocess.run(command, env=harbor_environment(), check=False)  # noqa: S603
+    completed = subprocess.run(command, env=harbor_subprocess_env(), check=False)  # noqa: S603
     return completed.returncode
 
 
@@ -185,38 +185,38 @@ def trial_results(job_dir: Path) -> Iterator[tuple[Path, dict[str, object]]]:
             yield trial_dir, result
 
 
-def is_completed_trial(result: dict[str, object]) -> bool:
-    """Completed, non-error: the verifier recorded a reward.
+def is_verified_trial(result: dict[str, object]) -> bool:
+    """Verified: the verifier recorded a reward (docs/design.md, denominator policy).
 
     A non-empty ``verifier_result.rewards`` proves verification ran to
     completion; any pre-verification failure (agent error, timeout,
     verifier crash) leaves it absent. A late exception recorded after a
-    reward exists does not un-complete the trial.
+    reward exists does not un-verify the trial.
     """
     verifier_result = result.get("verifier_result")
     return isinstance(verifier_result, dict) and bool(verifier_result.get("rewards"))
 
 
 def is_graded_trial(result: dict[str, object]) -> bool:
-    """Completed with a *valid* grading result.
+    """Verified with a *valid* grading result.
 
-    The grading verifier writes ``required_pct`` into the rewards only
+    The grading verifier writes ``base_pct`` into the rewards only
     when ``grading_result.json`` passed validation; a contract violation
     emits the bare ``{"reward": 0.0}``. An invalid grading is a failed
     measurement, not a grade, so it never counts as done
     (docs/design.md, "Run records and idempotence").
     """
-    if not is_completed_trial(result):
+    if not is_verified_trial(result):
         return False
     verifier_result = result.get("verifier_result")
     if not isinstance(verifier_result, dict):
         return False
     rewards = verifier_result.get("rewards")
-    return isinstance(rewards, dict) and "required_pct" in rewards
+    return isinstance(rewards, dict) and "base_pct" in rewards
 
 
-def completed_task_names(
-    job_dir: Path, check: Callable[[dict[str, object]], bool] = is_completed_trial
+def verified_task_names(
+    job_dir: Path, check: Callable[[dict[str, object]], bool] = is_verified_trial
 ) -> set[str]:
     names = set()
     for _, result in trial_results(job_dir):
@@ -234,7 +234,7 @@ def _record_items(record: dict[str, object]) -> list[dict[str, object]]:
     return [item for item in items if isinstance(item, dict)]
 
 
-def completed_items(jobs_root: Path, stage: Stage) -> set[tuple[str, str]]:
+def done_items(jobs_root: Path, stage: Stage) -> set[tuple[str, str]]:
     """(item_id, item_identity) pairs with at least one done trial.
 
     Doneness is keyed on the pair, per docs/design.md: the identity alone
@@ -245,13 +245,13 @@ def completed_items(jobs_root: Path, stage: Stage) -> set[tuple[str, str]]:
     closed: a job whose recorded stage does not match contributes
     nothing to doneness.
     """
-    check = is_graded_trial if stage == "grade" else is_completed_trial
+    check = is_graded_trial if stage == "grade" else is_verified_trial
     done = set()
     for job_dir in job_dirs(jobs_root):
         record = read_run_record(job_dir)
         if record is None or record.get("stage") != stage:
             continue
-        completed = completed_task_names(job_dir, check)
+        verified = verified_task_names(job_dir, check)
         for item in _record_items(record):
             item_id = item.get("item_id")
             task_dir_name = item.get("task_dir_name")
@@ -260,7 +260,7 @@ def completed_items(jobs_root: Path, stage: Stage) -> set[tuple[str, str]]:
                 isinstance(item_id, str)
                 and isinstance(task_dir_name, str)
                 and isinstance(item_identity, str)
-                and task_dir_name in completed
+                and task_dir_name in verified
             ):
                 done.add((item_id, item_identity))
     return done
@@ -268,7 +268,7 @@ def completed_items(jobs_root: Path, stage: Stage) -> set[tuple[str, str]]:
 
 @dataclass(frozen=True)
 class SolveSubmission:
-    """A completed solve trial's submission artifact, ready for grading."""
+    """A verified solve trial's submission artifact, ready for grading."""
 
     item_id: str
     course_id: str
@@ -278,22 +278,22 @@ class SolveSubmission:
     directory: Path
 
 
-def completed_solve_submissions(
-    runs_root: Path,
+def verified_solve_submissions(
+    solving_root: Path,
     solve_config_name: str,
     *,
     course_id: str | None = None,
     assignment_id: str | None = None,
 ) -> list[SolveSubmission]:
-    """Submission artifacts of completed solve trials under a named solve config.
+    """Submission artifacts of verified solve trials under a named solve config.
 
-    Each completed trial is one gradable item. Trials whose submission
+    Each verified trial is one gradable item. Trials whose submission
     artifact is missing or empty (e.g. an output-contract failure) are
     skipped here; they remain visible as explicit outcomes in the solve
     job itself.
     """
     submissions = []
-    for job_dir in job_dirs(runs_root):
+    for job_dir in job_dirs(solving_root):
         record = read_run_record(job_dir)
         if record is None or record.get("stage") != "solve":
             continue
@@ -302,7 +302,7 @@ def completed_solve_submissions(
             continue
         items_by_task_dir = {item.get("task_dir_name"): item for item in _record_items(record)}
         for trial_dir, result in trial_results(job_dir):
-            if not is_completed_trial(result):
+            if not is_verified_trial(result):
                 continue
             item = items_by_task_dir.get(result.get("task_name"))
             if item is None:

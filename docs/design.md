@@ -109,6 +109,48 @@ analysis are in research.md.
     outside this repository. Repository work never attempts live runs and
     never depends on their results.
 
+## Vocabulary
+
+One concept, one name (AGENTS.md). These are the toolkit's terms, used
+identically in code, documentation, and output.
+
+- **Data root** — the single directory outside the repository holding
+  all real course data, submissions, and results
+  ([data-conventions.md](data-conventions.md)).
+- **Item** — one unit of work with its own doneness: a
+  (course, assignment) pair to solve, or one submission to grade.
+- **Task** — the Harbor task directory produced from an item:
+  instruction, environment, inputs, and verifier.
+- **Materialize** — write the concrete, byte-deterministic Harbor task
+  directory derived from data-root inputs and package templates.
+- **Trial** — one Harbor attempt at a task; `--repeats N` draws N
+  trials.
+- **Job** — one `aat` invocation's Harbor run over its materialized
+  tasks; its directory holds Harbor's output plus the run record.
+- **Run record** — `aat-run.json`: what a job ran — versions, config,
+  command, items, identities, input hashes.
+- **Stage** — which pipeline something belongs to: `solve` or `grade`.
+- **Experiment config** — a TOML file under `configs/` saying how to
+  run (agent, model, effort, prompt, rubric), never what to run on.
+- **Config identity** — the hash of the experiment config plus
+  everything it references (prompt, verifier, rendered task.toml);
+  labels and segregates results.
+- **Per-item identity** — the config identity folded with an item's
+  resolved inputs (environment template, rubric bytes); paired with the
+  item id, it is the doneness and pooling key.
+- **Verified trial** — a trial whose verifier recorded a reward,
+  whatever the reward's value (see denominator policy).
+- **Done** — an item needing no further work under a config: a verified
+  trial exists, and for grading items it holds a valid grading result.
+- **Environment flavor** — a capability-named Dockerfile template:
+  `data-science`, `optimization`, `scientific-python`, or `grading`.
+- **Base criteria** — the non-bonus rubric criteria; `base_points` and
+  `base_max` are their sums, the denominator of every percentage.
+- **Sidecar** — the optional `<assignment_id>.toml` beside an
+  assignment directory carrying per-assignment settings.
+- **Golden fixture** — a committed byte-exact expected task tree under
+  `tests/fixtures/golden/`, regenerated only deliberately.
+
 ## What goes where
 
 ```text
@@ -121,7 +163,7 @@ concurrency management               environment (Dockerfile) templates
 artifact + transcript capture        generic contract verifiers (2)
 ATIF trajectories                    grading output schema
 results viewer                       results loading into tidy tables
-                                     statistical metric.py
+                                     statistical metrics.py
 ```
 
 ### Benchmark pipeline
@@ -137,7 +179,7 @@ status, duration, token usage
         ↓  grading-task materializer (same path as student grading)
 Harbor grading job                            → see grading pipeline below
         ↓
-results.py + metric.py: score distributions, repeat variance, bootstrap CIs
+results.py + metrics.py: score distributions, repeat variance, bootstrap CIs
 clustered by assignment, explicit failure accounting
 ```
 
@@ -155,7 +197,7 @@ Harbor grading job: grader agent in isolated container
            derive and surface score_pct as the reward
 grading_result.json + per-problem Markdown justification
         ↓
-results.py + metric.py: grade distributions, repeat stability,
+results.py + metrics.py: grade distributions, repeat stability,
 explicit failure accounting
 (professor-grade comparison: deferred, see the roadmap)
 ```
@@ -184,10 +226,12 @@ valid.
 - `criteria` — non-empty list; each entry has `id` (unique string),
   `title`, `max_points` (> 0), `points` (`0 <= points <= max_points`),
   `evidence` (non-empty string citing what in the submission justifies
-  the score), and optional `bonus` (boolean, default false). At least
-  one criterion must be non-bonus, so `raw_max > 0` and the derived
-  percentages are always well defined.
-- `raw_points`, `raw_max` — sums over non-bonus criteria (self-check;
+  the score), and optional `bonus` (boolean, default false). Criteria
+  without the bonus flag are the **base criteria** — the ordinary,
+  non-optional part of the grade that bonus points are added on top of.
+  At least one criterion must be base, so `base_max > 0` and the
+  derived percentages are always well defined.
+- `base_points`, `base_max` — sums over base criteria (self-check;
   see below).
 - `bonus_points`, `bonus_max` — sums over bonus criteria, 0 when none
   (self-check).
@@ -218,21 +262,21 @@ to reduce parse failures.
 From a validated grading result the verifier derives two percentages,
 using the sums it computed from the criteria:
 
-- `score_pct` — `100 * (raw_points + bonus_points) / raw_max`, the
-  gradebook score: required and bonus criteria use the same raw-point
-  scale, and earned bonus counts above the required maximum. It can
-  exceed 100; for example, 10/10 required plus 1 bonus point is 110,
-  while 90/90 required plus 10 bonus points is approximately 111.11.
-- `required_pct` — `100 * raw_points / raw_max`, a 0–100 scale over
-  required criteria only, comparable across assignments regardless of
+- `score_pct` — `100 * (base_points + bonus_points) / base_max`, the
+  gradebook score: base and bonus criteria use the same point scale,
+  and earned bonus counts above the base maximum. It can exceed 100;
+  for example, 10/10 base plus 1 bonus point is 110, while 90/90 base
+  plus 10 bonus points is approximately 111.11.
+- `base_pct` — `100 * base_points / base_max`, a 0–100 scale over
+  base criteria only, comparable across assignments regardless of
   bonus availability.
 
 `score_pct` is surfaced as the primary Harbor reward so grades appear
-in the viewer; `required_pct` is written beside it in the verifier's
+in the viewer; `base_pct` is written beside it in the verifier's
 reward file and details. Concretely, the reward file is a flat JSON
-object of numbers: `{"reward": <score_pct>, "required_pct":
-<required_pct>}` on a valid result, and `{"reward": 0.0}` alone on a
-contract violation — so the presence of the `required_pct` key in a
+object of numbers: `{"reward": <score_pct>, "base_pct":
+<base_pct>}` on a valid result, and `{"reward": 0.0}` alone on a
+contract violation — so the presence of the `base_pct` key in a
 trial's recorded rewards is the machine-readable mark of a valid
 grading result, and is exactly what grading doneness reads (see run
 records and idempotence). Any contract violation yields reward 0.0 —
@@ -305,7 +349,7 @@ and mechanics never appear in configs (see CLI design).
 The config identity is `sha256` over the config file bytes, the
 referenced prompt template bytes, the stage's generic verifier
 bytes (for grading, the verifier script plus the copied
-`grading_schema.py`), and the stage's rendered task skeleton bytes
+`grading_schema.py`), and the stage's rendered task.toml template bytes
 (which carry the network policy, timeouts, and artifact path as
 materialized): an edit to any of these changes the experiment, so all
 of them invalidate doneness by construction. Each item
@@ -393,7 +437,8 @@ details are never copied into prompt text.
 ### Run records and idempotence
 
 Each `aat` invocation creates one job directory —
-`<utc-timestamp>__<config-name>__<identity-prefix8>/` — under `runs/`
+`<utc>__<config>__<hash8>/`, where the hash is the first eight
+characters of the config identity — under `solving/`
 (solve) or `grading/` (grading) in the data root. The AAT job directory
 **is** the Harbor job directory: `aat` passes the stage parent as
 Harbor's jobs directory and the AAT directory name as the Harbor job
@@ -428,7 +473,7 @@ suffix; a job's identity lives in `aat-run.json`, never in the
 directory name.
 
 Because the layout is flat, Harbor's viewer works at both levels:
-`harbor view` on the shared `runs/` or `grading/` parent browses all
+`harbor view` on the shared `solving/` or `grading/` parent browses all
 jobs of a stage, and the exact per-job `harbor view <job-directory>`
 command printed by `aat` opens one job.
 
@@ -440,13 +485,13 @@ format and is accepted as such, while Harbor's internal Python API
 (item id, per-item identity); the config identity is embedded in the
 per-item identity, which additionally folds in the item's environment
 and rubric bytes. A **solve** item is done when some solve job records
-a trial for it whose verifier recorded a reward — including reward 0,
-because a solver that produced no acceptable submission is a
-legitimate, countable outcome of the experiment; a late exception
-recorded after the reward does not un-complete the trial, and the
+a verified trial for it — one whose verifier recorded a reward,
+including reward 0, because a solver that produced no acceptable
+submission is a legitimate, countable outcome of the experiment; a late
+exception recorded after the reward does not un-verify the trial, and the
 statistics layer surfaces it as a flag. A **grading** item is done
 only when such a trial additionally produced a *valid* grading result,
-detected via the `required_pct` reward key (see reward semantics): an
+detected via the `base_pct` reward key (see reward semantics): an
 invalid or missing `grading_result.json` is a failed measurement, not
 a grade, so the item stays not-done and the next incremental run
 regrades it automatically — no dedicated retry flag is needed. Failed
@@ -471,7 +516,7 @@ under `analysis/` in the data root (see
 provenance: toolkit version, the config identities and job directories
 consumed, and the parameters of the computation.
 
-**Results loading (`results.py`).** One loader walks `runs/` and
+**Results loading (`results.py`).** One loader walks `solving/` and
 `grading/`, joins each job's `aat-run.json` with Harbor's per-trial
 `result.json` files and, for grading trials, the `grading_result.json`
 artifact — Harbor mirrors each declared artifact's absolute container
@@ -484,7 +529,7 @@ tidy pandas tables:
   identity, item identity, model, reasoning effort, job and trial
   names, outcome category, the late-exception flag (an exception
   recorded after the verifier's reward), reward, `score_pct`,
-  `required_pct`, the sums-consistency flag (recomputed from the
+  `base_pct`, the sums-consistency flag (recomputed from the
   artifact via `sums_report`, the same shared validation module the
   verifier uses), token counts (input, cached, output), reported cost
   when present, per-phase durations (environment setup, agent setup,
@@ -523,7 +568,7 @@ per-category counts and rates over all trials, so failures are never
 silently dropped and a contract-violation reward of 0.0 never enters a
 score mean.
 
-**Statistics (`metric.py`).** Trials pool by (item id, per-item
+**Statistics (`metrics.py`).** Trials pool by (item id, per-item
 identity) across jobs — the same key as doneness, so pooling can never
 merge trials whose rubric or environment differed. The initial metric
 set: per-item, per-assignment, and per-course score distributions and
@@ -546,7 +591,7 @@ grade near zero; `--repeats` on the same items measures whether
 repeated gradings agree. Pseudo-student ids begin with an underscore
 (e.g. `_reference`, `_irrelevant`); grade statistics exclude them and
 report them separately as the grader-check summary. No generation code
-exists or is needed: the checks reuse `aat grade` and `metric.py`
+exists or is needed: the checks reuse `aat grade` and `metrics.py`
 unchanged.
 
 **Reporting (`aat report`).** The third, read-only command renders the
@@ -627,7 +672,7 @@ what the toolkit provides, not by live runs.
    identical path — the vertical-slice acceptance criterion below.
 3. **Validity and statistics** — the results, statistics, and reporting
    contract above: results loading (`results.py`), outcome taxonomy and
-   denominator policy, `metric.py` with clustered bootstrap confidence
+   denominator policy, `metrics.py` with clustered bootstrap confidence
    intervals, and the read-only `aat report` command; plus repeat
    configurations, frozen grader-config versioning for reportable runs,
    the grader checks run on the target corpus (the manual procedure in
@@ -725,14 +770,14 @@ src/agentic_assessment_toolkit/
 ├── harbor.py              # step 10: harbor command construction,
 │                          #   subprocess invocation, run record
 ├── results.py             # stage 3: trials + criteria tables
-├── metric.py              # stage 3: pooled statistics, bootstrap CIs
+├── metrics.py              # stage 3: pooled statistics, bootstrap CIs
 ├── cli.py                 # step 10: argparse, `aat solve` / `aat grade`;
 │                          #   stage 3 adds `aat report`
 └── templates/             # package data (importlib.resources)
     ├── prompts/           # step 3: solver.md, grader.md
     ├── verifiers/         # steps 5 + 7: two standalone scripts
     ├── environments/      # step 8: one Dockerfile per flavor
-    └── task/              # task.toml skeleton
+    └── task/              # task.toml template
 ```
 
 Experiment configs live at the repository root under `configs/`,
@@ -768,7 +813,7 @@ Implementation rules:
 - **Prefer good dependencies over hand-rolled code.** When a
   well-maintained library replaces nontrivial logic,
   use it rather than reimplementing: `numpy`, `scipy`, and `pandas` are
-  the toolkit's statistics stack (`results.py`, `metric.py`: loading
+  the toolkit's statistics stack (`results.py`, `metrics.py`: loading
   and pooling trials, clustered bootstrap confidence intervals). Hand-roll only when the code must run standalone
   inside task containers, or when a dependency would be heavier than the
   code it replaces. The container exception is load-bearing: the shipped
@@ -804,13 +849,13 @@ Sampling depth is not experiment identity. `--repeats` changes how many
 trials are drawn, not the system under test or the judge, so it is
 excluded from the config identity hash (though recorded in the run
 record). Trials pool by (item id, per-item identity) across any number
-of jobs in `metric.py`: five repeats now and five later under the same
+of jobs in `metrics.py`: five repeats now and five later under the same
 config are one sample of ten. Pooling is valid only while the config is truly
 frozen — any prompt or rubric edit must be a new config version, which
 the identity hash enforces automatically.
 
 Idempotence: an item is **done** under a config when at least one
-completed trial exists for (item id, per-item identity) — for grading
+verified trial exists for (item id, per-item identity) — for grading
 items, one that produced a valid grading result; a failed grading is a
 failed measurement and is regraded by the next incremental run —
 derived from the data root layout with no separate bookkeeping state. Done items are skipped by
@@ -819,7 +864,7 @@ what was not yet graded"). `--force` never overwrites: it launches
 another job whose trials accumulate alongside the existing ones.
 Consequently, `--force --repeats N` adds N trials rather than bringing
 the historical total to N. A later `grade --from-solve` selects newly
-completed solver trials that do not yet have a completed grade; `--force`
+verified solver trials that are not yet graded; `--force`
 on `grade` adds independent grader trials for already-graded submissions.
 Regrading under a revised rubric needs no dedicated command: a new rubric
 is a new config identity, under which nothing is done yet, and prior
@@ -867,12 +912,12 @@ legitimate. Deliberately deferred: a combined solve-then-grade command
 (manual chaining is fine, and the solve/grade separation is load-bearing)
 and rich selection syntax (globs, exclusions) until a real run needs
 them. Grading selection is settled: `--from-solve NAME` grades
-completed, not-yet-graded solve trials produced under the named solve
+verified, not-yet-graded solve trials produced under the named solve
 config, optionally narrowed by `--course`/`--assignment`; without it,
 `--submissions PATH` or `--course`/`--assignment` select student
 folders from the submissions tree (`--submissions` must point inside
 `<data-root>/submissions`, at most three levels deep: course, student,
-assignment). Each completed solve trial with a
+assignment). Each verified solve trial with a
 non-empty submission artifact is one gradable item — a solve config run
 with `--repeats 5` yields five submissions per assignment, each graded (and
 repeatable-graded) independently; trials whose artifact is missing or

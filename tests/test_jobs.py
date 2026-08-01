@@ -17,7 +17,7 @@ from tests.test_config import SOLVE_TOML, write_config
 
 def test_job_config_shape(tmp_path: Path) -> None:
     config = load_config(write_config(tmp_path, SOLVE_TOML))
-    job_dir = tmp_path / "runs" / "20260731T000000Z__codex-high__cccccccc"
+    job_dir = tmp_path / "solving" / "20260731T000000Z__codex-high__cccccccc"
     job_config = build_harbor_job_config(
         config=config,
         task_dirs=[tmp_path / "tasks" / "t1", tmp_path / "tasks" / "t2"],
@@ -27,7 +27,7 @@ def test_job_config_shape(tmp_path: Path) -> None:
     )
     # Flat layout: the AAT job directory is the Harbor job directory.
     assert job_config == {
-        "jobs_dir": str(tmp_path / "runs"),
+        "jobs_dir": str(tmp_path / "solving"),
         "job_name": "20260731T000000Z__codex-high__cccccccc",
         "n_attempts": 3,
         "n_concurrent_trials": 5,

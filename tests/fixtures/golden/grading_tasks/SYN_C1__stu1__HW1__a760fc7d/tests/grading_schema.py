@@ -27,7 +27,7 @@ _REQUIRED_FIELDS = (
 )
 # Authored by the grader as a self-check; validated for consistency in
 # sums_report(), never required and never authoritative.
-_SUM_FIELDS = ("raw_points", "raw_max", "bonus_points", "bonus_max")
+_SUM_FIELDS = ("base_points", "base_max", "bonus_points", "bonus_max")
 _ABS_TOL = 1e-6
 
 
@@ -159,8 +159,8 @@ def computed_sums(data: dict[str, object]) -> dict[str, float]:
             sums["bonus_points"] += points
             sums["bonus_max"] += max_points
         else:
-            sums["raw_points"] += points
-            sums["raw_max"] += max_points
+            sums["base_points"] += points
+            sums["base_max"] += max_points
     return sums
 
 
@@ -210,18 +210,18 @@ def sums_report(data: dict[str, object]) -> dict[str, object]:
 def derive_scores(data: dict[str, object]) -> dict[str, float]:
     """Derive the percentage scores from a validated grading result.
 
-    ``score_pct`` counts earned bonus points over the required maximum,
-    so it can exceed 100; ``required_pct`` covers required criteria only
-    (0-100). Percentages are never authored by the grader, and the sums
+    ``score_pct`` counts earned bonus points over the base maximum, so
+    it can exceed 100; ``base_pct`` covers base (non-bonus) criteria
+    only (0-100). Percentages are never authored by the grader, and the sums
     they derive from are computed from the criteria, never read from the
     authored self-check fields — all summation and division lives here.
     Call only on data that passed validate_grading_result, which
-    guarantees a non-bonus criterion exists and so ``raw_max > 0``.
+    guarantees a non-bonus criterion exists and so ``base_max > 0``.
     """
     sums = computed_sums(data)
     return {
-        "score_pct": 100.0 * (sums["raw_points"] + sums["bonus_points"]) / sums["raw_max"],
-        "required_pct": 100.0 * sums["raw_points"] / sums["raw_max"],
+        "score_pct": 100.0 * (sums["base_points"] + sums["bonus_points"]) / sums["base_max"],
+        "base_pct": 100.0 * sums["base_points"] / sums["base_max"],
     }
 
 

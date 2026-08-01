@@ -25,7 +25,7 @@ from .hashing import sha256_parts
 Stage = Literal["solve", "grade"]
 
 ENVIRONMENT_FLAVORS = ("data-science", "grading", "optimization", "scientific-python")
-GRADING_ENVIRONMENT = "grading"
+GRADING_FLAVOR = "grading"
 
 # Per-stage task.toml substitutions: (artifact source path, agent timeout).
 # These render into every materialized task and are part of the config
@@ -158,7 +158,7 @@ def verifier_path(stage: Stage) -> Path:
     return _template_root() / "verifiers" / filename
 
 
-def task_skeleton_path() -> Path:
+def task_template_path() -> Path:
     return _template_root() / "task" / "task.toml"
 
 
@@ -169,10 +169,10 @@ def grading_schema_source_path() -> Path:
 
 
 def rendered_task_toml(stage: Stage) -> str:
-    """The stage's task.toml as materialized: skeleton plus stage settings."""
+    """The stage's task.toml as materialized: template plus stage settings."""
     artifact_source, agent_timeout_sec = STAGE_TASK_SETTINGS[stage]
-    skeleton = task_skeleton_path().read_text(encoding="utf-8")
-    return skeleton.format(
+    template = task_template_path().read_text(encoding="utf-8")
+    return template.format(
         artifact_source=artifact_source,
         agent_timeout_sec=f"{agent_timeout_sec:.1f}",
     )
@@ -194,7 +194,7 @@ def verifier_parts(stage: Stage) -> list[tuple[str, bytes]]:
 def config_identity(config: ExperimentConfig) -> str:
     # The rendered (not raw) task.toml is hashed so that the per-stage
     # substitutions — artifact path, agent timeout — are inside the
-    # identity along with the skeleton's network policy and timeouts.
+    # identity along with the template's network policy and timeouts.
     parts = [
         ("config", config.raw_bytes),
         ("prompt", prompt_path(config.prompt_name).read_bytes()),
@@ -205,14 +205,14 @@ def config_identity(config: ExperimentConfig) -> str:
 
 
 def item_identity(
-    base_identity: str,
-    environment_bytes: bytes,
+    config_identity: str,
+    environment_template_bytes: bytes,
     rubric_bytes: bytes | None = None,
 ) -> str:
     """Per-item identity: the config identity plus the item's resolved inputs."""
     parts = [
-        ("config-identity", base_identity.encode("ascii")),
-        ("environment", environment_bytes),
+        ("config-identity", config_identity.encode("ascii")),
+        ("environment", environment_template_bytes),
     ]
     if rubric_bytes is not None:
         parts.append(("rubric", rubric_bytes))

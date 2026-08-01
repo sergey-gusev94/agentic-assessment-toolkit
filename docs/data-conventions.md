@@ -47,7 +47,7 @@ $AAT_DATA_DIR/
 ├── tables/                     # rosters, grade exports, identity mappings
 ├── tasks/                      # materialized Harbor task inputs, per job
 │   └── <utc>__<config>__<hash8>/
-├── runs/                       # solve jobs (Harbor job dirs + aat-run.json)
+├── solving/                    # solve jobs (Harbor job dirs + aat-run.json)
 │   └── <utc>__<config>__<hash8>/
 ├── grading/                    # grading jobs, any submission source
 │   └── <utc>__<config>__<hash8>/
@@ -59,7 +59,7 @@ Notes:
 
 - `courses/` content is immutable once registered; benchmark results
   reference assignments, rubrics, and prompts by hash.
-- Transcripts and trajectories under `runs/` and `grading/` are data, not
+- Transcripts and trajectories under `solving/` and `grading/` are data, not
   logs: they embed full assignment content and possibly student text.
 - `tables/` holds the only mapping between real identities and anonymized
   IDs; it never leaves the data root.
@@ -73,7 +73,7 @@ Notes:
   job-directory subdirectory without a per-trial result file as a
   stale trial; `harbor-job.json` references them by absolute path.
 - `analysis/` holds only derived outputs: statistics tables and
-  reports. Everything in it is regenerable from `runs/`, `grading/`,
+  reports. Everything in it is regenerable from `solving/`, `grading/`,
   and `tables/`; each report invocation writes one timestamped
   subdirectory containing its tables, Markdown report, and provenance
   (toolkit version, config identities, job directories consumed, and
@@ -112,8 +112,8 @@ Notes:
 ## Job directories and run records
 
 Each `aat solve` or `aat grade` invocation creates one job directory —
-`<utc-timestamp>__<config-name>__<identity-prefix8>/` (with a rare `-N`
-suffix on same-second collisions) — under `runs/` (solve jobs) or
+`<utc>__<config>__<hash8>/` (with a rare `-N`
+suffix on same-second collisions) — under `solving/` (solve jobs) or
 `grading/` (grading jobs, whether the submissions are benchmark
 artifacts or real student folders). The AAT job directory is itself the
 Harbor job directory: Harbor's `config.json`, `lock.json`,
@@ -132,13 +132,13 @@ input hashes (assignment, prompt, environment template, verifier,
 rubric, submission, reference solution, grading schema — as
 applicable). Doneness of an item under a config is derived from these
 directories and Harbor's per-trial result files; there is no separate
-bookkeeping state. A solve item is done when a completed, non-error
-trial exists (a 0-reward contract failure is a countable outcome); a
-grading item is done only when a completed trial produced a valid
+bookkeeping state. A solve item is done when a verified trial — one
+whose verifier recorded a reward — exists (a 0-reward contract failure
+is a countable outcome); a grading item is done only when such a trial produced a valid
 grading result — failed gradings are regraded by the next incremental
 run.
 
-Because the layout is flat, `harbor view` works on the shared `runs/`
+Because the layout is flat, `harbor view` works on the shared `solving/`
 or `grading/` parent to browse a stage's jobs, and the exact
 `harbor view <specific-job-directory>` command printed by `aat` opens
 one job. Harbor may also print
@@ -169,7 +169,7 @@ documentation, and demos.
 The structural rule above is the primary defense. In addition, the repository
 keeps:
 
-- `.gitignore` patterns for data-shaped directories (`data/`, `runs/`,
+- `.gitignore` patterns for data-shaped directories (`data/`, `solving/`, `runs/`,
   `jobs/`, `grading/`, `submissions/`, `reference_repos/`), so accidental
   in-repo copies stay untracked.
 - Pre-commit guards: `check-added-large-files` (500 KB threshold) and a

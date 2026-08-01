@@ -63,7 +63,7 @@ def test_solve_dry_run_lists_items_without_writing(
     assert f"{COURSE_ID}/HW1" in out
     assert f"{COURSE_ID}/HW2" in out
     assert "would run 2 of 2 item(s)" in out
-    assert job_dirs(data_root, "runs") == []
+    assert job_dirs(data_root, "solving") == []
 
 
 def test_solve_materialize_only_writes_job_dir(
@@ -83,7 +83,7 @@ def test_solve_materialize_only_writes_job_dir(
         )
         == 0
     )
-    jobs = job_dirs(data_root, "runs")
+    jobs = job_dirs(data_root, "solving")
     assert len(jobs) == 1
     job_dir = jobs[0]
     assert "__codex-high__" in job_dir.name
@@ -102,7 +102,7 @@ def test_solve_materialize_only_writes_job_dir(
     # Tasks live outside the Harbor job directory (resume safety).
     assert task_path.parent == data_root / "tasks" / job_dir.name
     # Flat layout: Harbor's job directory is the AAT job directory.
-    assert job_config["jobs_dir"] == str(data_root / "runs")
+    assert job_config["jobs_dir"] == str(data_root / "solving")
     assert job_config["job_name"] == job_dir.name
     assert job_config["n_concurrent_trials"] == 8
     assert record["command"] == ["harbor", "run", "-c", str(job_dir / "harbor-job.json"), "--yes"]
@@ -134,7 +134,7 @@ def test_grade_max_concurrent_trials_is_forwarded_and_recorded(
     assert job_config["n_concurrent_trials"] == 3
 
 
-def test_solve_doneness_skips_completed_items(
+def test_solve_doneness_skips_done_items(
     data_root: Path, solve_config: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     assert (
@@ -151,7 +151,7 @@ def test_solve_doneness_skips_completed_items(
         )
         == 0
     )
-    job_dir = job_dirs(data_root, "runs")[0]
+    job_dir = job_dirs(data_root, "solving")[0]
     record = json.loads((job_dir / "aat-run.json").read_text(encoding="utf-8"))
     task_dir_name = record["items"][0]["task_dir_name"]
     write_trial(job_dir, f"{task_dir_name[:32]}__abc1234", task_name=task_dir_name)
@@ -172,7 +172,7 @@ def test_solve_doneness_skips_completed_items(
         == 0
     )
     assert "nothing to do" in capsys.readouterr().out
-    assert len(job_dirs(data_root, "runs")) == 1
+    assert len(job_dirs(data_root, "solving")) == 1
 
     # --force launches another job whose trials accumulate alongside.
     assert (
@@ -190,7 +190,7 @@ def test_solve_doneness_skips_completed_items(
         )
         == 0
     )
-    assert len(job_dirs(data_root, "runs")) == 2
+    assert len(job_dirs(data_root, "solving")) == 2
 
 
 def test_solve_selection_errors(data_root: Path, solve_config: Path) -> None:
@@ -277,7 +277,7 @@ def test_grade_from_solve(data_root: Path, solve_config: Path, grade_config: Pat
         )
         == 0
     )
-    solve_job = job_dirs(data_root, "runs")[0]
+    solve_job = job_dirs(data_root, "solving")[0]
     record = json.loads((solve_job / "aat-run.json").read_text(encoding="utf-8"))
     task_dir_name = record["items"][0]["task_dir_name"]
     write_trial(
@@ -384,7 +384,7 @@ def test_doneness_is_per_item_not_per_identity_solve(
         )
         == 0
     )
-    job_dir = job_dirs(data_root, "runs")[0]
+    job_dir = job_dirs(data_root, "solving")[0]
     record = json.loads((job_dir / "aat-run.json").read_text(encoding="utf-8"))
     task_dir_name = record["items"][0]["task_dir_name"]
     write_trial(job_dir, f"{task_dir_name[:32]}__abc1234", task_name=task_dir_name)
@@ -465,7 +465,7 @@ def test_grade_invalid_result_is_regraded(
         job_dir,
         f"{item['task_dir_name'][:32]}__graded1",
         task_name=item["task_dir_name"],
-        rewards={"reward": 0.0},  # violation: no required_pct, no valid result
+        rewards={"reward": 0.0},  # violation: no base_pct, no valid result
     )
 
     capsys.readouterr()
@@ -511,7 +511,7 @@ def test_solve_launch_propagates_harbor_exit_code(
         cli.main(solve_args(data_root, solve_config, "--course", COURSE_ID, "--assignment", "HW1"))
         == 7
     )
-    job_dir = job_dirs(data_root, "runs")[0]
+    job_dir = job_dirs(data_root, "solving")[0]
     record = json.loads((job_dir / "aat-run.json").read_text(encoding="utf-8"))
     assert record["executed"] is True
     assert record["harbor_version"] == "0.20.0-test"

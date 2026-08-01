@@ -130,12 +130,12 @@ def make_grading_output(tmp_path: Path, result: dict[str, object] | None) -> Pat
 def test_grading_verifier_surfaces_derived_scores(tmp_path: Path) -> None:
     output_dir = make_grading_output(tmp_path, valid_result())
     result = run_grading_verifier(tmp_path, output_dir)
-    assert result["reward"] == 85.0  # (8 raw + 0.5 bonus) / 10 required max
+    assert result["reward"] == 85.0  # (8 base + 0.5 bonus) / 10 base max
     assert result["details"]["contract_valid"] is True
     assert result["details"]["score_pct"] == 85.0
-    assert result["details"]["required_pct"] == 80.0
+    assert result["details"]["base_pct"] == 80.0
     assert result["details"]["sums_consistent"] is True
-    assert result["rewards_file"] == {"reward": 85.0, "required_pct": 80.0}
+    assert result["rewards_file"] == {"reward": 85.0, "base_pct": 80.0}
 
 
 def test_grading_verifier_tolerates_scratch_files(tmp_path: Path) -> None:
@@ -148,26 +148,26 @@ def test_grading_verifier_tolerates_scratch_files(tmp_path: Path) -> None:
 def test_grading_verifier_flags_inconsistent_sums(tmp_path: Path) -> None:
     """An authored-sum mismatch is recorded, never a contract failure."""
     flagged = valid_result()
-    flagged["raw_points"] = 9
+    flagged["base_points"] = 9
     output_dir = make_grading_output(tmp_path, flagged)
     result = run_grading_verifier(tmp_path, output_dir)
     assert result["reward"] == 85.0
     assert result["details"]["contract_valid"] is True
     assert result["details"]["sums_consistent"] is False
-    assert result["details"]["sums"]["authored"]["raw_points"] == 9
-    assert result["details"]["sums"]["computed"]["raw_points"] == 8.0
-    assert result["rewards_file"] == {"reward": 85.0, "required_pct": 80.0}
+    assert result["details"]["sums"]["authored"]["base_points"] == 9
+    assert result["details"]["sums"]["computed"]["base_points"] == 8.0
+    assert result["rewards_file"] == {"reward": 85.0, "base_pct": 80.0}
 
 
 def test_grading_verifier_emits_strict_json_for_nan_sums(tmp_path: Path) -> None:
     """A NaN authored sum must not leak into the details as invalid JSON."""
     flagged = valid_result()
-    flagged["raw_points"] = float("nan")
+    flagged["base_points"] = float("nan")
     output_dir = make_grading_output(tmp_path, flagged)
     result = run_grading_verifier(tmp_path, output_dir)
     assert result["reward"] == 85.0
     assert result["details"]["sums_consistent"] is False
-    assert result["details"]["sums"]["authored"]["raw_points"] == "nan"
+    assert result["details"]["sums"]["authored"]["base_points"] == "nan"
 
 
 def test_grading_verifier_rejects_structural_violation(tmp_path: Path) -> None:

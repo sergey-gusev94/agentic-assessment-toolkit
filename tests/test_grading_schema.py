@@ -42,8 +42,8 @@ def valid_result() -> dict[str, Any]:
                 "bonus": True,
             },
         ],
-        "raw_points": 8,
-        "raw_max": 10,
+        "base_points": 8,
+        "base_max": 10,
         "bonus_points": 0.5,
         "bonus_max": 1,
         "overall_comment": "Good work; method could be clearer.",
@@ -63,7 +63,7 @@ def test_missing_fields_are_reported() -> None:
     assert "missing required field 'criteria'" in errors
     assert "missing required field 'overall_comment'" in errors
     # Authored sums are a self-check, not required fields.
-    assert not any("raw_points" in e for e in errors)
+    assert not any("base_points" in e for e in errors)
 
 
 def test_wrong_schema_version() -> None:
@@ -130,7 +130,7 @@ def test_all_bonus_criteria_rejected() -> None:
     data = valid_result()
     for entry in data["criteria"]:
         entry["bonus"] = True
-    data.update(raw_points=0, raw_max=0, bonus_points=8.5, bonus_max=11)
+    data.update(base_points=0, base_max=0, bonus_points=8.5, bonus_max=11)
     assert any(
         "at least one criterion must be non-bonus" in e for e in validate_grading_result(data)
     )
@@ -138,49 +138,49 @@ def test_all_bonus_criteria_rejected() -> None:
 
 def test_sum_mismatch_is_flagged_not_rejected() -> None:
     data = valid_result()
-    data["raw_points"] = 9
+    data["base_points"] = 9
     assert validate_grading_result(data) == []
     report: dict[str, Any] = sums_report(data)
     assert report["consistent"] is False
-    assert report["authored"]["raw_points"] == 9
-    assert report["computed"]["raw_points"] == 8.0
+    assert report["authored"]["base_points"] == 9
+    assert report["computed"]["base_points"] == 8.0
 
 
 def test_missing_sums_are_valid_but_inconsistent() -> None:
     data = valid_result()
-    del data["raw_points"]
+    del data["base_points"]
     assert validate_grading_result(data) == []
     report: dict[str, Any] = sums_report(data)
     assert report["consistent"] is False
-    assert report["authored"]["raw_points"] is None
+    assert report["authored"]["base_points"] is None
 
 
 def test_non_finite_authored_sum_is_flagged_and_json_safe() -> None:
     data = valid_result()
-    data["raw_points"] = float("nan")
+    data["base_points"] = float("nan")
     assert validate_grading_result(data) == []
     report: dict[str, Any] = sums_report(data)
     assert report["consistent"] is False
     # Recorded as its repr so the report stays strict-JSON serializable.
-    assert report["authored"]["raw_points"] == "nan"
+    assert report["authored"]["base_points"] == "nan"
     json.dumps(report, allow_nan=False)  # must not raise
 
 
 def test_huge_int_authored_sum_does_not_crash() -> None:
     data = valid_result()
-    data["raw_points"] = 10**400  # float() would raise OverflowError
+    data["base_points"] = 10**400  # float() would raise OverflowError
     assert validate_grading_result(data) == []
     report: dict[str, Any] = sums_report(data)
     assert report["consistent"] is False
-    assert report["authored"]["raw_points"] == 10**400
+    assert report["authored"]["base_points"] == 10**400
 
 
 def test_consistent_sums_report() -> None:
     report = sums_report(valid_result())
     assert report["consistent"] is True
     assert report["computed"] == {
-        "raw_points": 8.0,
-        "raw_max": 10.0,
+        "base_points": 8.0,
+        "base_max": 10.0,
         "bonus_points": 0.5,
         "bonus_max": 1.0,
     }
@@ -188,8 +188,8 @@ def test_consistent_sums_report() -> None:
 
 def test_computed_sums_from_criteria() -> None:
     assert computed_sums(valid_result()) == {
-        "raw_points": 8.0,
-        "raw_max": 10.0,
+        "base_points": 8.0,
+        "base_max": 10.0,
         "bonus_points": 0.5,
         "bonus_max": 1.0,
     }
@@ -197,23 +197,23 @@ def test_computed_sums_from_criteria() -> None:
 
 def test_derive_scores_counts_bonus_over_required_max() -> None:
     scores = derive_scores(valid_result())
-    assert scores == {"score_pct": 85.0, "required_pct": 80.0}
+    assert scores == {"score_pct": 85.0, "base_pct": 80.0}
 
 
 def test_derive_scores_ignores_authored_sums() -> None:
     """The computed sums are authoritative; the self-check never enters scoring."""
     data = valid_result()
-    data["raw_points"] = 999
-    assert derive_scores(data) == {"score_pct": 85.0, "required_pct": 80.0}
+    data["base_points"] = 999
+    assert derive_scores(data) == {"score_pct": 85.0, "base_pct": 80.0}
 
 
 def test_derive_scores_can_exceed_100() -> None:
     data = valid_result()
     data["criteria"][0]["points"] = 8
     data["criteria"][2]["points"] = 1
-    data.update(raw_points=10, bonus_points=1)
+    data.update(base_points=10, bonus_points=1)
     assert validate_grading_result(data) == []
-    assert derive_scores(data) == {"score_pct": 110.0, "required_pct": 100.0}
+    assert derive_scores(data) == {"score_pct": 110.0, "base_pct": 100.0}
 
 
 def test_derive_scores_uses_same_scale_for_required_and_bonus_points() -> None:
@@ -221,10 +221,10 @@ def test_derive_scores_uses_same_scale_for_required_and_bonus_points() -> None:
     data["criteria"][0].update(max_points=70, points=70)
     data["criteria"][1].update(max_points=20, points=20)
     data["criteria"][2].update(max_points=10, points=10)
-    data.update(raw_points=90, raw_max=90, bonus_points=10, bonus_max=10)
+    data.update(base_points=90, base_max=90, bonus_points=10, bonus_max=10)
     assert validate_grading_result(data) == []
     scores = derive_scores(data)
-    assert scores["required_pct"] == 100.0
+    assert scores["base_pct"] == 100.0
     assert scores["score_pct"] == pytest.approx(111.11111111111111)
 
 
@@ -242,8 +242,8 @@ def test_float_accumulation_tolerated() -> None:
     data = {
         "schema_version": 1,
         "criteria": criteria,
-        "raw_points": 1.0,
-        "raw_max": 1.0,
+        "base_points": 1.0,
+        "base_max": 1.0,
         "bonus_points": 0,
         "bonus_max": 0,
         "overall_comment": "ok",
@@ -277,7 +277,7 @@ def test_load_valid_file(tmp_path: Path) -> None:
     path.write_text(json.dumps(valid_result()), encoding="utf-8")
     data, errors = load_grading_result(path)
     assert errors == []
-    assert data is not None and data["raw_points"] == 8
+    assert data is not None and data["base_points"] == 8
 
 
 def test_non_finite_points_rejected() -> None:

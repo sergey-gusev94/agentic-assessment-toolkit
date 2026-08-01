@@ -10,21 +10,21 @@ from agentic_assessment_toolkit.config import load_config
 from agentic_assessment_toolkit.harbor import (
     RunRecordItem,
     build_harbor_command,
-    completed_items,
-    completed_solve_submissions,
-    harbor_environment,
+    done_items,
+    harbor_subprocess_env,
     harbor_version,
-    is_completed_trial,
     is_graded_trial,
+    is_verified_trial,
     job_dir_name,
     read_run_record,
+    verified_solve_submissions,
     write_run_record,
 )
 from tests.test_config import GRADE_TOML, SOLVE_TOML, write_config
 
 # What the grading verifier emits for a valid grading result; a contract
-# violation emits {"reward": 0.0} with no required_pct.
-GRADED_REWARDS = {"reward": 85.0, "required_pct": 80.0}
+# violation emits {"reward": 0.0} with no base_pct.
+GRADED_REWARDS = {"reward": 85.0, "base_pct": 80.0}
 
 
 def test_harbor_version_is_pinned_range() -> None:
@@ -37,7 +37,7 @@ def test_build_harbor_command() -> None:
 
 
 def test_harbor_environment_disables_telemetry() -> None:
-    environment = harbor_environment({"PATH": "/bin"})
+    environment = harbor_subprocess_env({"PATH": "/bin"})
     assert environment["HARBOR_TELEMETRY"] == "0"
     assert environment["PATH"] == "/bin"
 
@@ -94,7 +94,7 @@ def write_trial(
     trial_name: str,
     *,
     task_name: str,
-    completed: bool = True,
+    verified: bool = True,
     rewards: dict[str, float] | None = None,
     submission_files: dict[str, str] | None = None,
 ) -> Path:
@@ -104,9 +104,9 @@ def write_trial(
     trial_dir.mkdir(parents=True)
     result: dict[str, object] = {
         "task_name": task_name,
-        "exception_info": None if completed else {"exception_type": "AgentTimeoutError"},
+        "exception_info": None if verified else {"exception_type": "AgentTimeoutError"},
         "verifier_result": (
-            {"rewards": {"reward": 1.0} if rewards is None else rewards} if completed else None
+            {"rewards": {"reward": 1.0} if rewards is None else rewards} if verified else None
         ),
     }
     (trial_dir / "result.json").write_text(json.dumps(result), encoding="utf-8")
@@ -121,7 +121,7 @@ def write_trial(
 def test_run_record_roundtrip(tmp_path: Path) -> None:
     config_path = write_config(tmp_path, SOLVE_TOML, "codex-high")
     job_dir = write_job(
-        tmp_path / "runs",
+        tmp_path / "solving",
         "20260731T000000Z__codex-high__cccccccc",
         stage="solve",
         config_path=config_path,
@@ -147,21 +147,21 @@ def test_read_run_record_handles_garbage(tmp_path: Path) -> None:
     assert read_run_record(job_dir) is None
 
 
-def test_is_completed_trial() -> None:
-    assert is_completed_trial(
+def test_is_verified_trial() -> None:
+    assert is_verified_trial(
         {"exception_info": None, "verifier_result": {"rewards": {"reward": 0.0}}}
     )
     # A recorded reward proves verification completed, even if a late
     # exception was also recorded.
-    assert is_completed_trial(
+    assert is_verified_trial(
         {
             "exception_info": {"exception_type": "X"},
             "verifier_result": {"rewards": {"reward": 1.0}},
         }
     )
-    assert not is_completed_trial({"exception_info": {"exception_type": "X"}})
-    assert not is_completed_trial({"exception_info": None, "verifier_result": None})
-    assert not is_completed_trial({"exception_info": None, "verifier_result": {"rewards": {}}})
+    assert not is_verified_trial({"exception_info": {"exception_type": "X"}})
+    assert not is_verified_trial({"exception_info": None, "verifier_result": None})
+    assert not is_verified_trial({"exception_info": None, "verifier_result": {"rewards": {}}})
 
 
 def test_is_graded_trial() -> None:
@@ -176,9 +176,9 @@ def test_is_graded_trial() -> None:
     assert not is_graded_trial({"exception_info": None, "verifier_result": {"rewards": [1.0]}})
 
 
-def test_completed_items(tmp_path: Path) -> None:
+def test_done_items(tmp_path: Path) -> None:
     config_path = write_config(tmp_path, SOLVE_TOML, "codex-high")
-    jobs_root = tmp_path / "runs"
+    jobs_root = tmp_path / "solving"
     job_dir = write_job(
         jobs_root,
         "20260731T000000Z__codex-high__cccccccc",
@@ -190,18 +190,18 @@ def test_completed_items(tmp_path: Path) -> None:
             make_item("t3", "C1/HW3", "never-ran-identity"),
         ],
     )
-    write_trial(job_dir, "t1__abc1234", task_name="t1", completed=True)
-    write_trial(job_dir, "t2__def5678", task_name="t2", completed=False)
-    assert completed_items(jobs_root, "solve") == {("C1/HW1", "done-identity")}
-    assert completed_items(tmp_path / "absent", "solve") == set()
+    write_trial(job_dir, "t1__abc1234", task_name="t1", verified=True)
+    write_trial(job_dir, "t2__def5678", task_name="t2", verified=False)
+    assert done_items(jobs_root, "solve") == {("C1/HW1", "done-identity")}
+    assert done_items(tmp_path / "absent", "solve") == set()
     # Fails closed: a record whose stage does not match contributes nothing.
-    assert completed_items(jobs_root, "grade") == set()
+    assert done_items(jobs_root, "grade") == set()
 
 
 def test_job_level_files_and_tasks_dir_are_not_trials(tmp_path: Path) -> None:
     """Flat layout: only subdirectories with a result.json are trials."""
     config_path = write_config(tmp_path, SOLVE_TOML, "codex-high")
-    jobs_root = tmp_path / "runs"
+    jobs_root = tmp_path / "solving"
     job_dir = write_job(
         jobs_root,
         "20260731T000000Z__codex-high__cccccccc",
@@ -215,13 +215,13 @@ def test_job_level_files_and_tasks_dir_are_not_trials(tmp_path: Path) -> None:
     # A stray directory without result.json (e.g. an interrupted trial).
     (job_dir / "t1__interrup").mkdir()
     write_trial(job_dir, "t1__abc1234", task_name="t1")
-    assert completed_items(jobs_root, "solve") == {("C1/HW1", "i1")}
+    assert done_items(jobs_root, "solve") == {("C1/HW1", "i1")}
 
 
 def test_solve_contract_failure_counts_done(tmp_path: Path) -> None:
     """A 0-reward solve is a countable outcome, not a retryable failure."""
     config_path = write_config(tmp_path, SOLVE_TOML, "codex-high")
-    jobs_root = tmp_path / "runs"
+    jobs_root = tmp_path / "solving"
     job_dir = write_job(
         jobs_root,
         "20260731T000000Z__codex-high__cccccccc",
@@ -230,7 +230,7 @@ def test_solve_contract_failure_counts_done(tmp_path: Path) -> None:
         items=[make_item("t1", "C1/HW1", "i1")],
     )
     write_trial(job_dir, "t1__abc1234", task_name="t1", rewards={"reward": 0.0})
-    assert completed_items(jobs_root, "solve") == {("C1/HW1", "i1")}
+    assert done_items(jobs_root, "solve") == {("C1/HW1", "i1")}
 
 
 def test_grading_doneness_requires_valid_result(tmp_path: Path) -> None:
@@ -249,12 +249,12 @@ def test_grading_doneness_requires_valid_result(tmp_path: Path) -> None:
     )
     write_trial(job_dir, "t1__abc1234", task_name="t1", rewards=GRADED_REWARDS)
     write_trial(job_dir, "t2__def5678", task_name="t2", rewards={"reward": 0.0})
-    assert completed_items(jobs_root, "grade") == {("C1/stu1/HW1", "i1")}
+    assert done_items(jobs_root, "grade") == {("C1/stu1/HW1", "i1")}
 
 
-def test_completed_solve_submissions(tmp_path: Path) -> None:
+def test_verified_solve_submissions(tmp_path: Path) -> None:
     config_path = write_config(tmp_path, SOLVE_TOML, "codex-high")
-    jobs_root = tmp_path / "runs"
+    jobs_root = tmp_path / "solving"
     job_dir = write_job(
         jobs_root,
         "20260731T000000Z__codex-high__cccccccc",
@@ -266,10 +266,10 @@ def test_completed_solve_submissions(tmp_path: Path) -> None:
         ],
     )
     write_trial(job_dir, "t1__abc1234", task_name="t1", submission_files={"answer.md": "42"})
-    write_trial(job_dir, "t1__zzz9999", task_name="t1", completed=False)
+    write_trial(job_dir, "t1__zzz9999", task_name="t1", verified=False)
     write_trial(job_dir, "t2__ghi9012", task_name="t2", submission_files=None)  # no artifact
 
-    submissions = completed_solve_submissions(jobs_root, "codex-high")
+    submissions = verified_solve_submissions(jobs_root, "codex-high")
     assert len(submissions) == 1
     submission = submissions[0]
     assert submission.course_id == "C1"
@@ -278,15 +278,15 @@ def test_completed_solve_submissions(tmp_path: Path) -> None:
     assert submission.item_id == f"{job_dir.name}/t1__abc1234"
     assert (submission.directory / "answer.md").read_text(encoding="utf-8") == "42"
 
-    assert completed_solve_submissions(jobs_root, "other-config") == []
-    assert completed_solve_submissions(jobs_root, "codex-high", course_id="C2") == []
-    assert completed_solve_submissions(jobs_root, "codex-high", assignment_id="HW2") == []
+    assert verified_solve_submissions(jobs_root, "other-config") == []
+    assert verified_solve_submissions(jobs_root, "codex-high", course_id="C2") == []
+    assert verified_solve_submissions(jobs_root, "codex-high", assignment_id="HW2") == []
 
 
 def test_grading_jobs_are_not_solve_sources(tmp_path: Path) -> None:
     grade_toml = SOLVE_TOML.replace('"solve"', '"grade"').replace('"solver"', '"grader"')
     config_path = write_config(tmp_path, grade_toml, "codex-grader-high")
-    jobs_root = tmp_path / "runs"
+    jobs_root = tmp_path / "solving"
     job_dir = write_job(
         jobs_root,
         "20260731T000000Z__codex-grader-high__cccccccc",
@@ -295,13 +295,13 @@ def test_grading_jobs_are_not_solve_sources(tmp_path: Path) -> None:
         items=[make_item("t1", "C1/HW1", "i1")],
     )
     write_trial(job_dir, "t1__abc1234", task_name="t1", submission_files={"a.md": "x"})
-    assert completed_solve_submissions(jobs_root, "codex-grader-high") == []
+    assert verified_solve_submissions(jobs_root, "codex-grader-high") == []
 
 
 def test_run_record_is_deterministic_json(tmp_path: Path) -> None:
     config_path = write_config(tmp_path, SOLVE_TOML, "codex-high")
     job_dir = write_job(
-        tmp_path / "runs",
+        tmp_path / "solving",
         "j1",
         stage="solve",
         config_path=config_path,

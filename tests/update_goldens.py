@@ -1,4 +1,4 @@
-"""Regenerate the golden materialized-task fixtures.
+"""Regenerate the golden fixtures: the expected materialized tasks.
 
 Run from the repository root after a deliberate contract change:
 

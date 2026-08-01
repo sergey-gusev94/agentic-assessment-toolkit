@@ -6,8 +6,8 @@ verbatim copy of the toolkit's grading_schema.py — one source of truth
 for validation (docs/design.md, "Grading output schema"). Validates the
 two required grading deliverables, then derives the percentage scores
 from sums computed from the criteria: the bonus-inclusive score_pct
-(may exceed 100) is the primary Harbor reward, with the required-only
-required_pct (0-100) surfaced beside it. The grader's authored sums are
+(may exceed 100) is the primary Harbor reward, with the bonus-free
+base_pct (0-100) surfaced beside it. The grader's authored sums are
 a self-check only — a mismatch is recorded in the details as
 sums_consistent: false, never failed. Any structural contract violation
 yields reward 0.0 with the violations listed in the verifier details.
@@ -50,12 +50,12 @@ def main():
 
     if errors:
         rewards = {"reward": 0.0}
-        scores = {"score_pct": None, "required_pct": None}
+        scores = {"score_pct": None, "base_pct": None}
         sums = None
     else:
         scores = derive_scores(data)
         sums = sums_report(data)
-        rewards = {"reward": scores["score_pct"], "required_pct": scores["required_pct"]}
+        rewards = {"reward": scores["score_pct"], "base_pct": scores["base_pct"]}
 
     emit(
         rewards,
@@ -64,7 +64,7 @@ def main():
             "contract_valid": not errors,
             "errors": errors,
             "score_pct": scores["score_pct"],
-            "required_pct": scores["required_pct"],
+            "base_pct": scores["base_pct"],
             # Authored-sum self-check: recorded, never a failure.
             "sums_consistent": None if sums is None else sums["consistent"],
             "sums": sums,
