@@ -108,6 +108,19 @@ Notes:
   rubric is a new file (e.g. `strict-v2.md`) selected by name in a
   grading config — existing files are never edited, preserving
   immutability and hash-based provenance.
+- Every assignment that will be graded must have a rubric; grading
+  fails at materialization without one (docs/design.md, decision 5).
+  A rubric enumerates its criteria, each with a stable id, a title,
+  its max points, and an explicit bonus marking — ordinary
+  human-readable Markdown, but the criteria list is required: stable
+  criterion ids are what make per-criterion statistics comparable
+  across repeated gradings.
+- Authoring a missing rubric is a manual procedure, not toolkit
+  machinery: draft it with an agent (any interface) from the
+  assignment and reference solution, review it, and commit it as
+  `default.md`. From then on it is immutable like any other rubric,
+  and the grader checks (reference near full marks, irrelevant near
+  zero) double as a sanity check on the rubric itself.
 
 ## Job directories and run records
 
@@ -126,8 +139,10 @@ run record holds the Harbor version (read from the binary for executed
 runs, from package metadata for materialize-only runs), the toolkit's
 own version, agent and model configuration, effective command line,
 repeats, maximum concurrent trials, and executed flag,
-requested items with their per-item identities and explicit course and
-assignment ids, config identity, and
+requested items with their per-item identities, explicit course and
+assignment ids, and explicit lineage (submission source, student id
+for student grading items, solve job and trial for solve-derived
+grading items), config identity, and
 input hashes (assignment, prompt, environment template, verifier,
 rubric, submission, reference solution, grading schema — as
 applicable). Doneness of an item under a config is derived from these

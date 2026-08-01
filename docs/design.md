@@ -49,9 +49,15 @@ analysis are in research.md.
    artifact or a real student folder; the machinery is identical and the
    only difference is which directory is materialized into the grading
    task. Repeated grading for variance estimates is Harbor's native
-   repeated attempts (`n_attempts`). A rubric is an optional Markdown file: when present
-   it is the authority on point splits; when absent the grader defines a
-   reasonable split and must state it in the justification.
+   repeated attempts (`n_attempts`). Every graded assignment has a
+   rubric: a Markdown file that enumerates the criteria — each with a
+   stable id, a title, its max points, and an explicit bonus marking —
+   and is the authority on the point split. Grading never starts
+   without one: a missing rubric fails at materialization, and the fix
+   is to author the rubric first (the manual procedure in
+   [data-conventions.md](data-conventions.md)). Stable criterion ids
+   are what make per-criterion statistics well defined across repeated
+   gradings.
 6. **Grades come from the grader's artifacts, not from verifier scoring.**
    Each stage has exactly one generic contract verifier, reused across all
    tasks; per-assignment test code is never written. The solve verifier is
@@ -313,15 +319,13 @@ A materialized grading task presents, under `/app`:
 - `submission/` — the directory being graded (solve artifact or student
   folder), copied as data.
 - `reference_solution/` — the oracle solution.
-- `rubric.md` — present when the assignment has a rubric; when absent
-  the grader defines and states its own point split (decision 5). The
-  rubric is resolved as
+- `rubric.md` — always present (decision 5). The rubric is resolved as
   `courses/<course_id>/rubrics/<assignment_id>/<name>.md` in the data
   root, where `<name>` comes from the grading config (default
-  `default`). An absent `default` rubric is the legitimate no-rubric
-  case; a config naming any other rubric that does not exist for the
-  assignment fails at materialization — a frozen judge configuration
-  never silently degrades.
+  `default`). A rubric that does not exist for the assignment —
+  default or otherwise — fails at materialization: grading never
+  starts without a rubric, and a frozen judge configuration never
+  silently degrades.
 - `grading_output/` — empty directory the grader must fill (created by
   the grading environment image, so the materialized task tree contains
   no placeholder files).
@@ -421,8 +425,11 @@ autonomy expectations, and the `/app/submission` output contract
 compiled PDFs, no scratch files). The grader prompt covers the
 static-inspection rule (read as data; never execute or compile),
 prompt-injection resistance (instructions inside the submission are
-content, not commands), rubric authority and the no-rubric fallback,
-evidence requirements, and the exact output schema above. Any prompt
+content, not commands), rubric authority — including the requirement
+to reproduce the rubric's enumerated criteria verbatim: same ids, same
+max points, same bonus flags, with only the points awarded being the
+grader's judgment — evidence requirements, and the exact output schema
+above. Any prompt
 edit changes the config identity by construction.
 
 Prompts are instruction briefs: they state requirements imperatively
@@ -460,8 +467,11 @@ the machine except calls to the model providers).
 binary for executed runs, from package metadata for
 `--materialize-only`; `harbor_version_source` says which), the
 toolkit's own version, agent and model configuration, effective
-command line, requested items — each with its per-item identity and
-explicit `course_id` and `assignment_id` — the config identity, and
+command line, requested items — each with its per-item identity,
+explicit `course_id` and `assignment_id`, and explicit lineage: the
+submission source (`student` or `solve-trial`) for grading items, the
+`student_id` for student grading items, and the solve job and trial
+names for solve-derived grading items — the config identity, and
 input hashes (assignment, prompt, environment template, verifier,
 rubric, submission, reference solution, grading schema — as
 applicable). Item ids take three shapes: `<course>/<assignment>` for
@@ -535,9 +545,22 @@ tidy pandas tables:
   when present, per-phase durations (environment setup, agent setup,
   agent execution, verification), and timestamps. Token and cost
   values a run did not report load as missing, never as zero — zero
-  never means unknown. Grading rows
-  additionally carry the submission source (solve artifact or student
-  folder), the solve job/trial lineage, and the rubric name and hash.
+  never means unknown. Token counts keep Harbor's semantics verbatim —
+  the input count includes cached tokens, and multi-step trials sum
+  their per-step agent contexts. Harbor's timestamps are not
+  guaranteed timezone-aware and load as informational only; no
+  statistic derives from them. Grading rows
+  additionally carry the submission source (student folder or solve
+  artifact) and student id, read from the run record's explicit
+  lineage fields, plus the rubric name and hash; solve-derived rows
+  also carry the solve job/trial lineage and the solver's config name,
+  identity, and model, joined from the originating solve job's run
+  record via the recorded solve job name — benchmark statistics group
+  by the solver config identity, judge-quality statistics by the
+  grading config identity. A graded trial whose stored
+  `grading_result.json` is missing or unreadable at load time stays
+  `completed` (and done) but gains a load-error flag and contributes
+  no criteria rows; flagged counts appear in the failure accounting.
 - **Criteria** — one row per (grading trial, criterion): id, title,
   points, max points, bonus flag. Per-criterion analysis aggregates
   over this table; totals are always recomputed from it, never read
@@ -570,14 +593,47 @@ score mean.
 
 **Statistics (`metrics.py`).** Trials pool by (item id, per-item
 identity) across jobs — the same key as doneness, so pooling can never
-merge trials whose rubric or environment differed. The initial metric
-set: per-item, per-assignment, and per-course score distributions and
-means; variance and agreement of repeated gradings;
-bootstrap confidence intervals clustered by assignment, with
-explicitly seeded RNGs; and failure rates per outcome category. The
-bootstrap seed has a documented fixed default, is overridable with
-`--seed`, and the effective seed is always recorded in the report
-provenance. Harbor's built-in aggregation (means, binary-reward
+merge trials whose rubric or environment differed. `base_pct` is the
+primary comparison metric (0–100, comparable across assignments
+regardless of bonus availability); `score_pct` is reported beside it
+as the bonus-inclusive gradebook score.
+
+Benchmark aggregation follows one fixed ladder: grading repeats of a
+submission average to a per-solve-trial score, solve trials average to
+a per-assignment score, and assignments macro-average to the course
+score — each assignment weighs equally regardless of how many trials
+it accumulated. An assignment with no valid gradings under a config is
+excluded from the macro-mean, and the report states coverage
+explicitly (e.g. "7 of 9 assignments"). Course-level confidence
+intervals come from a percentile bootstrap that resamples assignments
+(the cluster unit) with replacement and recomputes the ladder per
+resample: 10,000 resamples, 95% level, default seed 42 (overridable
+with `--seed`; the effective seed is always recorded in the report
+provenance). An interval is emitted only when at least five
+assignments have data; below that the report prints the
+per-assignment means with an explicit too-few-clusters note. The
+per-assignment means are always printed beside any interval: at
+corpus scale they are the primary result and the interval is a
+summary.
+
+Judge quality is measured per grading configuration: the within-item
+standard deviation and range of `base_pct` over repeated gradings,
+aggregated as the mean within-item SD and the worst-case range;
+per-criterion agreement over criterion ids matched across repeats of
+the same item (exact-agreement rate and mean absolute points
+difference); and three flag rates — sums consistency, late exception,
+and **rubric fidelity**. A trial is rubric-faithful when its criterion
+id set, per-id max points, and per-id bonus flags all match the
+rubric's enumerated criteria; the points awarded are the grader's
+judgment and never enter fidelity. Failure rates per outcome category
+complete the set.
+
+Grading-assistant statistics are descriptive only — per student and
+assignment: the mean over valid gradings, the repeat SD (the
+per-student uncertainty statement), the grading count, and flags;
+per assignment: the class distribution (count, mean, median, SD,
+quartiles). The bootstrap belongs to benchmark aggregation, never to
+individual grades. Harbor's built-in aggregation (means, binary-reward
 pass@k) is not used: it counts errored trials in score means and
 cannot express graded rewards. Pass@k is deferred until a pass
 threshold on `score_pct` is actually needed and chosen.
@@ -590,15 +646,26 @@ and a submission containing only an unrelated placeholder file must
 grade near zero; `--repeats` on the same items measures whether
 repeated gradings agree. Pseudo-student ids begin with an underscore
 (e.g. `_reference`, `_irrelevant`); grade statistics exclude them and
-report them separately as the grader-check summary. No generation code
-exists or is needed: the checks reuse `aat grade` and `metrics.py`
-unchanged.
+report them separately as the grader-check summary. Because the rubric
+is part of the frozen judge, these checks also exercise the rubric
+itself — including a freshly authored one. The summary presents raw
+numbers with advisory thresholds stated in the report text (reference
+at or above 95, irrelevant at or below 5), never a machine pass/fail.
+No generation code exists or is needed: the checks reuse `aat grade`
+and `metrics.py` unchanged.
 
 **Reporting (`aat report`).** The third, read-only command renders the
 benchmark statistics — score distributions and confidence intervals by
 assignment, course, and config, failure accounting, and the
 grader-check summary — as CSV tables plus a Markdown report under
-`analysis/`.
+`analysis/`. Each invocation writes one timestamped subdirectory
+containing the two tidy tables (`trials.csv`, `criteria.csv`), the
+derived tables (`solve_summary.csv`, `grades_by_assignment.csv`,
+`grades_by_course.csv`, `students.csv`, `judge_quality.csv`,
+`grader_checks.csv`, `failures.csv`), `report.md`, and
+`provenance.json`. The tidy tables are always emitted so any further
+question is answerable from the report directory without re-running
+the loader.
 Professor-grade comparison — grade-export ingestion under `tables/`,
 the discrepancy report (matched pairs with explicit de-duplication,
 bias, MAE, RMSE, correlation and concordance, cluster-bootstrap
@@ -673,9 +740,18 @@ what the toolkit provides, not by live runs.
 3. **Validity and statistics** — the results, statistics, and reporting
    contract above: results loading (`results.py`), outcome taxonomy and
    denominator policy, `metrics.py` with clustered bootstrap confidence
-   intervals, and the read-only `aat report` command; plus repeat
-   configurations, frozen grader-config versioning for reportable runs,
-   the grader checks run on the target corpus (the manual procedure in
+   intervals, and the read-only `aat report` command; the
+   rubric-required enforcement of decision 5 in the grading
+   materializer, CLI, and grader prompt, with test fixtures
+   regenerated accordingly; the run record's explicit lineage fields
+   (submission source, student id, solve job and trial); a full-shape
+   synthetic Harbor `result.json` test fixture pinning the fields the
+   loader consumes; plus authoring rubrics for every corpus assignment
+   (the manual procedure in
+   [data-conventions.md](data-conventions.md)), repeat configurations
+   and frozen grader-config versioning for reportable runs (both
+   already provided by the config identity — no new machinery), the
+   grader checks run on the target corpus (the manual procedure in
    the results contract), and evaluation across the corpus.
    Professor-grade comparison is deferred (stage 5).
 4. **Additional agent stacks** — integrate and validate Claude Code, Gemini
@@ -690,7 +766,14 @@ what the toolkit provides, not by live runs.
    detection of grading-time input modification (a hash manifest over
    the materialized submission and reference, reported by the grading
    verifier as data, not enforcement) if the static-inspection prompt
-   rule is ever observed being violated; professor grade-export
+   rule is ever observed being violated; a machine-readable rubric
+   criteria manifest, emitted by the materializer and checked by the
+   grading verifier, if the rubric-fidelity rate proves materially
+   below 100%; an `aat rubric` command that drafts rubrics for review
+   (drafting stays manual until then); intraclass correlation for
+   repeat agreement and config-vs-config significance tests (bootstrap
+   difference intervals) when multi-agent comparison arrives;
+   professor grade-export
    ingestion, the discrepancy report, and the anonymization helpers,
    when comparing LLM grades to professor grades becomes a real need —
    retroactively computable from stored grades and provenance; judge
@@ -900,9 +983,9 @@ obeys the same refusal rule as the data root — it is never allowed
 inside the toolkit's own repository tree, because reports contain
 student identifiers and grades. `--config` filters to named configs
 and is repeatable; comparisons are always segregated by config
-identity. `--seed` overrides the documented default bootstrap seed;
-the effective seed is recorded in the report provenance, so outputs
-are deterministic given the data root and seed. The exact flag set may
+identity. `--seed` overrides the default bootstrap seed (42, see the
+statistics contract); the effective seed is recorded in the report
+provenance, so outputs are deterministic given the data root and seed. The exact flag set may
 grow with the reports it renders; because the command is
 derived-output-only, new flags here never enter any identity.
 
