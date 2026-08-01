@@ -84,13 +84,34 @@ def job_dir_name(config_name: str, config_identity: str, now: datetime | None = 
     return f"{utc_stamp(now)}__{config_name}__{config_identity[:8]}"
 
 
+def create_unique_dir(parent: Path, base_name: str) -> Path:
+    """Create ``parent/base_name``, uniquifying on same-second collisions.
+
+    Job and report directory names are timestamped to the second, and
+    their identity lives in their records (``aat-run.json``,
+    ``provenance.json``), not in the name — so a rare ``-N`` suffix is
+    harmless.
+    """
+    for attempt in range(1, 100):
+        name = base_name if attempt == 1 else f"{base_name}-{attempt}"
+        target = parent / name
+        try:
+            target.mkdir(parents=True)
+        except FileExistsError:
+            continue
+        return target
+    raise OSError(f"cannot create a fresh directory under {parent}")
+
+
 @dataclass(frozen=True)
 class RunRecordItem:
     """One requested item: identity, lineage, and the exact input hashes.
 
     ``course_id`` and ``assignment_id`` are recorded explicitly so every
     run record is self-describing — for solve-derived grading items the
-    ``item_id`` is ``<solve-job>/<trial>`` and carries neither.
+    ``item_id`` is ``<solve-job>/<trial>`` and carries neither. The
+    lineage fields say where a grading item's submission came from; they
+    are always serialized, so no consumer ever parses an item id.
     """
 
     item_id: str
@@ -99,6 +120,10 @@ class RunRecordItem:
     course_id: str
     assignment_id: str
     input_hashes: dict[str, str]
+    submission_source: str | None = None  # "student" | "solve-trial"; None for solve items
+    student_id: str | None = None  # student grading items only
+    solve_job_name: str | None = None  # solve-derived grading items only
+    solve_trial_name: str | None = None
 
 
 def write_run_record(
@@ -234,6 +259,21 @@ def _record_items(record: dict[str, object]) -> list[dict[str, object]]:
     return [item for item in items if isinstance(item, dict)]
 
 
+def items_by_task_dir(record: dict[str, object]) -> dict[str, dict[str, object]]:
+    """A run record's items indexed by ``task_dir_name``.
+
+    A trial is matched to its item through this name (Harbor records it
+    as the trial's ``task_name``), so an item without a string
+    ``task_dir_name`` can never claim a trial and is dropped here.
+    """
+    index: dict[str, dict[str, object]] = {}
+    for item in _record_items(record):
+        task_dir_name = item.get("task_dir_name")
+        if isinstance(task_dir_name, str):
+            index[task_dir_name] = item
+    return index
+
+
 def done_items(jobs_root: Path, stage: Stage) -> set[tuple[str, str]]:
     """(item_id, item_identity) pairs with at least one done trial.
 
@@ -252,16 +292,12 @@ def done_items(jobs_root: Path, stage: Stage) -> set[tuple[str, str]]:
         if record is None or record.get("stage") != stage:
             continue
         verified = verified_task_names(job_dir, check)
-        for item in _record_items(record):
+        for task_dir_name, item in items_by_task_dir(record).items():
+            if task_dir_name not in verified:
+                continue
             item_id = item.get("item_id")
-            task_dir_name = item.get("task_dir_name")
             item_identity = item.get("item_identity")
-            if (
-                isinstance(item_id, str)
-                and isinstance(task_dir_name, str)
-                and isinstance(item_identity, str)
-                and task_dir_name in verified
-            ):
+            if isinstance(item_id, str) and isinstance(item_identity, str):
                 done.add((item_id, item_identity))
     return done
 
@@ -300,11 +336,12 @@ def verified_solve_submissions(
         config = record.get("config")
         if not isinstance(config, dict) or config.get("name") != solve_config_name:
             continue
-        items_by_task_dir = {item.get("task_dir_name"): item for item in _record_items(record)}
+        record_items = items_by_task_dir(record)
         for trial_dir, result in trial_results(job_dir):
             if not is_verified_trial(result):
                 continue
-            item = items_by_task_dir.get(result.get("task_name"))
+            task_name = result.get("task_name")
+            item = record_items.get(task_name) if isinstance(task_name, str) else None
             if item is None:
                 continue
             item_course_id = item.get("course_id")

@@ -1,12 +1,16 @@
-"""The ``aat`` command line: thin wrapper that materializes and launches Harbor runs.
+"""The ``aat`` command line: solve and grading runs over Harbor, plus reports.
 
-Three option axes (docs/design.md, "CLI design"): selection and
-mechanics are flags; experiment configuration lives only in named config
-files. Doneness is derived from the data root — a solve item is done
-under a config when some job directory holds a verified trial (one
-whose verifier recorded a reward) for its per-item identity; a grading
-item additionally needs a valid grading result — so bulk commands are
-naturally incremental and failed gradings are regraded automatically.
+Three commands (docs/design.md, "CLI design"): ``aat solve`` and ``aat
+grade`` materialize tasks and launch Harbor; ``aat report`` is
+read-only — it renders the statistics tables and Markdown report from
+the data root, changing no experiment and no doneness. Three option
+axes: selection and mechanics are flags; experiment configuration lives
+only in named config files. Doneness is derived from the data root — a
+solve item is done under a config when some job directory holds a
+verified trial (one whose verifier recorded a reward) for its per-item
+identity; a grading item additionally needs a valid grading result — so
+bulk commands are naturally incremental and failed gradings are
+regraded automatically.
 """
 
 from __future__ import annotations
@@ -23,6 +27,9 @@ from . import config as config_mod
 from . import data_root as data_root_mod
 from . import harbor as harbor_mod
 from . import jobs as jobs_mod
+from . import metrics as metrics_mod
+from . import report as report_mod
+from . import rubric as rubric_mod
 from .config import ConfigError, ExperimentConfig, Stage
 from .data_root import DataRootError
 from .materialize._common import MaterializeError
@@ -127,6 +134,33 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="all_items",
         help="every student submission of every course",
     )
+
+    report = subparsers.add_parser(
+        "report", help="render statistics tables and a Markdown report (read-only)"
+    )
+    report.add_argument("--course", metavar="ID", help="only this course")
+    report.add_argument("--assignment", metavar="ID", help="only this assignment")
+    report.add_argument(
+        "--config",
+        action="append",
+        metavar="NAME",
+        help="only named configs (repeatable; a solver name keeps its gradings too)",
+    )
+    report.add_argument(
+        "--seed",
+        type=int,
+        default=metrics_mod.DEFAULT_SEED,
+        metavar="N",
+        help=f"bootstrap seed, recorded in provenance (default: {metrics_mod.DEFAULT_SEED})",
+    )
+    report.add_argument(
+        "--out",
+        metavar="PATH",
+        help="report destination (default: <data-root>/analysis; never inside this repository)",
+    )
+    report.add_argument(
+        "--data-root", metavar="PATH", help="explicit data root (else AAT_DATA_DIR)"
+    )
     return parser
 
 
@@ -138,6 +172,8 @@ def _positive_int(value: str) -> int:
 
 
 def _run(args: argparse.Namespace) -> int:
+    if args.command == "report":
+        return _run_report(args)
     stage: Stage = "solve" if args.command == "solve" else "grade"
     root = data_root_mod.resolve_data_root(args.data_root)
     config = config_mod.load_config(_config_path(args.config))
@@ -153,6 +189,23 @@ def _run(args: argparse.Namespace) -> int:
     else:
         planned = _plan_grade(root, config, config_identity, done, args)
     return _execute(stage, root, jobs_root, config, config_identity, planned, args)
+
+
+def _run_report(args: argparse.Namespace) -> int:
+    root = data_root_mod.resolve_data_root(args.data_root)
+    # `is not None`, not truthiness: an empty value (typically an unset
+    # shell variable) must stay a filter that matches nothing, never
+    # silently widen the report to everything.
+    report_dir = report_mod.write_report(
+        root,
+        courses=[args.course] if args.course is not None else None,
+        assignments=[args.assignment] if args.assignment is not None else None,
+        config_names=args.config,
+        seed=args.seed,
+        out_root=Path(args.out).expanduser().resolve() if args.out else None,
+    )
+    print(f"report directory: {report_dir}")
+    return 0
 
 
 def _config_path(value: str) -> Path:
@@ -246,6 +299,11 @@ class _GradeSource:
     assignment_id: str
     submission_dir: Path
     name_parts: tuple[str, ...]
+    # Lineage, copied verbatim into the run record's item.
+    submission_source: str | None = None  # "student" | "solve-trial"
+    student_id: str | None = None  # student submissions only
+    solve_job_name: str | None = None  # solve-derived submissions only
+    solve_trial_name: str | None = None
 
 
 def _plan_grade(
@@ -269,18 +327,21 @@ def _plan_grade(
         rubric = data_root_mod.find_rubric(
             root, source.course_id, source.assignment_id, rubric_name
         )
-        # An absent default rubric is the legitimate no-rubric case; an
-        # absent explicitly-named rubric silently changing the frozen
-        # judge configuration is not (docs/design.md, grading task
-        # layout).
-        if rubric is None and rubric_name != "default":
+        if rubric is None:
             raise CliError(
-                f"rubric {rubric_name!r} not found for "
-                f"{source.course_id}/{source.assignment_id} (expected "
-                f"courses/{source.course_id}/rubrics/{source.assignment_id}/{rubric_name}.md)"
+                f"no rubric {rubric_name!r} for "
+                f"{source.course_id}/{source.assignment_id}: grading never starts "
+                "without a rubric (docs/design.md, decision 5); author "
+                f"courses/{source.course_id}/rubrics/{source.assignment_id}/{rubric_name}.md "
+                "first (the manual procedure in docs/data-conventions.md)"
             )
-        rubric_bytes = rubric.read_bytes() if rubric is not None else None
-        identity = config_mod.item_identity(config_identity, template_bytes, rubric_bytes)
+        # Parse at plan time so a bad rubric fails before any job
+        # directory is created; the materializer parses it again.
+        try:
+            rubric_mod.parse_rubric_file(rubric)
+        except rubric_mod.RubricError as error:
+            raise CliError(str(error)) from error
+        identity = config_mod.item_identity(config_identity, template_bytes, rubric.read_bytes())
         planned.append(
             _PlannedItem(
                 item_id=source.item_id,
@@ -295,7 +356,7 @@ def _plan_grade(
 def _grade_materializer(
     source: _GradeSource,
     reference: Path,
-    rubric: Path | None,
+    rubric: Path,
     config: ExperimentConfig,
     identity: str,
 ) -> Callable[[Path], harbor_mod.RunRecordItem]:
@@ -316,6 +377,10 @@ def _grade_materializer(
             course_id=source.course_id,
             assignment_id=source.assignment_id,
             input_hashes=task.input_hashes,
+            submission_source=source.submission_source,
+            student_id=source.student_id,
+            solve_job_name=source.solve_job_name,
+            solve_trial_name=source.solve_trial_name,
         )
 
     return materialize
@@ -356,6 +421,9 @@ def _grade_sources(root: Path, args: argparse.Namespace) -> list[_GradeSource]:
                 assignment_id=sub.assignment_id,
                 submission_dir=sub.directory,
                 name_parts=(sub.solve_job_name, sub.trial_name),
+                submission_source="solve-trial",
+                solve_job_name=sub.solve_job_name,
+                solve_trial_name=sub.trial_name,
             )
             for sub in submissions
         ]
@@ -420,26 +488,11 @@ def _student_sources(
                         submission.student_id,
                         submission.assignment_id,
                     ),
+                    submission_source="student",
+                    student_id=submission.student_id,
                 )
             )
     return sources
-
-
-def _create_job_dir(jobs_root: Path, base_name: str) -> Path:
-    """Create the job directory, uniquifying on same-second collisions.
-
-    The identity of a job lives in aat-run.json, not in the directory
-    name, so a rare ``-N`` suffix is harmless.
-    """
-    for attempt in range(1, 100):
-        name = base_name if attempt == 1 else f"{base_name}-{attempt}"
-        job_dir = jobs_root / name
-        try:
-            job_dir.mkdir(parents=True)
-        except FileExistsError:
-            continue
-        return job_dir
-    raise CliError(f"cannot create a fresh job directory under {jobs_root}")
 
 
 def _execute(
@@ -468,7 +521,9 @@ def _execute(
         print(f"nothing to do: {len(planned)} item(s) already done under config {config.name!r}")
         return 0
 
-    job_dir = _create_job_dir(jobs_root, harbor_mod.job_dir_name(config.name, config_identity))
+    job_dir = harbor_mod.create_unique_dir(
+        jobs_root, harbor_mod.job_dir_name(config.name, config_identity)
+    )
     # Tasks live outside the Harbor job directory: on resume, Harbor
     # deletes any job-dir subdirectory without a per-trial result.json
     # as a stale trial, which would destroy the task inputs

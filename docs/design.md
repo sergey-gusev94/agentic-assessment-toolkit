@@ -52,7 +52,9 @@ analysis are in research.md.
    repeated attempts (`n_attempts`). Every graded assignment has a
    rubric: a Markdown file that enumerates the criteria — each with a
    stable id, a title, its max points, and an explicit bonus marking —
-   and is the authority on the point split. Grading never starts
+   and is the authority on the point split. Criteria lines follow the
+   fixed format in [data-conventions.md](data-conventions.md), parsed
+   and enforced at materialization. Grading never starts
    without one: a missing rubric fails at materialization, and the fix
    is to author the rubric first (the manual procedure in
    [data-conventions.md](data-conventions.md)). Stable criterion ids
@@ -598,13 +600,15 @@ primary comparison metric (0–100, comparable across assignments
 regardless of bonus availability); `score_pct` is reported beside it
 as the bonus-inclusive gradebook score.
 
-Benchmark aggregation follows one fixed ladder: grading repeats of a
-submission average to a per-solve-trial score, solve trials average to
-a per-assignment score, and assignments macro-average to the course
-score — each assignment weighs equally regardless of how many trials
-it accumulated. An assignment with no valid gradings under a config is
-excluded from the macro-mean, and the report states coverage
-explicitly (e.g. "7 of 9 assignments"). Course-level confidence
+Benchmark aggregation follows one fixed ladder, grouped per (solver
+config identity, grading config identity) pair — one row per pair per
+assignment and per course, so comparisons never mix solvers or judges:
+grading repeats of a submission average to a per-solve-trial score,
+solve trials average to a per-assignment score, and assignments
+macro-average to the course score — each assignment weighs equally
+regardless of how many trials it accumulated. An assignment with no
+valid gradings under a config is excluded from the macro-mean, and
+the report states coverage explicitly (e.g. "7 of 9 assignments"). Course-level confidence
 intervals come from a percentile bootstrap that resamples assignments
 (the cluster unit) with replacement and recomputes the ladder per
 resample: 10,000 resamples, 95% level, default seed 42 (overridable
@@ -619,20 +623,27 @@ summary.
 Judge quality is measured per grading configuration: the within-item
 standard deviation and range of `base_pct` over repeated gradings,
 aggregated as the mean within-item SD and the worst-case range;
-per-criterion agreement over criterion ids matched across repeats of
-the same item (exact-agreement rate and mean absolute points
-difference); and three flag rates — sums consistency, late exception,
-and **rubric fidelity**. A trial is rubric-faithful when its criterion
-id set, per-id max points, and per-id bonus flags all match the
-rubric's enumerated criteria; the points awarded are the grader's
-judgment and never enter fidelity. Failure rates per outcome category
-complete the set.
+per-criterion agreement, computed pairwise over each repeated item's
+grading pairs and only over the criterion ids both gradings of a pair
+share (exact-agreement rate and mean absolute points difference;
+unshared ids surface through rubric fidelity, not agreement); and
+three flag rates — sums consistency, late exception, and **rubric
+fidelity**. A trial is rubric-faithful when its criterion id set,
+per-id max points, and per-id bonus flags all match the rubric's
+enumerated criteria; the points awarded are the grader's judgment and
+never enter fidelity. The rubric's criteria are parsed per the fixed
+grammar in [data-conventions.md](data-conventions.md): `metrics.py`
+resolves the rubric from the course tree and verifies its bytes
+against the hash recorded in the run record, and a trial whose rubric
+is missing, changed, or unparseable is counted as unresolved rather
+than rated. Failure rates per outcome category complete the set.
 
 Grading-assistant statistics are descriptive only — per student and
 assignment: the mean over valid gradings, the repeat SD (the
 per-student uncertainty statement), the grading count, and flags;
-per assignment: the class distribution (count, mean, median, SD,
-quartiles). The bootstrap belongs to benchmark aggregation, never to
+per assignment: the class distribution over the per-student mean
+grades — one value per student — as count, mean, median, SD, and
+quartiles. The bootstrap belongs to benchmark aggregation, never to
 individual grades. Harbor's built-in aggregation (means, binary-reward
 pass@k) is not used: it counts errored trials in score means and
 cannot express graded rewards. Pass@k is deferred until a pass
@@ -645,10 +656,13 @@ submissions tree as a pseudo-student must grade at or near full marks,
 and a submission containing only an unrelated placeholder file must
 grade near zero; `--repeats` on the same items measures whether
 repeated gradings agree. Pseudo-student ids begin with an underscore
-(e.g. `_reference`, `_irrelevant`); grade statistics exclude them and
-report them separately as the grader-check summary. Because the rubric
-is part of the frozen judge, these checks also exercise the rubric
-itself — including a freshly authored one. The summary presents raw
+and carry their role in the prefix: ids starting with `_reference` are
+the reference role, ids starting with `_irrelevant` the irrelevant
+role, and any other underscore id is reported as role `other`. Grade
+statistics exclude them all and report them separately as the
+grader-check summary. Because the rubric is part of the frozen judge,
+these checks also exercise the rubric itself — including a freshly
+authored one. The summary presents raw
 numbers with advisory thresholds stated in the report text (reference
 at or above 95, irrelevant at or below 5), never a machine pass/fail.
 No generation code exists or is needed: the checks reuse `aat grade`
@@ -853,7 +867,8 @@ src/agentic_assessment_toolkit/
 ├── harbor.py              # step 10: harbor command construction,
 │                          #   subprocess invocation, run record
 ├── results.py             # stage 3: trials + criteria tables
-├── metrics.py              # stage 3: pooled statistics, bootstrap CIs
+├── metrics.py             # stage 3: pooled statistics, bootstrap CIs
+├── report.py              # stage 3: report rendering behind `aat report`
 ├── cli.py                 # step 10: argparse, `aat solve` / `aat grade`;
 │                          #   stage 3 adds `aat report`
 └── templates/             # package data (importlib.resources)
@@ -895,9 +910,10 @@ Implementation rules:
   external requirements that packaging cannot provide.
 - **Prefer good dependencies over hand-rolled code.** When a
   well-maintained library replaces nontrivial logic,
-  use it rather than reimplementing: `numpy`, `scipy`, and `pandas` are
+  use it rather than reimplementing: `numpy` and `pandas` are
   the toolkit's statistics stack (`results.py`, `metrics.py`: loading
-  and pooling trials, clustered bootstrap confidence intervals). Hand-roll only when the code must run standalone
+  and pooling trials; the percentile bootstrap is a few lines of
+  numpy). Hand-roll only when the code must run standalone
   inside task containers, or when a dependency would be heavier than the
   code it replaces. The container exception is load-bearing: the shipped
   verifiers and `grading_schema.py` stay stdlib-only and self-contained,

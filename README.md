@@ -43,6 +43,7 @@ export AAT_DATA_DIR=/path/to/data-root
 aat solve --course PU_CHE597DS_S2026 --config codex-high
 aat grade --from-solve codex-high --config codex-grader-high
 aat grade --course PU_CHE597DS_S2026 --config codex-grader-high  # student folders
+aat report                             # tables + report.md under analysis/
 ```
 
 Experiment configs live under [`configs/`](configs/); a bare
@@ -51,8 +52,11 @@ working directory, so run from the repository root or pass an explicit
 path. Selection and mechanics (`--repeats`, `--max-concurrent-trials`,
 `--force`, `--dry-run`, `--materialize-only`) are CLI flags. Concurrent
 trials default to 8. Already-done items are skipped by default, so bulk
-commands are naturally incremental. See the
-[design](docs/design.md) for the full CLI contract.
+commands are naturally incremental. `aat report` is read-only: it
+writes the statistics tables, a Markdown report, and provenance into
+one timestamped directory under `analysis/` in the data root (`--out`
+moves the destination, which is never allowed inside this repository).
+See the [design](docs/design.md) for the full CLI contract.
 
 To repeat a completed item, add `--force`. Repeats are additional trials;
 they never replace prior results:
@@ -94,9 +98,9 @@ pip install -e ".[dev]"
 make check
 ```
 
-Harbor is the package's runtime-orchestration dependency; `numpy`,
-`scipy`, and `pandas` back the statistics and reporting layer
-(roadmap stage 3). Running
+Harbor is the package's runtime-orchestration dependency; `numpy` and
+`pandas` back the statistics and reporting layer (roadmap stage 3).
+Running
 actual jobs additionally requires Docker and the agent CLIs (Codex CLI
 first), which are external tools packaging cannot provide; repository
 tests never invoke any of them.

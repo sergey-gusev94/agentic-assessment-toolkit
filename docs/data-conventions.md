@@ -112,9 +112,27 @@ Notes:
   fails at materialization without one (docs/design.md, decision 5).
   A rubric enumerates its criteria, each with a stable id, a title,
   its max points, and an explicit bonus marking — ordinary
-  human-readable Markdown, but the criteria list is required: stable
-  criterion ids are what make per-criterion statistics comparable
-  across repeated gradings.
+  human-readable Markdown, but each criterion is one bullet line in a
+  fixed format, parsed and enforced at materialization
+  (`src/agentic_assessment_toolkit/rubric.py`):
+
+  ```text
+  - `<id>` (<points> point[s][, bonus]): <title>
+  ```
+
+  For example:
+
+  ```markdown
+  - `slope` (8 points): the reported slope equals 2.
+  - `plot` (1 point, bonus): a plot of the fit is included.
+  ```
+
+  Any line whose stripped form starts with a dash, a space, and a
+  backtick must match this format; every other line is free prose and
+  is ignored. The id contains no whitespace and is unique within the
+  rubric; the points are a number greater than zero; at least one
+  criterion is not a bonus. Stable criterion ids are what make
+  per-criterion statistics comparable across repeated gradings.
 - Authoring a missing rubric is a manual procedure, not toolkit
   machinery: draft it with an agent (any interface) from the
   assignment and reference solution, review it, and commit it as

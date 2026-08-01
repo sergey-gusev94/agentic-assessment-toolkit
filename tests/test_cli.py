@@ -7,8 +7,10 @@ import pytest
 
 from agentic_assessment_toolkit import cli
 from agentic_assessment_toolkit import harbor as harbor_mod
+from agentic_assessment_toolkit.report import REPORT_FILENAMES
 from tests.conftest import COURSE_ID
 from tests.test_config import GRADE_TOML, SOLVE_TOML, write_config
+from tests.test_data_root import make_fake_toolkit_repo
 from tests.test_harbor import GRADED_REWARDS, write_trial
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -94,6 +96,11 @@ def test_solve_materialize_only_writes_job_dir(
     assert record["max_concurrent_trials"] == 8
     assert len(record["items"]) == 1
     assert record["items"][0]["item_id"] == f"{COURSE_ID}/HW1"
+    # Lineage fields are always serialized; solve items leave all four null.
+    assert record["items"][0]["submission_source"] is None
+    assert record["items"][0]["student_id"] is None
+    assert record["items"][0]["solve_job_name"] is None
+    assert record["items"][0]["solve_trial_name"] is None
 
     job_config = json.loads((job_dir / "harbor-job.json").read_text(encoding="utf-8"))
     task_path = Path(job_config["tasks"][0]["path"])
@@ -223,6 +230,10 @@ def test_grade_student_submissions_materialize_only(data_root: Path, grade_confi
     assert record["items"][0]["item_id"] == f"{COURSE_ID}/stu1/HW1"
     assert record["items"][0]["course_id"] == COURSE_ID
     assert record["items"][0]["assignment_id"] == "HW1"
+    assert record["items"][0]["submission_source"] == "student"
+    assert record["items"][0]["student_id"] == "stu1"
+    assert record["items"][0]["solve_job_name"] is None
+    assert record["items"][0]["solve_trial_name"] is None
     assert "rubric" in record["items"][0]["input_hashes"]
     task_dir = data_root / "tasks" / jobs[0].name / record["items"][0]["task_dir_name"]
     assert (task_dir / "environment" / "submission" / "answer.md").is_file()
@@ -302,6 +313,10 @@ def test_grade_from_solve(data_root: Path, solve_config: Path, grade_config: Pat
     # Lineage is recorded explicitly; the item_id carries no course/assignment.
     assert item["course_id"] == COURSE_ID
     assert item["assignment_id"] == "HW1"
+    assert item["submission_source"] == "solve-trial"
+    assert item["student_id"] is None
+    assert item["solve_job_name"] == solve_job.name
+    assert item["solve_trial_name"] == f"{task_dir_name[:32]}__abc1234"
     task_dir = data_root / "tasks" / grading_jobs[0].name / item["task_dir_name"]
     assert (task_dir / "environment" / "submission" / "answer.md").is_file()
 
@@ -432,10 +447,44 @@ def test_doneness_is_per_item_not_per_identity_grading(
 def test_missing_named_rubric_is_an_error(
     data_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A configured non-default rubric must exist; only 'default' may be absent."""
+    """A configured non-default rubric must exist like any other rubric."""
     config = write_config(tmp_path, GRADE_TOML + 'rubric = "strict-v2"\n', "codex-grader-strict")
     assert cli.main(grade_args(data_root, config, "--course", COURSE_ID, "--materialize-only")) == 2
     assert "strict-v2" in capsys.readouterr().err
+
+
+def test_grade_without_rubric_is_an_error(
+    data_root: Path, grade_config: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An assignment with no rubric fails at plan time with the authoring fix."""
+    import shutil
+
+    shutil.copytree(
+        data_root / "submissions" / COURSE_ID / "stu1" / "HW1",
+        data_root / "submissions" / COURSE_ID / "stu1" / "HW2",
+    )
+    assert (
+        cli.main(grade_args(data_root, grade_config, "--course", COURSE_ID, "--materialize-only"))
+        == 2
+    )
+    err = capsys.readouterr().err
+    assert f"courses/{COURSE_ID}/rubrics/HW2/default.md" in err
+    assert "author" in err
+    # The plan fails before any job directory is created.
+    assert job_dirs(data_root, "grading") == []
+
+
+def test_grade_unparseable_rubric_fails_at_plan_time(
+    data_root: Path, grade_config: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rubric = data_root / "courses" / COURSE_ID / "rubrics" / "HW1" / "default.md"
+    rubric.write_text("# Rubric\n\n- `broken (1 point): no closing backtick.\n", encoding="utf-8")
+    assert (
+        cli.main(grade_args(data_root, grade_config, "--course", COURSE_ID, "--materialize-only"))
+        == 2
+    )
+    assert "line 3" in capsys.readouterr().err
+    assert job_dirs(data_root, "grading") == []
 
 
 def test_grading_flavor_is_rejected_for_solve(
@@ -530,6 +579,79 @@ def test_solve_all_and_grade_all(
     job_dir = job_dirs(data_root, "grading")[0]
     record = json.loads((job_dir / "aat-run.json").read_text(encoding="utf-8"))
     assert [i["item_id"] for i in record["items"]] == [f"{COURSE_ID}/stu1/HW1"]
+
+
+def test_report_command_writes_report_and_prints_directory(
+    data_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert run_cli("report", "--data-root", str(data_root)) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("report directory: ")
+    report_dir = Path(out.removeprefix("report directory: ").strip())
+    assert report_dir.is_dir()
+    assert report_dir.parent == data_root / "analysis"
+    for name in REPORT_FILENAMES:
+        assert (report_dir / name).is_file(), name
+    provenance = json.loads((report_dir / "provenance.json").read_text(encoding="utf-8"))
+    assert provenance["seed"] == 42  # metrics.DEFAULT_SEED is the CLI default
+    assert provenance["filters"] == {"courses": None, "assignments": None, "configs": None}
+
+
+def test_report_out_inside_toolkit_repo_is_refused(
+    data_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A fake toolkit clone under tmp_path: if the refusal ever
+    # regresses, the report lands in tmp_path, never in the real
+    # repository tree.
+    destination = make_fake_toolkit_repo(tmp_path) / "tmp-report-out"
+    assert run_cli("report", "--data-root", str(data_root), "--out", str(destination)) == 2
+    assert "inside the toolkit repository" in capsys.readouterr().err
+    assert not destination.exists()
+
+
+def test_report_empty_course_value_still_filters(
+    data_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An empty --course (typically an unset shell variable) never means "all"."""
+    assert run_cli("report", "--data-root", str(data_root), "--course", "") == 0
+    out = capsys.readouterr().out
+    report_dir = Path(out.removeprefix("report directory: ").strip())
+    provenance = json.loads((report_dir / "provenance.json").read_text(encoding="utf-8"))
+    assert provenance["filters"]["courses"] == [""]
+
+
+def test_report_out_elsewhere_is_honored_with_filters(data_root: Path, tmp_path: Path) -> None:
+    destination = tmp_path / "elsewhere"
+    assert (
+        run_cli(
+            "report",
+            "--data-root",
+            str(data_root),
+            "--out",
+            str(destination),
+            "--course",
+            COURSE_ID,
+            "--assignment",
+            "HW1",
+            "--config",
+            "codex-high",
+            "--config",
+            "codex-grader-high",
+            "--seed",
+            "7",
+        )
+        == 0
+    )
+    report_dirs = list(destination.iterdir())
+    assert len(report_dirs) == 1
+    assert report_dirs[0].name.endswith("__report")
+    provenance = json.loads((report_dirs[0] / "provenance.json").read_text(encoding="utf-8"))
+    assert provenance["seed"] == 7
+    assert provenance["filters"] == {
+        "courses": [COURSE_ID],
+        "assignments": ["HW1"],
+        "configs": ["codex-high", "codex-grader-high"],
+    }
 
 
 def test_grade_submissions_three_level_path_and_depth_limit(

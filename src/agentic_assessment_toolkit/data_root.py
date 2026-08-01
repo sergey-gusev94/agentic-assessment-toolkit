@@ -40,25 +40,29 @@ def resolve_data_root(explicit: str | os.PathLike[str] | None = None) -> Path:
     root = candidate.expanduser().resolve()
     if not root.is_dir():
         raise DataRootError(f"data root {root} does not exist or is not a directory")
-    _refuse_toolkit_tree(root)
+    ensure_outside_toolkit(root, what="data root")
     return root
 
 
-def _refuse_toolkit_tree(root: Path) -> None:
-    """Refuse a data root inside any git working tree of this toolkit.
+def ensure_outside_toolkit(path: Path, *, what: str) -> None:
+    """Refuse a path inside any git working tree of this toolkit.
 
-    Checked trees: the installed package location (catches editable
-    installs), the current working directory, and the data root itself
-    (catches pointing at another checkout of the toolkit).
+    Applied to the data root and to report destinations: real data and
+    the reports derived from it (student identifiers, grades) must never
+    land inside the always-publishable repository. Checked trees: the
+    installed package location (catches editable installs), the current
+    working directory, and the path itself (catches pointing at another
+    checkout of the toolkit). ``what`` names the refused path in the
+    error message.
     """
-    anchors = (Path(__file__).resolve(), Path.cwd().resolve(), root)
+    anchors = (Path(__file__).resolve(), Path.cwd().resolve(), path)
     for anchor in anchors:
         git_root = _find_git_root(anchor)
         if git_root is None:
             continue
-        if _declares_toolkit(git_root / "pyproject.toml") and root.is_relative_to(git_root):
+        if _declares_toolkit(git_root / "pyproject.toml") and path.is_relative_to(git_root):
             raise DataRootError(
-                f"data root {root} lies inside the toolkit repository at {git_root}; "
+                f"{what} {path} lies inside the toolkit repository at {git_root}; "
                 "real data must live outside it (docs/data-conventions.md)"
             )
 

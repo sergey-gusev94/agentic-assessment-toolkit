@@ -137,6 +137,12 @@ def test_run_record_roundtrip(tmp_path: Path) -> None:
     assert record["items"][0]["item_id"] == "C1/HW1"
     assert record["items"][0]["course_id"] == "C1"
     assert record["items"][0]["assignment_id"] == "HW1"
+    # The lineage fields are always serialized: a solve item carries all
+    # four as null (KeyError here would mean a key went missing).
+    assert record["items"][0]["submission_source"] is None
+    assert record["items"][0]["student_id"] is None
+    assert record["items"][0]["solve_job_name"] is None
+    assert record["items"][0]["solve_trial_name"] is None
 
 
 def test_read_run_record_handles_garbage(tmp_path: Path) -> None:

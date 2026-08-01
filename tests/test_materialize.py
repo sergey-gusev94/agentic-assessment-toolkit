@@ -75,25 +75,66 @@ def test_solve_task_structure(tmp_path: Path) -> None:
     assert set(task.input_hashes) == {"assignment", "prompt", "environment", "verifier"}
 
 
-def test_grading_task_without_rubric(tmp_path: Path) -> None:
+def test_grading_task_structure(tmp_path: Path) -> None:
     task = materialize_grading_task(
         submission_dir=FIXTURES_DIR / "submission",
-        reference_solution_dir=COURSE_DIR / "reference_solutions" / "HW2",
-        rubric_path=None,
-        item_id=f"{COURSE_ID}/stu1/HW2",
-        name_parts=(COURSE_ID, "stu1", "HW2"),
+        reference_solution_dir=COURSE_DIR / "reference_solutions" / "HW1",
+        rubric_path=COURSE_DIR / "rubrics" / "HW1" / "default.md",
+        item_id=f"{COURSE_ID}/stu1/HW1",
+        name_parts=(COURSE_ID, "stu1", "HW1"),
         prompt_name="grader",
         tasks_dir=tmp_path,
     )
     task_dir = task.task_dir
     dockerfile = (task_dir / "environment" / "Dockerfile").read_text(encoding="utf-8")
-    assert "COPY rubric.md" not in dockerfile
-    assert not (task_dir / "environment" / "rubric.md").exists()
-    assert "rubric" not in task.input_hashes
+    assert "COPY rubric.md /app/rubric.md" in dockerfile
+    assert (task_dir / "environment" / "rubric.md").is_file()
+    assert set(task.input_hashes) == {
+        "submission",
+        "reference_solution",
+        "rubric",
+        "prompt",
+        "environment",
+        "verifier",
+        "grading_schema",
+    }
     assert (task_dir / "tests" / "grading_schema.py").read_bytes()
     assert os.access(task_dir / "tests" / "test.sh", os.X_OK)
     task_toml = (task_dir / "task.toml").read_text(encoding="utf-8")
     assert 'artifacts = ["/app/grading_output"]' in task_toml
+
+
+def test_grading_task_missing_rubric_is_an_error(tmp_path: Path) -> None:
+    """HW2 has no rubric; grading never starts without one (decision 5)."""
+    with pytest.raises(MaterializeError, match="cannot read rubric"):
+        materialize_grading_task(
+            submission_dir=FIXTURES_DIR / "submission",
+            reference_solution_dir=COURSE_DIR / "reference_solutions" / "HW2",
+            rubric_path=COURSE_DIR / "rubrics" / "HW2" / "default.md",
+            item_id=f"{COURSE_ID}/stu1/HW2",
+            name_parts=(COURSE_ID, "stu1", "HW2"),
+            prompt_name="grader",
+            tasks_dir=tmp_path,
+        )
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_grading_task_unparseable_rubric_is_an_error(tmp_path: Path) -> None:
+    rubric = tmp_path / "bad-rubric.md"
+    rubric.write_text("- `a` (no points): malformed.\n", encoding="utf-8")
+    tasks_dir = tmp_path / "tasks"
+    tasks_dir.mkdir()
+    with pytest.raises(MaterializeError, match="line 1"):
+        materialize_grading_task(
+            submission_dir=FIXTURES_DIR / "submission",
+            reference_solution_dir=COURSE_DIR / "reference_solutions" / "HW1",
+            rubric_path=rubric,
+            item_id="x",
+            name_parts=("x",),
+            prompt_name="grader",
+            tasks_dir=tasks_dir,
+        )
+    assert list(tasks_dir.iterdir()) == []
 
 
 def test_grading_schema_copy_is_verbatim(tmp_path: Path) -> None:
@@ -102,7 +143,7 @@ def test_grading_schema_copy_is_verbatim(tmp_path: Path) -> None:
     task = materialize_grading_task(
         submission_dir=FIXTURES_DIR / "submission",
         reference_solution_dir=COURSE_DIR / "reference_solutions" / "HW1",
-        rubric_path=None,
+        rubric_path=COURSE_DIR / "rubrics" / "HW1" / "default.md",
         item_id="x",
         name_parts=("x",),
         prompt_name="grader",
@@ -133,7 +174,7 @@ def test_missing_submission_dir_is_an_error(tmp_path: Path) -> None:
         materialize_grading_task(
             submission_dir=tmp_path / "missing",
             reference_solution_dir=COURSE_DIR / "reference_solutions" / "HW1",
-            rubric_path=None,
+            rubric_path=COURSE_DIR / "rubrics" / "HW1" / "default.md",
             item_id="x",
             name_parts=("x",),
             prompt_name="grader",
