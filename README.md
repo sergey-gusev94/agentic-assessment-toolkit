@@ -39,3 +39,8 @@ Requires Python 3.12+. Install and validate with:
 pip install -e ".[dev]"
 make check
 ```
+
+Harbor is installed as the package's single runtime dependency. Running
+actual jobs additionally requires Docker and the agent CLIs (Codex CLI
+first), which are external tools packaging cannot provide; repository
+tests never invoke any of them.

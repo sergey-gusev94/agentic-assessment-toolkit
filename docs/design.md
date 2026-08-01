@@ -22,6 +22,13 @@ two disagree, this document wins.
   grading alike. The provider-only egress restriction on grading jobs is
   descoped to a later-on-demand hardening option; the associated
   credential-exposure risk is accepted explicitly in decision 9.
+- **2026-07-31.** The toolkit is a thin wrapper over Harbor at run time:
+  `aat solve` and `aat grade` materialize tasks and then invoke
+  `harbor run` as a subprocess, writing a run record (exact Harbor
+  version, agent and model configuration, effective command line, input
+  hashes) beside the job output. Harbor becomes the single version-bounded
+  runtime dependency. Repository tests still never invoke Harbor or
+  Docker; they assert on materialized files and constructed command lines.
 
 ## Decisions
 
@@ -40,10 +47,13 @@ analysis are in research.md.
    submissions into grading tasks), solver and grader prompt templates,
    environment (Dockerfile) templates, the two generic contract verifiers,
    the grading output schema, sanity-check task generation, statistics, the
-   discrepancy report, and anonymization helpers. It does not implement an
-   agent runner, sandbox framework, run orchestrator, model abstraction,
-   transcript schema, experiment database, or results viewer. Simplicity is
-   a standing preference, not a hard budget.
+   discrepancy report, anonymization helpers, and the thin `aat solve` /
+   `aat grade` commands that construct and launch Harbor runs. It does not
+   implement an agent runner, sandbox framework, run orchestrator, model
+   abstraction, transcript schema, experiment database, or results viewer:
+   Harbor does all orchestration; the toolkit constructs one command line
+   and records what it ran. Simplicity is a standing preference, not a hard
+   budget.
 3. **Subscription-backed execution.** Agents and graders run through existing
    Codex CLI / Claude Code / Gemini CLI subscriptions, not per-token API
    billing. Harbor supports this natively, and the same cached-authentication
@@ -276,8 +286,12 @@ and its grading task. Build order:
 9. **Job-config generation** — pinned Codex job configurations (agent,
    model, effort, `-k`, concurrency) emitted alongside materialized
    datasets.
-10. **Thin CLI** — `materialize-solve` and `materialize-grading`; Harbor
-    remains the runner.
+10. **Thin CLI wrapping Harbor** — `aat solve` and `aat grade`:
+    materialize, then invoke `harbor run` as a subprocess;
+    `--materialize-only` exposes the file-writing layer alone. Each run
+    writes a run record (exact `harbor --version`, agent and model
+    configuration, effective command line, input hashes) beside the job
+    output.
 
 Each step lands with deterministic offline tests over small synthetic
 fixtures (a fake course and a fake submission under `tests/fixtures/`),
@@ -296,7 +310,9 @@ src/agentic_assessment_toolkit/
 │   ├── solve.py           # step 4: assignment → Harbor solve task
 │   └── grading.py         # step 6: submission → Harbor grading task
 ├── jobs.py                # step 9: pinned job-config emission
-├── cli.py                 # step 10: argparse, two subcommands
+├── harbor.py              # step 10: harbor command construction,
+│                          #   subprocess invocation, run record
+├── cli.py                 # step 10: argparse, `aat solve` / `aat grade`
 └── templates/             # package data (importlib.resources)
     ├── prompts/           # step 3: solver.md, grader.md
     ├── verifiers/         # steps 5 + 7: two standalone scripts
@@ -312,9 +328,76 @@ Implementation rules:
   `grading_schema.py` is itself written stdlib-only and self-contained so
   the same file works both as a package import and copied verbatim into a
   grading task beside its verifier — one source of truth for validation.
-- **The package never invokes Harbor.** It only writes files (tasks,
-  datasets, job configs); running jobs is maintainer live work (decision
-  13). Every module is therefore paths-in, files-out and testable offline.
-- **Zero runtime dependencies is deliberate** (argparse over click,
-  hand-rolled validation over pydantic or jsonschema). Adding a runtime
-  dependency requires a recorded decision.
+- **Repository tests never invoke Harbor or Docker.** The CLI wraps
+  `harbor run` in a subprocess for the user, but the materialization layer
+  stays paths-in, files-out; tests exercise materialization fully and
+  assert on the constructed Harbor command line without executing it
+  (decision 13, AGENTS.md).
+- **Harbor is the single runtime dependency**, version-bounded in
+  `pyproject.toml` and invoked through its CLI — its stable interface and
+  what the pilots validated — never through its internal Python API.
+  Docker and the agent CLIs remain documented external requirements that
+  packaging cannot provide. Other Python dependencies stay at zero
+  (argparse over click, hand-rolled validation over pydantic or
+  jsonschema); additions require a recorded decision.
+
+### CLI design
+
+Every command-line option belongs to one of three axes, and the axes are
+handled differently:
+
+1. **Selection — what to run on** (CLI flags): `--course`, `--assignment`,
+   `--submissions PATH`, `--all`. Selection is not an experimental
+   variable, so convenience wins.
+2. **Experiment configuration — how to run** (named config files, never
+   flags): agent, model, reasoning effort, solver/grader prompt version,
+   rubric version, and any agent-argument passthrough live in versioned
+   config files selected with `--config NAME`. The hash of this
+   configuration is the **config identity**: it labels results, is the
+   frozen judge configuration of decision 8, and is recorded in every run
+   record. Comparing models or efforts means separate invocations with
+   different named configs, so results are segregated and labeled by
+   construction.
+3. **Mechanics** (CLI flags): `--repeats N` (Harbor's `-k`; sampling
+   depth, see below), `--force`, `--dry-run` (list what would run, then
+   exit), `--materialize-only`.
+
+Sampling depth is not experiment identity. `--repeats` changes how many
+trials are drawn, not the system under test or the judge, so it is
+excluded from the config identity hash (though recorded in the run
+record). Trials pool by (item, config identity) across any number of jobs
+in `metric.py`: five repeats now and five later under the same config are
+one sample of ten. Pooling is valid only while the config is truly
+frozen — any prompt or rubric edit must be a new config version, which
+the identity hash enforces automatically.
+
+Idempotence: an item is **done** under a config when at least one
+completed trial exists for (item, config identity), derived from the data
+root layout — no separate bookkeeping state. Done items are skipped by
+default, so re-running a bulk command is naturally incremental ("grade
+what was not yet graded"). `--force` never overwrites: it launches
+another job whose trials accumulate alongside the existing ones.
+Regrading under a revised rubric needs no dedicated command: a new rubric
+is a new config identity, under which nothing is done yet, and prior
+results stay untouched.
+
+The surface is two commands:
+
+```text
+aat solve  [--course ID] [--assignment ID] [--all]
+           --config NAME [--repeats N] [--force] [--dry-run]
+           [--materialize-only]
+
+aat grade  [--submissions PATH | --course ID [--assignment ID]] [--all]
+           --config NAME [--repeats N] [--force] [--dry-run]
+           [--materialize-only]
+```
+
+New options must pass the axis test: if it changes the experiment, it
+belongs in a config file; if it changes selection or mechanics, a flag is
+legitimate. Deliberately deferred: a combined solve-then-grade command
+(manual chaining is fine, and the solve/grade separation is load-bearing)
+and rich selection syntax (globs, exclusions) until a real run needs
+them. Open detail for build step 6: the exact ergonomics of pointing
+`aat grade` at Harbor solve artifacts versus student folders — two
+selection flags over the same machinery, per decision 5.
