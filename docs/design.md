@@ -61,7 +61,10 @@ analysis are in research.md.
    artifact or a real student folder; the machinery is identical and the
    only difference is which directory is materialized into the grading
    task. Repeated grading for variance estimates is Harbor's native `-k`
-   repeated attempts.
+   repeated attempts. A rubric is an optional Markdown file: when present
+   it is the authority on point splits; when absent the grader defines a
+   reasonable split and must state it in the justification, matching
+   reference-repo practice.
 6. **Grades come from the grader's artifacts, not from verifier scoring.**
    Each stage has exactly one generic contract verifier, reused across all
    tasks; per-assignment test code is never written. The solve verifier is a
@@ -218,14 +221,15 @@ what the toolkit provides, not by live runs.
    datasets, and Codex job configs.
 2. **Grading core, Codex-first** — grading-task materializer; grader prompt
    template ported from the reference-repo grader; grading output schema;
-   generic grading verifier; grading environment template; discrepancy
-   report against a professor's grade export; anonymization helpers.
-   Complete when an agent solution and a real student folder both grade
-   through the identical path.
+   generic grading verifier; grading environment template. Complete when an
+   agent solution and a real student folder both grade through the
+   identical path — the vertical-slice acceptance criterion below.
 3. **Validity and statistics** — sanity-trio task generation (oracle,
    garbage, repeat stability); `-k` repeat configurations; explicit failure
    accounting; bootstrap confidence intervals; frozen grader-config
-   versioning for reportable runs; evaluation across the target corpus.
+   versioning for reportable runs; discrepancy report against a professor's
+   grade export; anonymization helpers; evaluation across the target
+   corpus.
 4. **Additional agent stacks** — integrate and validate Claude Code, Gemini
    CLI, and other agents as solvers and graders; add cross-agent
    configurations and comparisons only after the complete Codex pipeline is
@@ -280,3 +284,37 @@ fixtures (a fake course and a fake submission under `tests/fixtures/`),
 consistent with AGENTS.md. Stage 3 work (statistics, discrepancy report,
 anonymization, sanity-trio generation) starts after the slice reproduces
 the pilots.
+
+Planned module layout, mapping one-to-one onto the build order:
+
+```text
+src/agentic_assessment_toolkit/
+├── data_root.py           # step 1: resolution + refusal rules
+├── hashing.py             # shared: file/dir sha256 for provenance
+├── grading_schema.py      # step 2: fields + consistency validation
+├── materialize/
+│   ├── solve.py           # step 4: assignment → Harbor solve task
+│   └── grading.py         # step 6: submission → Harbor grading task
+├── jobs.py                # step 9: pinned job-config emission
+├── cli.py                 # step 10: argparse, two subcommands
+└── templates/             # package data (importlib.resources)
+    ├── prompts/           # step 3: solver.md, grader.md
+    ├── verifiers/         # steps 5 + 7: two standalone scripts
+    ├── environments/      # step 8: scientific-python Dockerfile
+    └── task/              # task.toml skeleton
+```
+
+Implementation rules:
+
+- **Verifiers are shipped files, not imported code.** They execute inside
+  containers where this package is not installed, so they are standalone
+  stdlib-only scripts copied into each materialized task.
+  `grading_schema.py` is itself written stdlib-only and self-contained so
+  the same file works both as a package import and copied verbatim into a
+  grading task beside its verifier — one source of truth for validation.
+- **The package never invokes Harbor.** It only writes files (tasks,
+  datasets, job configs); running jobs is maintainer live work (decision
+  13). Every module is therefore paths-in, files-out and testable offline.
+- **Zero runtime dependencies is deliberate** (argparse over click,
+  hand-rolled validation over pydantic or jsonschema). Adding a runtime
+  dependency requires a recorded decision.
