@@ -18,6 +18,21 @@ decisions are rewritten, not preserved as history.
 The project is in its initial development stage. Backward compatibility is not
 required unless explicitly requested.
 
+## Writing
+
+Everything here is read by a person: documentation, comments, prompts, commit
+messages, PR bodies, and answers to questions. Write so a competent engineer
+who has not followed this work understands it on the first read.
+
+- Use the everyday word. Reach for a specialized term only when no common
+  word is exact, and say what it means where you first use it.
+- Coin a new term only when the concept recurs and no plain phrasing stays
+  readable.
+- One concept, one name. When the repository already has a word for
+  something, use that word everywhere; do not introduce synonyms.
+- Plain wording never drops substance. Keep every decision, caveat, and exact
+  identifier; simplify the sentences, not the information.
+
 ## Validation
 
 Run `make check` after changes. It performs formatting verification, linting,
