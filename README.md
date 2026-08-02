@@ -104,6 +104,57 @@ one timestamped directory under `analysis/` in the data root (`--out`
 moves the destination, which is never allowed inside this repository).
 See the [design](docs/design.md) for the full CLI contract.
 
+### Gurobi WLS for optimization tasks
+
+Keep `gurobi.lic` outside this repository and the data root. Give `aat
+solve` its host path either through `--gurobi-license-file PATH` or the
+`AAT_GUROBI_LICENSE_FILE` environment variable:
+
+```bash
+export AAT_GUROBI_LICENSE_FILE=/home/sgusev/gurobi.lic
+
+aat solve --course PU_CHE597CO_S2026 --assignment HW04 \
+  --config codex-high --max-concurrent-trials 1
+```
+
+The toolkit verifies that the path is a file and that every selected
+assignment uses the `optimization` environment. The generated Harbor
+job mounts the file read-only at `/opt/gurobi/gurobi.lic`; neither the
+credential bytes nor their individual WLS values enter a task, image,
+or recorded JSON file. The host path is recorded in `harbor-job.json`.
+Omit the option and environment variable to run the optimization image
+without Gurobi licensing and use its license-free solvers.
+
+Before a course run, build the shipped image and solve a one-variable
+model in it. This is live validation: it needs Docker, internet access
+to Gurobi WLS, and an active license.
+
+```bash
+docker build \
+  --file src/agentic_assessment_toolkit/templates/environments/optimization.Dockerfile \
+  --tag aat-optimization-license-check .
+
+docker run --rm -i \
+  --mount "type=bind,source=$AAT_GUROBI_LICENSE_FILE,target=/opt/gurobi/gurobi.lic,readonly" \
+  aat-optimization-license-check python - <<'PY'
+import gurobipy as gp
+
+model = gp.Model("license-check")
+x = model.addVar(lb=0, name="x")
+model.addConstr(x <= 1)
+model.setObjective(x, gp.GRB.MAXIMIZE)
+model.optimize()
+assert model.Status == gp.GRB.OPTIMAL
+assert abs(model.ObjVal - 1) < 1e-9
+print("Gurobi WLS license check passed")
+PY
+```
+
+Start an Academic WLS course run with one concurrent trial unless the
+license portal shows capacity for more. Read-only mounting prevents the
+container from changing the file; code inside the container can still
+read it, so use a dedicated, renewable credential.
+
 To repeat a completed item, add `--force`. Repeats are additional trials;
 they never replace prior results:
 

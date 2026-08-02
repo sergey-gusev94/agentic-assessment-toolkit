@@ -2,9 +2,8 @@
 
 The toolkit drives ``harbor run`` through a generated job-config file
 rather than a long flag list: the config file is the one Harbor
-interface that can express an explicit task list (and, later, container
-startup env such as Gurobi WLS credentials), and it is recorded
-verbatim beside the job output.
+interface that can express an explicit task list and a run-time Gurobi
+license mount, and it is recorded verbatim beside the job output.
 """
 
 from __future__ import annotations
@@ -17,6 +16,8 @@ from .config import ConfigError, ExperimentConfig
 HARBOR_JOB_CONFIG_FILENAME = "harbor-job.json"
 
 DEFAULT_MAX_CONCURRENT_TRIALS = 8
+
+GUROBI_LICENSE_CONTAINER_PATH = "/opt/gurobi/gurobi.lic"
 
 
 def agent_kwargs(config: ExperimentConfig) -> dict[str, str]:
@@ -38,6 +39,7 @@ def build_harbor_job_config(
     job_dir: Path,
     repeats: int,
     max_concurrent_trials: int,
+    gurobi_license_file: Path | None = None,
 ) -> dict[str, object]:
     """A Harbor JobConfig document (harbor.models.job.config:JobConfig).
 
@@ -51,7 +53,7 @@ def build_harbor_job_config(
     kwargs = agent_kwargs(config)
     if kwargs:
         agent["kwargs"] = kwargs
-    return {
+    job_config: dict[str, object] = {
         "jobs_dir": str(job_dir.parent),
         "job_name": job_dir.name,
         "n_attempts": repeats,
@@ -59,6 +61,19 @@ def build_harbor_job_config(
         "agents": [agent],
         "tasks": [{"path": str(task_dir)} for task_dir in task_dirs],
     }
+    if gurobi_license_file is not None:
+        job_config["environment"] = {
+            "mounts": [
+                {
+                    "type": "bind",
+                    "source": str(gurobi_license_file),
+                    "target": GUROBI_LICENSE_CONTAINER_PATH,
+                    "read_only": True,
+                    "bind": {"create_host_path": False},
+                }
+            ]
+        }
+    return job_config
 
 
 def write_harbor_job_config(job_dir: Path, job_config: dict[str, object]) -> Path:

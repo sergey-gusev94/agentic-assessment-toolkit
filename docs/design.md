@@ -434,11 +434,14 @@ derived from the packages the reference corpus actually uses:
   toolchain (ipykernel, nbconvert, nbclient).
 - `optimization` — Pyomo with HiGHS (`highspy`) as the license-free
   default solver, GLPK, Ipopt (conda-forge binaries), and `gurobipy`
-  installed but unlicensed: Gurobi is enabled at run time by injecting
-  academic WLS credentials (`GRB_WLSACCESSID`, `GRB_WLSSECRET`,
-  `GRB_LICENSEID`, or a license file via `GRB_LICENSE_FILE`) from
-  outside the repository. Plus numpy, scipy, pandas, matplotlib,
-  openpyxl, and the notebook toolchain.
+  installed but unlicensed: Gurobi is enabled at run time with a
+  license file from outside the repository. `aat solve` resolves the
+  host path from `--gurobi-license-file` or
+  `AAT_GUROBI_LICENSE_FILE`, rejects a licensed selection containing
+  any non-optimization task, and has Harbor mount the file read-only at
+  `/opt/gurobi/gurobi.lic`, a standard Gurobi discovery path. Plus
+  numpy, scipy, pandas, matplotlib, openpyxl, and the notebook
+  toolchain.
 - `scientific-python` — the general flavor: numpy, scipy, pandas,
   matplotlib, sympy, python-control (used by the control-systems
   course), openpyxl, and the notebook toolchain.
@@ -874,7 +877,12 @@ handled differently:
 3. **Mechanics** (CLI flags): `--repeats N` (Harbor's `n_attempts`;
    sampling depth, default 1, see below), `--max-concurrent-trials N`
    (Harbor's job-wide `n_concurrent_trials`, default 8), `--force`,
-   `--dry-run` (list what would run, then exit), `--materialize-only`.
+   `--dry-run` (list what would run, then exit), `--materialize-only`,
+   and solve-only `--gurobi-license-file PATH` (falling back to
+   `AAT_GUROBI_LICENSE_FILE`). The license path is run-time host
+   configuration, not experiment identity. It produces a read-only
+   Harbor bind mount and is valid only when every selected assignment
+   resolves the `optimization` environment.
 
 Sampling depth is not experiment identity. `--repeats` changes how many
 trials are drawn, not the system under test or the judge, so it is
@@ -911,6 +919,7 @@ from the repository root or pass an explicit path):
 aat solve  (--course ID [--assignment ID] | --all)
            --config NAME [--data-root PATH] [--repeats N]
            [--max-concurrent-trials N] [--force]
+           [--gurobi-license-file PATH]
            [--dry-run] [--materialize-only]
 
 aat grade  (--from-solve NAME [--course ID] [--assignment ID]

@@ -117,6 +117,132 @@ def test_solve_materialize_only_writes_job_dir(
     assert "materialize-only" in out
 
 
+def test_solve_mounts_explicit_gurobi_license(
+    data_root: Path, solve_config: Path, tmp_path: Path
+) -> None:
+    course_toml = data_root / "courses" / COURSE_ID / "course.toml"
+    course_toml.write_text(
+        course_toml.read_text(encoding="utf-8").replace(
+            'environment = "scientific-python"', 'environment = "optimization"'
+        ),
+        encoding="utf-8",
+    )
+    license_file = tmp_path / "gurobi.lic"
+    license_file.write_text("credential\n", encoding="utf-8")
+
+    assert (
+        cli.main(
+            solve_args(
+                data_root,
+                solve_config,
+                "--course",
+                COURSE_ID,
+                "--assignment",
+                "HW1",
+                "--gurobi-license-file",
+                str(license_file),
+                "--materialize-only",
+            )
+        )
+        == 0
+    )
+    job_config = json.loads(
+        (job_dirs(data_root, "solving")[0] / "harbor-job.json").read_text(encoding="utf-8")
+    )
+    assert job_config["environment"]["mounts"] == [
+        {
+            "bind": {"create_host_path": False},
+            "read_only": True,
+            "source": str(license_file.resolve()),
+            "target": "/opt/gurobi/gurobi.lic",
+            "type": "bind",
+        }
+    ]
+
+
+def test_solve_rejects_gurobi_license_for_non_optimization_task(
+    data_root: Path, solve_config: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    license_file = tmp_path / "gurobi.lic"
+    license_file.write_text("credential\n", encoding="utf-8")
+    assert (
+        cli.main(
+            solve_args(
+                data_root,
+                solve_config,
+                "--course",
+                COURSE_ID,
+                "--assignment",
+                "HW1",
+                "--gurobi-license-file",
+                str(license_file),
+                "--materialize-only",
+            )
+        )
+        == 2
+    )
+    assert "resolves 'scientific-python'" in capsys.readouterr().err
+    assert job_dirs(data_root, "solving") == []
+
+
+def test_solve_uses_gurobi_license_environment_variable(
+    data_root: Path,
+    solve_config: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    course_toml = data_root / "courses" / COURSE_ID / "course.toml"
+    course_toml.write_text(
+        course_toml.read_text(encoding="utf-8").replace(
+            'environment = "scientific-python"', 'environment = "optimization"'
+        ),
+        encoding="utf-8",
+    )
+    license_file = tmp_path / "gurobi.lic"
+    license_file.write_text("credential\n", encoding="utf-8")
+    monkeypatch.setenv(cli.GUROBI_LICENSE_ENV_VAR, str(license_file))
+
+    assert (
+        cli.main(
+            solve_args(
+                data_root,
+                solve_config,
+                "--course",
+                COURSE_ID,
+                "--assignment",
+                "HW1",
+                "--dry-run",
+            )
+        )
+        == 0
+    )
+    assert f"Gurobi license: read-only mount from {license_file}" in capsys.readouterr().out
+    assert job_dirs(data_root, "solving") == []
+
+
+def test_solve_rejects_missing_gurobi_license_file(
+    data_root: Path, solve_config: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    missing = tmp_path / "missing.lic"
+    assert (
+        cli.main(
+            solve_args(
+                data_root,
+                solve_config,
+                "--course",
+                COURSE_ID,
+                "--gurobi-license-file",
+                str(missing),
+                "--dry-run",
+            )
+        )
+        == 2
+    )
+    assert str(missing) in capsys.readouterr().err
+    assert job_dirs(data_root, "solving") == []
+
+
 def test_grade_max_concurrent_trials_is_forwarded_and_recorded(
     data_root: Path, grade_config: Path
 ) -> None:

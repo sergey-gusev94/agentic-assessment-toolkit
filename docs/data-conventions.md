@@ -127,11 +127,16 @@ Notes:
   subdirectory containing its tables, Markdown report, and provenance
   (toolkit version, config identities, job directories consumed, and
   the bootstrap seed). It is a cache, never a source of truth.
-- Solver licenses (e.g. a Gurobi WLS license file or its
-  `GRB_WLSACCESSID`/`GRB_WLSSECRET`/`GRB_LICENSEID` values) are
-  credentials: they live outside the repository — in the data root or
-  the maintainer's environment — and are injected into containers at
-  run time, never baked into images or committed.
+- Solver licenses (e.g. a Gurobi WLS license file) are credentials:
+  they live in a maintainer-controlled path outside both repositories
+  and are injected into containers at run time, never baked into
+  images or committed. `aat solve` accepts a
+  host license path through `--gurobi-license-file` or
+  `AAT_GUROBI_LICENSE_FILE`, only when every selected assignment uses
+  the `optimization` environment. Harbor mounts that file read-only at
+  `/opt/gurobi/gurobi.lic`. The generated job config records the host
+  path and mount properties, never the file bytes or individual WLS
+  values.
 
 ## Course content contract
 
@@ -306,14 +311,15 @@ re-running the recorded command safely resumes an interrupted job. The
 run record holds the Harbor version (read from the binary for executed
 runs, from package metadata for materialize-only runs), the toolkit's
 own version, agent and model configuration, effective command line,
-repeats, maximum concurrent trials, and executed flag,
-requested items with their per-item identities, explicit course and
-assignment ids, and explicit lineage (submission source, student id
-for student grading items, solve job and trial for solve-derived
-grading items), config identity, and
+repeats, maximum concurrent trials, executed flag, requested items with
+their per-item identities, explicit course and assignment ids, explicit
+lineage (submission source, student id for student grading items, solve
+job and trial for solve-derived grading items), config identity, and
 input hashes (assignment, prompt, environment template, verifier,
-rubric, rubric source, submission, reference solution, grading
-schema — as applicable). Doneness of an item under a config is derived from these
+rubric, rubric source, submission, reference solution, grading schema —
+as applicable). When present, `harbor-job.json` records the Gurobi
+license's host path and read-only container mount. Doneness of an item
+under a config is derived from these
 directories and Harbor's per-trial result files; there is no separate
 bookkeeping state. A solve item is done when a verified trial — one
 whose verifier recorded a reward — exists (a 0-reward contract failure

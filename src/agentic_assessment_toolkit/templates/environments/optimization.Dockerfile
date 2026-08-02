@@ -5,9 +5,8 @@
 # binary that pip cannot provide), GLPK, and gurobipy installed but
 # unlicensed. A conda-forge base is used because of Ipopt.
 #
-# Gurobi is enabled at run time by injecting academic WLS credentials
-# (GRB_WLSACCESSID, GRB_WLSSECRET, GRB_LICENSEID — or a license file
-# path in GRB_LICENSE_FILE) from outside the repository. Never bake a
+# Gurobi is enabled at run time by mounting gurobi.lic read-only at
+# /opt/gurobi/gurobi.lic from outside the repository. Never bake a
 # license into this image (docs/data-conventions.md).
 
 FROM mambaorg/micromamba:2.1.1

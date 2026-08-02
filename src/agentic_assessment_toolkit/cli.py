@@ -43,6 +43,7 @@ from .materialize.solve import materialize_solve_task
 SOLVE_JOBS_DIRNAME = "solving"
 GRADING_JOBS_DIRNAME = "grading"
 DATA_ROOT_HELP = "data root (default: AAT_DATA_DIR, then ~/aat-data)"
+GUROBI_LICENSE_ENV_VAR = "AAT_GUROBI_LICENSE_FILE"
 
 
 class CliError(Exception):
@@ -114,6 +115,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     solve.add_argument("--course", metavar="ID")
     solve.add_argument("--assignment", metavar="ID")
+    solve.add_argument(
+        "--gurobi-license-file",
+        metavar="PATH",
+        help=(
+            "read-only host license file mounted into optimization containers "
+            f"(default: {GUROBI_LICENSE_ENV_VAR})"
+        ),
+    )
     solve.add_argument(
         "--all", action="store_true", dest="all_items", help="every assignment of every course"
     )
@@ -244,10 +253,28 @@ def _run(args: argparse.Namespace) -> int:
     jobs_root = root / (SOLVE_JOBS_DIRNAME if stage == "solve" else GRADING_JOBS_DIRNAME)
     done = harbor_mod.done_items(jobs_root, stage)
     if stage == "solve":
-        planned = _plan_solve(root, config, config_identity, done, args)
+        gurobi_license_file = _resolve_gurobi_license_file(args.gurobi_license_file)
+        planned = _plan_solve(
+            root,
+            config,
+            config_identity,
+            done,
+            args,
+            gurobi_license_file=gurobi_license_file,
+        )
     else:
+        gurobi_license_file = None
         planned = _plan_grade(root, config, config_identity, done, args)
-    return _execute(stage, root, jobs_root, config, config_identity, planned, args)
+    return _execute(
+        stage,
+        root,
+        jobs_root,
+        config,
+        config_identity,
+        planned,
+        args,
+        gurobi_license_file=gurobi_license_file,
+    )
 
 
 def _run_init_data(args: argparse.Namespace) -> int:
@@ -386,12 +413,24 @@ def _config_path(value: str) -> Path:
     return (Path("configs") / f"{value}.toml").resolve()
 
 
+def _resolve_gurobi_license_file(value: str | None) -> Path | None:
+    raw_path = value or os.environ.get(GUROBI_LICENSE_ENV_VAR, "").strip()
+    if not raw_path:
+        return None
+    path = Path(raw_path).expanduser().resolve()
+    if not path.is_file():
+        raise CliError(f"Gurobi license file does not exist or is not a file: {path}")
+    return path
+
+
 def _plan_solve(
     root: Path,
     config: ExperimentConfig,
     config_identity: str,
     done: set[tuple[str, str]],
     args: argparse.Namespace,
+    *,
+    gurobi_license_file: Path | None,
 ) -> list[_PlannedItem]:
     if args.all_items and args.course:
         raise CliError("--all and --course are mutually exclusive")
@@ -419,6 +458,12 @@ def _plan_solve(
                     f"assignment {assignment.item_id!r} resolves environment 'grading', "
                     "which is reserved for grading tasks; course flavors are for solve "
                     "tasks only (docs/design.md, environment templates)"
+                )
+            if gurobi_license_file is not None and assignment.environment_flavor != "optimization":
+                raise CliError(
+                    "--gurobi-license-file can only be used when every selected "
+                    "assignment resolves environment 'optimization'; "
+                    f"{assignment.item_id!r} resolves {assignment.environment_flavor!r}"
                 )
             template_bytes = config_mod.environment_path(assignment.environment_flavor).read_bytes()
             identity = config_mod.item_identity(config_identity, template_bytes)
@@ -690,6 +735,8 @@ def _execute(
     config_identity: str,
     planned: list[_PlannedItem],
     args: argparse.Namespace,
+    *,
+    gurobi_license_file: Path | None,
 ) -> int:
     to_run = planned if args.force else [item for item in planned if not item.done]
 
@@ -702,6 +749,8 @@ def _execute(
             f"would run {len(to_run)} of {len(planned)} item(s); "
             f"max concurrent trials: {args.max_concurrent_trials}"
         )
+        if gurobi_license_file is not None:
+            print(f"Gurobi license: read-only mount from {gurobi_license_file}")
         return 0
 
     if not to_run:
@@ -725,6 +774,7 @@ def _execute(
         job_dir=job_dir,
         repeats=args.repeats,
         max_concurrent_trials=args.max_concurrent_trials,
+        gurobi_license_file=gurobi_license_file,
     )
     job_config_path = jobs_mod.write_harbor_job_config(job_dir, job_config)
     command = harbor_mod.build_harbor_command(job_config_path)
@@ -748,6 +798,8 @@ def _execute(
     print(f"job directory: {job_dir}")
     print(f"materialized {len(record_items)} task(s)")
     print(f"max concurrent trials: {args.max_concurrent_trials}")
+    if gurobi_license_file is not None:
+        print(f"Gurobi license: read-only mount from {gurobi_license_file}")
     if args.materialize_only:
         print(f"materialize-only; harbor not invoked. command: {shlex.join(command)}")
         return 0
