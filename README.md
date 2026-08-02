@@ -38,13 +38,15 @@ to this repository, see [data conventions](docs/data-conventions.md))
 and launches `harbor run`:
 
 ```bash
-export AAT_DATA_DIR=/path/to/data-root
-
 aat solve --course PU_CHE597DS_S2026 --config codex-high
 aat grade --from-solve codex-high --config codex-grader-high
 aat grade --course PU_CHE597DS_S2026 --config codex-grader-high  # student folders
 aat report                             # tables + report.md under analysis/
 ```
+
+The data root defaults to `~/aat-data`. The toolkit does not create it;
+use `--data-root PATH` for a one-off override or set `AAT_DATA_DIR` to change
+the default for an environment or shell.
 
 Experiment configs live under [`configs/`](configs/); a bare
 `--config NAME` resolves to `configs/NAME.toml` relative to the current
@@ -81,8 +83,8 @@ browse a whole stage — job directories are Harbor job directories, so the
 viewer works on the shared `solving/` and `grading/` parents too:
 
 ```bash
-harbor view "$AAT_DATA_DIR/grading/20260801T044338Z__codex-grader-high__44292e75"
-harbor view "$AAT_DATA_DIR/solving"
+harbor view ~/aat-data/grading/20260801T044338Z__codex-grader-high__44292e75
+harbor view ~/aat-data/solving
 ```
 
 Do not use Harbor's suggested `upload` command for real coursework unless the

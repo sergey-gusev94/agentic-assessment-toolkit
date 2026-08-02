@@ -2,8 +2,8 @@
 
 The conventions implemented here are specified in docs/data-conventions.md:
 all real course and student data lives in a single directory outside the
-toolkit's own repository, resolved explicitly or through ``AAT_DATA_DIR``,
-never defaulted.
+toolkit's own repository, resolved explicitly, through ``AAT_DATA_DIR``, or
+from the per-user default at ``~/aat-data``.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from pathlib import Path
 from .course import load_course
 
 ENV_VAR = "AAT_DATA_DIR"
+DEFAULT_DIRNAME = "aat-data"
 
 _TOOLKIT_NAME = "agentic-assessment-toolkit"
 
@@ -27,19 +28,24 @@ class DataRootError(Exception):
 
 
 def resolve_data_root(explicit: str | os.PathLike[str] | None = None) -> Path:
-    """Resolve the data root: explicit path, then ``AAT_DATA_DIR``, then a clear error."""
+    """Resolve the data root: explicit path, ``AAT_DATA_DIR``, then ``~/aat-data``."""
+    using_default = False
     if explicit is not None and str(explicit).strip():
         candidate = Path(explicit)
     else:
         env_value = os.environ.get(ENV_VAR, "").strip()
-        if not env_value:
-            raise DataRootError(
-                "no data root: pass an explicit path (--data-root) or set "
-                f"{ENV_VAR}; there is no default (docs/data-conventions.md)"
-            )
-        candidate = Path(env_value)
+        if env_value:
+            candidate = Path(env_value)
+        else:
+            candidate = Path.home() / DEFAULT_DIRNAME
+            using_default = True
     root = candidate.expanduser().resolve()
     if not root.is_dir():
+        if using_default:
+            raise DataRootError(
+                f"default data root {root} does not exist or is not a directory; "
+                f"create it, pass --data-root, or set {ENV_VAR}"
+            )
         raise DataRootError(f"data root {root} does not exist or is not a directory")
     ensure_outside_toolkit(root, what="data root")
     return root

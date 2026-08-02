@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from agentic_assessment_toolkit.data_root import (
+    DEFAULT_DIRNAME,
     ENV_VAR,
     DataRootError,
     find_rubric,
@@ -31,9 +32,19 @@ def test_env_var_is_used(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     assert resolve_data_root() == root.resolve()
 
 
-def test_no_default_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_path_is_used(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(ENV_VAR, raising=False)
-    with pytest.raises(DataRootError, match="no data root"):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = tmp_path / DEFAULT_DIRNAME
+    root.mkdir()
+    assert resolve_data_root() == root.resolve()
+
+
+def test_missing_default_is_an_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(ENV_VAR, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    expected = tmp_path / DEFAULT_DIRNAME
+    with pytest.raises(DataRootError, match=rf"default data root {expected} does not exist"):
         resolve_data_root()
 
 
@@ -126,8 +137,10 @@ def test_list_student_submissions(data_root: Path) -> None:
 
 def test_empty_explicit_path_falls_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(ENV_VAR, raising=False)
-    with pytest.raises(DataRootError, match="no data root"):
-        resolve_data_root("")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    default_root = tmp_path / DEFAULT_DIRNAME
+    default_root.mkdir()
+    assert resolve_data_root("") == default_root.resolve()
     root = tmp_path / "root"
     root.mkdir()
     monkeypatch.setenv(ENV_VAR, str(root))

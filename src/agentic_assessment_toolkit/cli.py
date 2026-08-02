@@ -42,6 +42,7 @@ from .materialize.solve import materialize_solve_task
 
 SOLVE_JOBS_DIRNAME = "solving"
 GRADING_JOBS_DIRNAME = "grading"
+DATA_ROOT_HELP = "data root (default: AAT_DATA_DIR, then ~/aat-data)"
 
 
 class CliError(Exception):
@@ -67,9 +68,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument(
-        "--data-root", metavar="PATH", help="explicit data root (else AAT_DATA_DIR)"
-    )
+    common.add_argument("--data-root", metavar="PATH", help=DATA_ROOT_HELP)
     common.add_argument(
         "--config",
         required=True,
@@ -149,9 +148,7 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="all_items",
         help="every unprocessed dump under raw/",
     )
-    intake.add_argument(
-        "--data-root", metavar="PATH", help="explicit data root (else AAT_DATA_DIR)"
-    )
+    intake.add_argument("--data-root", metavar="PATH", help=DATA_ROOT_HELP)
     intake.add_argument(
         "--model",
         default=intake_mod.DEFAULT_MODEL,
@@ -181,7 +178,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="report a course tree's contract violations, gaps, and intake notes (read-only)",
     )
     check.add_argument("--course", required=True, metavar="ID")
-    check.add_argument("--data-root", metavar="PATH", help="explicit data root (else AAT_DATA_DIR)")
+    check.add_argument("--data-root", metavar="PATH", help=DATA_ROOT_HELP)
 
     report = subparsers.add_parser(
         "report", help="render statistics tables and a Markdown report (read-only)"
@@ -206,9 +203,7 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="report destination (default: <data-root>/analysis; never inside this repository)",
     )
-    report.add_argument(
-        "--data-root", metavar="PATH", help="explicit data root (else AAT_DATA_DIR)"
-    )
+    report.add_argument("--data-root", metavar="PATH", help=DATA_ROOT_HELP)
     return parser
 
 

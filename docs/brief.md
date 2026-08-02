@@ -137,8 +137,9 @@ statistical reporting.
   documentation, templates, and synthetic test fixtures, and must always be
   safe to publish. All real data — assignments, reference solutions, student
   submissions, rosters, grades, run artifacts, transcripts, and trajectories —
-  lives in a data root outside the repository, resolved through configuration,
-  and is never committed. The separation is structural (data is not in the
+  lives in a data root outside the repository, defaulting to `~/aat-data` with
+  explicit path and environment-variable overrides, and is never committed.
+  The separation is structural (data is not in the
   working tree at all), not a convention to remember, because autonomous
   agents operate in this repository and cannot be trusted to honor
   conventions. The data root may itself be versioned as a separate private or

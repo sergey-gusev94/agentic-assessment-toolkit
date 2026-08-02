@@ -862,9 +862,9 @@ paths on one real assignment from the data root. The pilots recorded in
 [live-validation.md](live-validation.md) are evidence that this shape
 works, not templates to reproduce. Build order:
 
-1. **Data-root resolution** — explicit path, then `AAT_DATA_DIR`, then a
-   clear error; a data root inside the toolkit's own working tree is
-   refused (precise rule in
+1. **Data-root resolution** — explicit path, then `AAT_DATA_DIR`, then the
+   per-user default `~/aat-data`; a missing default produces a clear error,
+   and a data root inside the toolkit's own working tree is refused (precise rule in
    [data-conventions.md](data-conventions.md)).
 2. **Grading output schema** — the `grading_result.json` fields and
    internal-consistency rules as a schema plus a validation function,
@@ -1034,8 +1034,8 @@ is a new config identity, under which nothing is done yet, and prior
 results stay untouched.
 
 The surface is three commands (`--data-root PATH` selects the data root
-explicitly, falling back to `AAT_DATA_DIR`; it is location, not an
-experiment axis; a bare `--config NAME` resolves to
+explicitly, falling back to `AAT_DATA_DIR` and then `~/aat-data`; it is
+location, not an experiment axis; a bare `--config NAME` resolves to
 `configs/NAME.toml` relative to the current working directory, so run
 from the repository root or pass an explicit path):
 

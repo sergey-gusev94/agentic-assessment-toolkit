@@ -15,7 +15,13 @@ Resolution order:
 
 1. An explicit path passed programmatically or on the command line.
 2. The `AAT_DATA_DIR` environment variable.
-3. Otherwise: fail with a clear error. There is no default.
+3. The per-user default `~/aat-data`.
+
+The toolkit does not create the default directory. If `~/aat-data` does not
+exist, resolution fails with a clear error naming the attempted path and the
+two override mechanisms. This keeps the usual single-user setup free of
+repeated path arguments while alternate corpora and installations remain
+explicit.
 
 The toolkit refuses a data root inside its own repository. Precisely:
 the resolved data root must not lie inside a git working tree whose

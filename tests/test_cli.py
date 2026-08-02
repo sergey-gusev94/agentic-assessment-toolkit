@@ -370,12 +370,16 @@ def test_config_name_resolution(
     assert "would run" in capsys.readouterr().out
 
 
-def test_missing_data_root_is_an_error(
-    solve_config: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+def test_missing_default_data_root_is_an_error(
+    solve_config: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.delenv("AAT_DATA_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
     assert run_cli("solve", "--config", str(solve_config), "--all") == 2
-    assert "no data root" in capsys.readouterr().err
+    assert f"default data root {tmp_path / 'aat-data'} does not exist" in capsys.readouterr().err
 
 
 def test_doneness_is_per_item_not_per_identity_solve(
