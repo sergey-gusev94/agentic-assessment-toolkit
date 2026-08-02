@@ -33,6 +33,17 @@ def test_render_prompt_substitutes_the_course_id() -> None:
     assert "{course_id}" not in prompt
 
 
+def test_render_prompt_requires_bounded_assignment_audits() -> None:
+    prompt = intake.render_prompt("PU_X_F2026")
+    normalized = " ".join(prompt.split())
+    assert "spawn one read-only subagent per assignment" in normalized
+    assert "student-facing assignment bundle" in normalized
+    assert "instructor/reference-solution bundle" in normalized
+    assert "NO_RUBRIC" in normalized
+    assert "spawn one final read-only reviewer subagent" in normalized
+    assert "wait for every audit" in normalized
+
+
 def test_build_command() -> None:
     command = intake.build_command("PROMPT", "gpt-5.6-sol", "high")
     assert command == [

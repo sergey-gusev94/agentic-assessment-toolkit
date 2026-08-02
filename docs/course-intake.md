@@ -29,12 +29,16 @@ intake never touches those trees.
    CLI once per unprocessed dump — sequentially, in a workspace-write
    sandbox scoped to the data root, with pinned defaults
    (`gpt-5.6-sol`, high reasoning effort; override with `--model` /
-   `--reasoning-effort`). Ten dumps means ten runs. Output streams to
-   the console and to `scratch/intake/<stamp>__<course>.log`; after
-   each successful run the command writes the course's
-   `intake-record.json` receipt and prints its `aat check-course`
-   report. A failed run writes no receipt — re-running `aat intake` is
-   the retry. `--dry-run` lists what would run.
+   `--reasoning-effort`). Ten dumps means ten top-level runs. Within
+   each run, the primary agent delegates one read-only audit per
+   material-backed assignment, waits for every audit, writes the
+   artifacts itself, and delegates a final coverage review. Output
+   streams to the console and to
+   `scratch/intake/<stamp>__<course>.log`; after each successful run the
+   command writes the course's `intake-record.json` receipt and prints
+   its `aat check-course` report. A failed run writes no receipt —
+   re-running `aat intake` is the retry. `--dry-run` lists what would
+   run.
 3. **Review and fill.** Fix violations, fill what the materials could
    not answer, and review every judgment call in `intake-notes.md` —
    rubric drafts most carefully, because a rubric is the frozen judge

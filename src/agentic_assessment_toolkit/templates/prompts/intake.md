@@ -40,6 +40,72 @@ courses/{course_id}/
 Do not create or edit `intake-record.json`: the toolkit writes that
 receipt itself after you finish.
 
+## Required workflow
+
+Keep the primary agent focused on course-wide inventory, decisions,
+writing, and validation. After mapping the material-backed assessments
+to assignment and reference-solution sources, **spawn one read-only
+subagent per assignment**. Run independent assignment audits in parallel
+up to the available capacity, and wait for every audit before drafting
+or omitting any rubric. Subagents must not edit files or create
+directories; the primary agent is the only writer.
+
+Give each assignment subagent only its bounded audit. It must inspect
+both of these sources in full:
+
+1. the student-facing assignment bundle, including every attachment;
+2. the complete instructor/reference-solution bundle, including
+   alternate or corrected statement copies and grading notes.
+
+It must return a concise, structured report containing:
+
+- the assignment id and every student and instructor source path it
+  checked;
+- every explicit point allocation, grading scheme, bonus rule,
+  normalization rule, and qualitative grading instruction, cited to a
+  file and notebook cell, section heading, page, or other precise
+  location;
+- conflicts between student-facing and instructor materials, including
+  requirements added or changed by a corrected statement;
+- any standalone professor rubric files that belong in `source/`;
+- a proposed `default.md` rubric at the most granular explicit point
+  split the sources support; or
+- `NO_RUBRIC`, only when **both** bundles contain no numeric point
+  allocation, with the negative-search evidence and any qualitative
+  grading guidance still reported.
+
+Instructor/reference materials are valid sources of rubric points and
+grading rules even when those rules do not appear in the student-facing
+handout. Never conclude that an assignment lacks numeric points after
+checking only the student-facing bundle. At the same time, a corrected
+instructor statement does not silently replace the as-received student
+handout: report any mismatch, use only criteria applicable to the
+student-facing work, and flag anything that needs human judgment.
+
+After all assignment reports return, make an audit table in
+`intake-notes.md` with one row per material-backed assessment and these
+columns: assignment id, student sources checked, instructor sources
+checked, point evidence, rubric action, and conflicts. Use the reports
+to write the course artifacts. Every assignment must end with either a
+`default.md` rubric or an evidence-backed `NO_RUBRIC` explanation in the
+notes.
+
+Then spawn one final read-only reviewer subagent. Give it the assignment
+inventory, completed audit table, generated rubrics, and raw source
+locations. It must check that every assignment is accounted for, reopen
+both source bundles for every omitted rubric, verify that cited point
+schemes were not lost during synthesis, and report rubric-total,
+bonus-status, normalization, or handout/reference conflicts. Wait for
+the review and resolve every finding that the source materials answer;
+put genuinely unresolved judgments in `intake-notes.md`. On an
+incremental run, obey the immutability rule above: record a finding
+against an existing artifact instead of modifying that artifact.
+
+If subagent tools are unavailable, do not silently skip this workflow.
+Perform the same bounded audits sequentially, keep each report concise,
+record the lack of subagent availability in `intake-notes.md`, and still
+complete the audit table and final review.
+
 ## Rules
 
 **Assignments.** One assignment = one directory, named by its id.
@@ -93,11 +159,12 @@ points embedded in the assignment or reference files), copy it
 verbatim into `rubrics/<assignment_id>/source/`; the grader is shown
 it alongside your transcription.
 
-For each assignment whose materials state a point split — grading
-schemes in notebook cells, points in section headers, rubric
-documents — draft `rubrics/<assignment_id>/default.md`. The rubric is
-a **detailed grading document**, not a bare list: ordinary Markdown
-prose plus one bullet line per criterion in exactly this format:
+For each assignment whose student-facing **or instructor/reference**
+materials state a point split — grading schemes in notebook cells,
+points in section headers, rubric documents — draft
+`rubrics/<assignment_id>/default.md`. The rubric is a **detailed
+grading document**, not a bare list: ordinary Markdown prose plus one
+bullet line per criterion in exactly this format:
 
 ```markdown
 - `<id>` (<points> point[s][, bonus]): <title>
@@ -133,8 +200,10 @@ when they do not. For example:
 
 Transcribe faithfully; where the source is vague (section totals only,
 unclear bonus status), still draft the best faithful rubric and flag
-the ambiguity in the notes. Where no point information exists at all,
-draft nothing and note it.
+the ambiguity in the notes. Where no point information exists in
+either the student-facing or instructor/reference bundle, draft
+nothing and record the assignment audit's negative-search evidence in
+the notes.
 
 **`intake-notes.md`.** Your report to the maintainer, and the only
 place for uncertainty: the sources each registry fact came from, every
