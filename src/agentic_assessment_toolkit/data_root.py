@@ -1,14 +1,18 @@
-"""Data-root resolution, refusal rules, and data-root layout accessors.
+"""Data-root resolution, refusal rules, creation, and layout accessors.
 
 The conventions implemented here are specified in docs/data-conventions.md:
 all real course and student data lives in a single directory outside the
 toolkit's own repository, resolved explicitly, through ``AAT_DATA_DIR``, or
-from the per-user default at ``~/aat-data``.
+from the per-user default at ``~/aat-data``. Resolution never creates
+anything; ``aat init-data`` (`init_data_root`) is the explicit way to
+create the data root and its top-level layout.
 """
 
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,9 +22,44 @@ from .course import load_course
 ENV_VAR = "AAT_DATA_DIR"
 DEFAULT_DIRNAME = "aat-data"
 
+TOP_LEVEL_DIRS = (
+    "raw",
+    "courses",
+    "submissions",
+    "tables",
+    "tasks",
+    "solving",
+    "grading",
+    "analysis",
+    "scratch",
+)
+
 _TOOLKIT_NAME = "agentic-assessment-toolkit"
 
 _KNOWN_SIDECAR_KEYS = frozenset({"environment"})
+
+_README = """\
+# Agentic Assessment Toolkit data root
+
+All real course and student data for the `aat` toolkit lives here: raw
+course dumps, assignments, reference solutions, rubrics, student
+submissions, identity tables, and every job's tasks, transcripts, and
+reports. Treat the whole directory as private; never publish it or copy
+its contents into the toolkit repository.
+
+Each subdirectory's purpose and rules are specified in
+docs/data-conventions.md in the toolkit repository.
+"""
+
+_GITIGNORE = """\
+# Regenerable outputs (toolkit docs/data-conventions.md): materialized
+# task inputs, derived analysis reports, and disposable scratch space.
+# Everything else here is source data or experiment results; commit it
+# deliberately, and never push this repository anywhere public.
+/tasks/
+/analysis/
+/scratch/
+"""
 
 
 class DataRootError(Exception):
@@ -29,26 +68,78 @@ class DataRootError(Exception):
 
 def resolve_data_root(explicit: str | os.PathLike[str] | None = None) -> Path:
     """Resolve the data root: explicit path, ``AAT_DATA_DIR``, then ``~/aat-data``."""
-    using_default = False
-    if explicit is not None and str(explicit).strip():
-        candidate = Path(explicit)
-    else:
-        env_value = os.environ.get(ENV_VAR, "").strip()
-        if env_value:
-            candidate = Path(env_value)
-        else:
-            candidate = Path.home() / DEFAULT_DIRNAME
-            using_default = True
-    root = candidate.expanduser().resolve()
+    root, using_default = _candidate_root(explicit)
     if not root.is_dir():
         if using_default:
             raise DataRootError(
                 f"default data root {root} does not exist or is not a directory; "
-                f"create it, pass --data-root, or set {ENV_VAR}"
+                f"run `aat init-data`, pass --data-root, or set {ENV_VAR}"
             )
         raise DataRootError(f"data root {root} does not exist or is not a directory")
     ensure_outside_toolkit(root, what="data root")
     return root
+
+
+def _candidate_root(explicit: str | os.PathLike[str] | None) -> tuple[Path, bool]:
+    """The resolution order shared by resolve and init; True means the default."""
+    if explicit is not None and str(explicit).strip():
+        return Path(explicit).expanduser().resolve(), False
+    env_value = os.environ.get(ENV_VAR, "").strip()
+    if env_value:
+        return Path(env_value).expanduser().resolve(), False
+    return (Path.home() / DEFAULT_DIRNAME).resolve(), True
+
+
+def init_data_root(
+    explicit: str | os.PathLike[str] | None = None, *, git: bool = False
+) -> tuple[Path, list[str]]:
+    """Create the data root and its top-level layout (``aat init-data``).
+
+    The explicit counterpart to resolution never creating anything:
+    makes the resolved directory, the top-level layout, and a short
+    README; with ``git`` also a private git repository with a
+    ``.gitignore`` for the regenerable directories. Idempotent —
+    existing directories and files are kept untouched — so it also
+    fills in missing top-level directories of an existing data root.
+    Returns the root and the entries it created, in creation order.
+    """
+    root, _ = _candidate_root(explicit)
+    if root.exists() and not root.is_dir():
+        raise DataRootError(f"data root {root} exists and is not a directory")
+    ensure_outside_toolkit(root, what="data root")
+    if git and shutil.which("git") is None:
+        raise DataRootError("--git needs a `git` executable on PATH, and none was found")
+
+    created: list[str] = []
+    root.mkdir(parents=True, exist_ok=True)
+    for name in TOP_LEVEL_DIRS:
+        directory = root / name
+        if directory.is_dir():
+            continue
+        if directory.exists():
+            raise DataRootError(f"{directory} exists and is not a directory")
+        directory.mkdir()
+        created.append(f"{name}/")
+    readme = root / "README.md"
+    if not readme.exists():
+        readme.write_text(_README, encoding="utf-8")
+        created.append(readme.name)
+    if git:
+        gitignore = root / ".gitignore"
+        if not gitignore.exists():
+            gitignore.write_text(_GITIGNORE, encoding="utf-8")
+            created.append(gitignore.name)
+        if not (root / ".git").exists():
+            result = subprocess.run(
+                ["git", "init", "--quiet", str(root)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                raise DataRootError(f"`git init` failed in {root}: {result.stderr.strip()}")
+            created.append(".git/")
+    return root, created
 
 
 def ensure_outside_toolkit(path: Path, *, what: str) -> None:

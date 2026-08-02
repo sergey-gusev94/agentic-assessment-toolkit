@@ -17,11 +17,20 @@ Resolution order:
 2. The `AAT_DATA_DIR` environment variable.
 3. The per-user default `~/aat-data`.
 
-The toolkit does not create the default directory. If `~/aat-data` does not
-exist, resolution fails with a clear error naming the attempted path and the
-two override mechanisms. This keeps the usual single-user setup free of
-repeated path arguments while alternate corpora and installations remain
-explicit.
+Resolution never creates anything. If `~/aat-data` does not exist,
+resolution fails with a clear error naming the attempted path, the two
+override mechanisms, and `aat init-data`. This keeps the usual
+single-user setup free of repeated path arguments while alternate
+corpora and installations remain explicit.
+
+Creation is a separate, explicit command: `aat init-data` makes the
+resolved data root — the directory, the top-level layout below, and a
+short README — and is idempotent, so it also fills in missing top-level
+directories of an existing root. With `--git` it additionally runs
+`git init` and writes a `.gitignore` covering the regenerable
+directories (`tasks/`, `analysis/`, `scratch/`); versioning the data
+root is optional and always private — see the refusal rule below for
+the only git constraint the toolkit enforces.
 
 The toolkit refuses a data root inside its own repository. Precisely:
 the resolved data root must not lie inside a git working tree whose

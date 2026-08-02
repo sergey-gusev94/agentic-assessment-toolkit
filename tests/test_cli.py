@@ -741,3 +741,24 @@ def test_grade_presents_rubric_source_when_present(data_root: Path, grade_config
         (job_dirs(plain_root, "grading")[0] / "aat-run.json").read_text(encoding="utf-8")
     )
     assert plain_record["items"][0]["item_identity"] != item["item_identity"]
+
+
+def test_init_data_creates_and_reports(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    target = tmp_path / "aat-data"
+    assert cli.main(["init-data", "--data-root", str(target)]) == 0
+    out = capsys.readouterr().out
+    assert f"initialized data root {target.resolve()}" in out
+    assert "created courses/" in out
+    assert (target / "courses").is_dir()
+    assert (target / "README.md").is_file()
+
+    assert cli.main(["init-data", "--data-root", str(target)]) == 0
+    assert "already initialized" in capsys.readouterr().out
+
+
+def test_init_data_refuses_toolkit_clone(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = make_fake_toolkit_repo(tmp_path)
+    assert cli.main(["init-data", "--data-root", str(repo / "data")]) == 2
+    assert "inside the toolkit repository" in capsys.readouterr().err

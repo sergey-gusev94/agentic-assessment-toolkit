@@ -38,15 +38,19 @@ to this repository, see [data conventions](docs/data-conventions.md))
 and launches `harbor run`:
 
 ```bash
+aat init-data                          # one-time: create the ~/aat-data layout
 aat solve --course PU_CHE597DS_S2026 --config codex-high
 aat grade --from-solve codex-high --config codex-grader-high
 aat grade --course PU_CHE597DS_S2026 --config codex-grader-high  # student folders
 aat report                             # tables + report.md under analysis/
 ```
 
-The data root defaults to `~/aat-data`. The toolkit does not create it;
-use `--data-root PATH` for a one-off override or set `AAT_DATA_DIR` to change
-the default for an environment or shell.
+The data root defaults to `~/aat-data`. Resolution never creates it;
+`aat init-data` creates the directory and its top-level layout (add
+`--git` to also make it a private git repository with a `.gitignore`
+for regenerable outputs). Use `--data-root PATH` for a one-off override
+or set `AAT_DATA_DIR` to change the default for an environment or
+shell.
 
 Experiment configs live under [`configs/`](configs/); a bare
 `--config NAME` resolves to `configs/NAME.toml` relative to the current

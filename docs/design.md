@@ -28,7 +28,7 @@ analysis are in research.md.
    loading and statistics, the course record and assessment registry
    conventions with their intake brief and checker, and the thin
    `aat solve` / `aat grade` / `aat report` / `aat check-course` /
-   `aat intake` commands. It does not
+   `aat intake` / `aat init-data` commands. It does not
    implement an agent runner, sandbox framework, run orchestrator, model
    abstraction, transcript schema, experiment database, or results viewer:
    Harbor does all orchestration; the toolkit constructs one command line
@@ -1033,7 +1033,7 @@ Regrading under a revised rubric needs no dedicated command: a new rubric
 is a new config identity, under which nothing is done yet, and prior
 results stay untouched.
 
-The surface is three commands (`--data-root PATH` selects the data root
+The command surface (`--data-root PATH` selects the data root
 explicitly, falling back to `AAT_DATA_DIR` and then `~/aat-data`; it is
 location, not an experiment axis; a bare `--config NAME` resolves to
 `configs/NAME.toml` relative to the current working directory, so run
@@ -1060,6 +1060,8 @@ aat check-course --course ID [--data-root PATH]
 aat intake (--course ID | --all) [--data-root PATH]
            [--model NAME] [--reasoning-effort LEVEL]
            [--force] [--dry-run] [--print-prompt]
+
+aat init-data [--data-root PATH] [--git]
 ```
 
 `aat check-course` is read-only and writes nothing: it renders one
@@ -1074,7 +1076,12 @@ processed and hand-built courses; a failed agent run writes no receipt,
 so re-running the command is the retry mechanism; `--print-prompt`
 emits the rendered brief for an interactive session instead of
 launching anything. Each run's output is teed to
-`scratch/intake/<stamp>__<course>.log`. `aat report` is read-only: it changes
+`scratch/intake/<stamp>__<course>.log`. `aat init-data` creates the
+resolved data root — the directory, its top-level layout, and a short
+README — because resolution itself never creates anything
+(data-conventions.md); it is idempotent, and `--git` additionally makes
+the root a private git repository with a `.gitignore` for the
+regenerable directories. `aat report` is read-only: it changes
 no experiment and no doneness,
 consumes job directories, and writes derived tables and reports under
 `analysis/` in the data root. `--out` overrides the destination but

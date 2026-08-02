@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -7,8 +8,10 @@ import pytest
 from agentic_assessment_toolkit.data_root import (
     DEFAULT_DIRNAME,
     ENV_VAR,
+    TOP_LEVEL_DIRS,
     DataRootError,
     find_rubric,
+    init_data_root,
     list_assignments,
     list_courses,
     list_student_submissions,
@@ -133,6 +136,77 @@ def test_list_student_submissions(data_root: Path) -> None:
     assert [s.item_id for s in submissions] == [f"{COURSE_ID}/stu1/HW1"]
     assert list_student_submissions(data_root, COURSE_ID, "HW2") == []
     assert list_student_submissions(data_root, "NOPE") == []
+
+
+def test_init_creates_layout(tmp_path: Path) -> None:
+    target = tmp_path / "aat-data"
+    root, created = init_data_root(target)
+    assert root == target.resolve()
+    assert set(created) == {f"{name}/" for name in TOP_LEVEL_DIRS} | {"README.md"}
+    for name in TOP_LEVEL_DIRS:
+        assert (root / name).is_dir()
+    assert "never publish" in (root / "README.md").read_text(encoding="utf-8")
+    assert not (root / ".gitignore").exists()
+    assert not (root / ".git").exists()
+    assert resolve_data_root(target) == root
+
+
+def test_init_default_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(ENV_VAR, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root, created = init_data_root()
+    assert root == (tmp_path / DEFAULT_DIRNAME).resolve()
+    assert created
+
+
+def test_init_is_idempotent_and_fills_gaps(tmp_path: Path) -> None:
+    root, _ = init_data_root(tmp_path / "aat-data")
+    marker = root / "courses" / "SYN_C9"
+    marker.mkdir()
+    shutil.rmtree(root / "scratch")
+    again, created = init_data_root(tmp_path / "aat-data")
+    assert again == root
+    assert created == ["scratch/"]
+    assert marker.is_dir()
+    assert init_data_root(tmp_path / "aat-data") == (root, [])
+
+
+def test_init_inside_toolkit_clone_is_refused(tmp_path: Path) -> None:
+    repo = make_fake_toolkit_repo(tmp_path)
+    with pytest.raises(DataRootError, match="inside the toolkit repository"):
+        init_data_root(repo / "data")
+    assert not (repo / "data").exists()
+
+
+def test_init_refuses_file_targets(tmp_path: Path) -> None:
+    target = tmp_path / "aat-data"
+    target.write_text("not a directory", encoding="utf-8")
+    with pytest.raises(DataRootError, match="exists and is not a directory"):
+        init_data_root(target)
+    target.unlink()
+    target.mkdir()
+    (target / "raw").write_text("not a directory", encoding="utf-8")
+    with pytest.raises(DataRootError, match="raw.*exists and is not a directory"):
+        init_data_root(target)
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="no git executable on PATH")
+def test_init_git_creates_repository_and_gitignore(tmp_path: Path) -> None:
+    root, created = init_data_root(tmp_path / "aat-data", git=True)
+    assert (root / ".git").is_dir()
+    assert created[-2:] == [".gitignore", ".git/"]
+    ignored = (root / ".gitignore").read_text(encoding="utf-8")
+    for line in ("/tasks/", "/analysis/", "/scratch/"):
+        assert line in ignored
+    assert init_data_root(tmp_path / "aat-data", git=True) == (root, [])
+
+
+def test_init_git_without_git_executable_is_an_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    with pytest.raises(DataRootError, match="git.*PATH"):
+        init_data_root(tmp_path / "aat-data", git=True)
 
 
 def test_empty_explicit_path_falls_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

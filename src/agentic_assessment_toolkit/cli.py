@@ -1,7 +1,7 @@
 """The ``aat`` command line: solve and grading runs over Harbor, plus reports.
 
-Three commands (docs/design.md, "CLI design"): ``aat solve`` and ``aat
-grade`` materialize tasks and launch Harbor; ``aat report`` is
+The run commands (docs/design.md, "CLI design"): ``aat solve`` and
+``aat grade`` materialize tasks and launch Harbor; ``aat report`` is
 read-only — it renders the statistics tables and Markdown report from
 the data root, changing no experiment and no doneness. Three option
 axes: selection and mechanics are flags; experiment configuration lives
@@ -204,6 +204,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="report destination (default: <data-root>/analysis; never inside this repository)",
     )
     report.add_argument("--data-root", metavar="PATH", help=DATA_ROOT_HELP)
+
+    init_data = subparsers.add_parser(
+        "init-data", help="create the data root directory and its top-level layout"
+    )
+    init_data.add_argument("--data-root", metavar="PATH", help=DATA_ROOT_HELP)
+    init_data.add_argument(
+        "--git",
+        action="store_true",
+        help="also `git init` the data root and write a .gitignore for regenerable outputs",
+    )
     return parser
 
 
@@ -215,6 +225,8 @@ def _positive_int(value: str) -> int:
 
 
 def _run(args: argparse.Namespace) -> int:
+    if args.command == "init-data":
+        return _run_init_data(args)
     if args.command == "report":
         return _run_report(args)
     if args.command == "check-course":
@@ -236,6 +248,17 @@ def _run(args: argparse.Namespace) -> int:
     else:
         planned = _plan_grade(root, config, config_identity, done, args)
     return _execute(stage, root, jobs_root, config, config_identity, planned, args)
+
+
+def _run_init_data(args: argparse.Namespace) -> int:
+    root, created = data_root_mod.init_data_root(args.data_root, git=args.git)
+    if not created:
+        print(f"data root {root} is already initialized; nothing to do")
+        return 0
+    print(f"initialized data root {root}")
+    for name in created:
+        print(f"  created {name}")
+    return 0
 
 
 def _run_report(args: argparse.Namespace) -> int:
