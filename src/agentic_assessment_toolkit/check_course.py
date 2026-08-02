@@ -231,7 +231,13 @@ def _check_rubrics(
                 except RubricError as error:
                     report.violations.append(str(error))
             source = entry / "source"
-            if source.is_dir() and not _has_files(source):
+            if source.is_file():
+                report.violations.append(
+                    f"rubrics/{entry.name}/source is a file: the professor's "
+                    "rubric document(s) go inside a source/ directory, which is "
+                    "what the grading task presents"
+                )
+            elif source.is_dir() and not _has_files(source):
                 report.violations.append(
                     f"rubrics/{entry.name}/source is empty: it should hold the "
                     "professor's rubric document(s) verbatim, or not exist at all"

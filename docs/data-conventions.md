@@ -83,7 +83,8 @@ Notes:
   teed to `scratch/intake/` (disposable like everything in
   `scratch/`).
 - `courses/` content is **frozen at first use**: an artifact (an
-  assignment directory, rubric file, or reference solution) becomes
+  assignment directory, rubric file, rubric `source/` directory, or
+  reference solution) becomes
   immutable once its hash is recorded in any job's run record, because
   results reference it by that hash. Until then it is a draft and may
   be edited freely — intake output is reviewed and corrected before
@@ -278,8 +279,8 @@ assignment ids, and explicit lineage (submission source, student id
 for student grading items, solve job and trial for solve-derived
 grading items), config identity, and
 input hashes (assignment, prompt, environment template, verifier,
-rubric, submission, reference solution, grading schema — as
-applicable). Doneness of an item under a config is derived from these
+rubric, rubric source, submission, reference solution, grading
+schema — as applicable). Doneness of an item under a config is derived from these
 directories and Harbor's per-trial result files; there is no separate
 bookkeeping state. A solve item is done when a verified trial — one
 whose verifier recorded a reward — exists (a 0-reward contract failure

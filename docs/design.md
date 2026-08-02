@@ -27,8 +27,8 @@ analysis are in research.md.
    the grading output schema, results
    loading and statistics, the course record and assessment registry
    conventions with their intake brief and checker, and the thin
-   `aat solve` / `aat grade` / `aat report` / `aat check-course`
-   commands. It does not
+   `aat solve` / `aat grade` / `aat report` / `aat check-course` /
+   `aat intake` commands. It does not
    implement an agent runner, sandbox framework, run orchestrator, model
    abstraction, transcript schema, experiment database, or results viewer:
    Harbor does all orchestration; the toolkit constructs one command line
@@ -410,7 +410,8 @@ resolved inputs: for solve, the resolved environment template
 (Dockerfile) bytes; for grading, the grading environment template
 bytes, the resolved rubric file bytes, the hash of the assignment
 directory presented in the task, and — when the assignment has one —
-the hash of the rubric source directory. Rubric files and assignment
+the hash of the rubric source directory. Rubric files, rubric source
+directories, and assignment
 directories freeze at first use — a rubric revision after that is a
 new file selected by name in the config (see
 [data-conventions.md](data-conventions.md)) — so folding their bytes
@@ -525,8 +526,8 @@ submission source (`student` or `solve-trial`) for grading items, the
 `student_id` for student grading items, and the solve job and trial
 names for solve-derived grading items — the config identity, and
 input hashes (assignment, prompt, environment template, verifier,
-rubric, submission, reference solution, grading schema — as
-applicable). Item ids take three shapes: `<course>/<assignment>` for
+rubric, rubric source, submission, reference solution, grading
+schema — as applicable). Item ids take three shapes: `<course>/<assignment>` for
 solve items, `<course>/<student>/<assignment>` for student grading
 items, and `<solve-job>/<trial>` for solve-derived grading items; the
 explicit lineage fields exist so no consumer ever parses an item id.

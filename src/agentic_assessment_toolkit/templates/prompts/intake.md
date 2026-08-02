@@ -10,7 +10,10 @@ student submissions is out of scope entirely.
 
 If `courses/{course_id}/` already exists, this is an incremental run:
 **never modify an existing artifact** — an assignment directory, a
-reference solution, or a rubric file — only add new ones.
+reference solution, a rubric file, or a rubric `source/` directory —
+only add new ones (a newly found professor rubric document for an
+assignment that already has a `source/` directory is recorded in the
+notes, not added to it).
 `course.toml`, `intake-notes.md`, and `syllabus/` are amendable: extend
 the registry and the notes in place. If an existing artifact looks
 wrong, record that in `intake-notes.md` instead of fixing it.

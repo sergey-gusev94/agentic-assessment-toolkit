@@ -230,3 +230,9 @@ def test_empty_rubric_source_is_a_violation(data_root: Path) -> None:
     assert any("rubrics/HW1/source is empty" in v for v in violations(data_root))
     (source / "rubric.pdf").write_text("professor rubric\n", encoding="utf-8")
     assert check_course(data_root, COURSE_ID).ok
+
+
+def test_rubric_source_as_a_file_is_a_violation(data_root: Path) -> None:
+    source = course_dir(data_root) / "rubrics" / "HW1" / "source"
+    source.write_text("professor rubric\n", encoding="utf-8")
+    assert any("rubrics/HW1/source is a file" in v for v in violations(data_root))
