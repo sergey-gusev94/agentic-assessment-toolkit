@@ -953,6 +953,15 @@ Implementation rules:
   host-dependent provenance lives only in `aat-run.json` and the job
   directory name. This is what makes the golden-fixture acceptance tests
   byte-exact.
+- **Task directory names are valid Docker image names.** Harbor derives
+  each trial's Docker image name from the task directory name by
+  lowercasing it, so the name generator restricts each component to
+  alphanumerics and inner hyphens before joining with `__` and appending
+  the item-id hash. Logical identifiers are never restricted — a
+  grader-check student id like `_irrelevant` stays verbatim in
+  submission directories, `aat-run.json`, and reports, and only its
+  sanitized form (`irrelevant`) appears in the task name; the hash
+  suffix keeps names unique when sanitization collapses distinct ids.
 - **Repository tests never invoke Harbor or Docker.** The CLI wraps
   `harbor run` in a subprocess for the user, but the materialization layer
   stays paths-in, files-out; tests exercise materialization fully and

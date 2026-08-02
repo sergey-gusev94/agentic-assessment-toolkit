@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,8 @@ COURSE_DIR = FIXTURES_DIR / "course" / COURSE_ID
 
 def test_slugify() -> None:
     assert slugify("HW 12") == "HW-12"
-    assert slugify("PU_CHE597CO_S2026") == "PU_CHE597CO_S2026"
+    assert slugify("PU_CHE597CO_S2026") == "PU-CHE597CO-S2026"
+    assert slugify("_irrelevant") == "irrelevant"
     assert slugify("///") == "x"
 
 
@@ -23,6 +25,38 @@ def test_task_dir_name_disambiguates_slug_collisions() -> None:
     a = task_dir_name(["C1", "HW 1"], "C1/HW 1")
     b = task_dir_name(["C1", "HW-1"], "C1/HW-1")
     assert a != b
+    # _reference and reference collapse to the same slug; only the item
+    # id hash tells them apart.
+    c = task_dir_name(["C1", "_reference", "HW1"], "C1/_reference/HW1")
+    d = task_dir_name(["C1", "reference", "HW1"], "C1/reference/HW1")
+    assert c != d
+
+
+# One path component of an OCI image reference: alphanumeric runs
+# separated by ".", "_", "__", or a run of "-". Harbor lowercases the
+# task name and prefixes it to form the image name, so every generated
+# name must fit this grammar or the Docker build fails before the agent
+# starts.
+_DOCKER_IMAGE_NAME = re.compile(r"[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*")
+
+
+@pytest.mark.parametrize(
+    "parts",
+    [
+        ["PU_CHE597DS_S2026", "_reference", "HW2"],
+        ["PU_CHE597DS_S2026", "_irrelevant", "HW2"],
+        ["SYN_C1", "S001", "HW1"],
+        ["SYN_C1", "student-17", "HW1"],
+        ["C1", "a b.c__d", "HW 1"],
+        ["C1", "stu___1", "HW.1."],
+        ["C1", "größe strauß", "HW1"],
+        ["_", ".", "-"],
+    ],
+)
+def test_task_dir_name_is_docker_image_safe(parts: list[str]) -> None:
+    name = task_dir_name(parts, "/".join(parts))
+    image = f"hb__{name}".lower()
+    assert _DOCKER_IMAGE_NAME.fullmatch(image), image
 
 
 def test_solve_task_matches_golden(tmp_path: Path) -> None:
