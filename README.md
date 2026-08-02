@@ -113,7 +113,7 @@ solve` its host path either through `--gurobi-license-file PATH` or the
 ```bash
 export AAT_GUROBI_LICENSE_FILE=/home/sgusev/gurobi.lic
 
-aat solve --course PU_CHE597CO_S2026 --assignment HW04 \
+aat solve --course PU_CHE597CO_S2026 \
   --config codex-high --max-concurrent-trials 1
 ```
 
