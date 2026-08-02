@@ -131,10 +131,15 @@ names.
 **Syllabus.** Copy the syllabus and any grading-policy or schedule
 documents verbatim into `syllabus/`.
 
-**`course.toml`.** A `[course]` table — `title`, `institution`,
+**`course.toml`.** A `[course]` table holding `title`, `institution`,
 `term`, and `environment`, the default environment flavor
 (`data-science`, `optimization`, or `scientific-python`; judge from
-the packages the course actually uses, note the choice) — and one
+the packages the course actually uses, note the choice). The flavor
+set is fixed: never invent a flavor name or write a Dockerfile. When
+even the closest flavor lacks packages the course clearly needs, pick
+it anyway and record the missing packages in the notes as an
+environment gap — updating the environment templates is the
+maintainer's job, not yours. After the `[course]` table, one
 `[[assessments]]` entry per assessment the syllabus grades, including
 exams, presentations, and attendance that have no materials, so
 weights sum to 100. Per entry: `id`; `title`; `type` (`homework |
@@ -245,6 +250,7 @@ never policy:
 **`intake-notes.md`.** Your report to the maintainer, and the only
 place for uncertainty: the sources each registry fact came from, every
 judgment call (id assignment, file association, weight arithmetic,
-environment choice, rubric transcription and its confidence),
+environment choice and any environment gap, rubric transcription and
+its confidence),
 everything you looked for and could not find, and open questions.
 Finish by listing what a human still has to provide or verify.

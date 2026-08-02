@@ -215,7 +215,9 @@ Notes:
   grader.
 - `intake-notes.md` is intake's review aid, surfaced by
   `aat check-course`: the sources used, every judgment call (id
-  assignment, file association, weight arithmetic, rubric
+  assignment, file association, weight arithmetic, environment choice
+  and any environment gap — packages the course needs that no flavor
+  carries, left for the maintainer to fold into the templates, rubric
   transcription), everything intake looked for and could not find, and
   open questions. It is read by the maintainer, never by the pipeline,
   and is not a source of truth.

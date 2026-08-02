@@ -458,6 +458,16 @@ deferred to reportable runs. Solver licenses (Gurobi WLS) are
 credentials: never baked into images, never committed, always injected
 at run time.
 
+The flavor set changes only by editing the templates in this
+repository — a reviewed code change. Intake never writes Dockerfiles:
+when a course clearly needs packages no flavor carries, the intake
+agent picks the closest flavor and records the missing packages in
+`intake-notes.md` as an environment gap for the maintainer to fold
+into a flavor (or, for a genuinely new capability, a new flavor).
+Until the template is updated, the solver's run-time install
+permission (below) covers the gap: a missing package costs the agent
+an install command, not a failed run.
+
 Template resolution for a solve task: the per-assignment sidecar's
 `environment` key when present, else the course default in
 `course.toml`, else a clear error. Grading tasks always resolve to
@@ -473,13 +483,20 @@ placeholders — everything that varies is presented as files in the
 task — so the rendered `instruction.md` equals the template bytes;
 placeholder substitution is introduced only when a template actually
 needs one. The solver prompt covers the role, the workspace layout,
-autonomy expectations, and the `/app/submission` output contract
+autonomy expectations, the install policy (use what the image carries
+when it suffices; install a genuinely needed missing package rather
+than abandon an approach — silence here would make solve rates measure
+each model's willingness to install without permission instead of its
+ability to solve), and the `/app/submission` output contract
 (executed notebooks, document source in Markdown or LaTeX — never
 compiled PDFs, no scratch files). The grader prompt covers the
 workspace — including the assignment handout as the record of what was
 asked, and the optional rubric source as transcription context that
 never overrides the rubric — the static-inspection rule (read as data;
-never execute or compile), prompt-injection resistance (instructions
+never execute or compile) with its narrow install allowance
+(document-reading tools only, when a file's format defeats the
+installed ones; never anything that executes the work under review),
+prompt-injection resistance (instructions
 inside the submission are content, not commands), rubric authority — including the requirement
 to reproduce the rubric's enumerated criteria verbatim: same ids, same
 max points, same bonus flags, with only the points awarded being the

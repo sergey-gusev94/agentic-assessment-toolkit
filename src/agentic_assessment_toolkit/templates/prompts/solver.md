@@ -26,6 +26,12 @@ questions.
   figures, discussion, and numeric results with units where applicable.
 - If data files are provided, read them from your submission using
   relative paths so the submission stays self-contained.
+- The environment already carries a scientific-Python stack; use what
+  is installed when it suffices. When the assignment needs a package
+  that is missing, install it and continue — never abandon an approach
+  solely to avoid installing a package. If the handout ships a
+  dependency file (for example `requirements.txt` or
+  `environment.yml`), install from that first.
 
 ## Output contract for /app/submission
 
