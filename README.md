@@ -24,6 +24,8 @@ and the [roadmap](docs/roadmap.md) for planned work.
 - [Project brief](docs/brief.md) — vision, use cases, scope, and constraints.
 - [Design](docs/design.md) — decisions, contracts, and how the
   implemented pipelines work.
+- [Course intake](docs/course-intake.md) — how raw course materials
+  become a structured course in the data root.
 - [Roadmap](docs/roadmap.md) — planned work, each item with the
   condition that triggers it.
 - [Research](docs/research.md) — frozen research snapshot: alternatives
@@ -36,15 +38,46 @@ and the [roadmap](docs/roadmap.md) for planned work.
 
 The `aat` command materializes Harbor tasks from a data root (external
 to this repository, see [data conventions](docs/data-conventions.md))
-and launches `harbor run`:
+and launches `harbor run`. The normal flow processes everything in
+five commands (plus one-time setup):
 
 ```bash
-aat init-data                          # one-time: create the ~/aat-data layout
-aat solve --course PU_CHE597DS_S2026 --config codex-high
-aat grade --from-solve codex-high --config codex-grader-high
-aat grade --course PU_CHE597DS_S2026 --config codex-grader-high  # student folders
-aat report                             # tables + report.md under analysis/
+aat init-data                                # one-time: create the ~/aat-data layout
+aat intake --all                             # build courses/ from dumps under raw/
+aat check-course --course PU_CHE597DS_S2026  # per course: re-run until clean
+aat solve --all --config codex-high          # solve every assignment of every course
+aat grade --from-solve codex-high --config codex-grader-high  # grade the agent's solutions
+aat grade --all --config codex-grader-high   # grade every student submission
+aat report                                   # tables + report.md under analysis/
 ```
+
+The two `aat grade` commands cover disjoint submissions: `--from-solve`
+grades the verified solver trials that `aat solve` left under
+`solving/`, while `--all` grades the student folders under
+`submissions/`. If one side is empty — no student submissions yet, say
+— its command finds nothing and is simply unnecessary.
+
+This sequence is safe to re-run verbatim: every command skips work
+that is already done, so after a new dump lands in `raw/`, a new
+assignment appears in a course, or new student folders arrive in
+`submissions/`, the same commands do only the missing work. Narrow any
+run with `--course ID` (and `--assignment ID`) instead of `--all`.
+
+A course enters the data root through intake: copy everything
+collected for it into `raw/<course_id>/`, then `aat intake --all` (or
+`--course ID`) launches the Codex CLI once per unprocessed dump to
+author the structured course tree under `courses/`, including a rubric
+draft per assignment. Review the drafts and the agent's
+`intake-notes.md`, fix what `aat check-course` flags, and re-run it
+until clean. Intake needs the `codex` CLI on PATH; alternatively,
+`aat intake --course ID --print-prompt` renders the brief to paste
+into an interactive `codex` session. The full procedure, including the
+review checklist, is in [course intake](docs/course-intake.md).
+
+Grading never starts without a rubric: `aat grade` refuses any
+assignment missing
+`courses/<course_id>/rubrics/<assignment_id>/default.md`, which intake
+drafts and you review.
 
 The data root defaults to `~/aat-data`. Resolution never creates it;
 `aat init-data` creates the directory and its top-level layout (add
@@ -58,7 +91,13 @@ Experiment configs live under [`configs/`](configs/); a bare
 working directory, so run from the repository root or pass an explicit
 path. Selection and mechanics (`--repeats`, `--max-concurrent-trials`,
 `--force`, `--dry-run`, `--materialize-only`) are CLI flags. Concurrent
-trials default to 8. Already-done items are skipped by default, so bulk
+trials default to 8. Every run command requires an explicit selection —
+`--course ID` or `--all` for `aat solve` and `aat intake`, and exactly
+one submission source for `aat grade` (`--from-solve NAME`,
+`--submissions PATH` for one course, student, or assignment folder
+under `submissions/`, or `--course`/`--all` for student folders); only
+the read-only `aat report` defaults to everything. Already-done items
+are skipped by default, so bulk
 commands are naturally incremental. `aat report` is read-only: it
 writes the statistics tables, a Markdown report, and provenance into
 one timestamped directory under `analysis/` in the data root (`--out`
