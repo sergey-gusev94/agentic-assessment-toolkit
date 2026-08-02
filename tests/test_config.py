@@ -104,6 +104,9 @@ def test_item_identity_folds_environment_rubric_and_assignment() -> None:
     with_assignment = item_identity(base, b"FROM x", b"# rubric", "a" * 64)
     assert with_assignment != with_rubric
     assert item_identity(base, b"FROM x", b"# rubric", "b" * 64) != with_assignment
+    with_source = item_identity(base, b"FROM x", b"# rubric", "a" * 64, "c" * 64)
+    assert with_source != with_assignment
+    assert item_identity(base, b"FROM x", b"# rubric", "a" * 64, "d" * 64) != with_source
 
 
 def test_environment_flavors_resolve() -> None:

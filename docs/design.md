@@ -169,8 +169,8 @@ identically in code, documentation, and output.
   labels and segregates results.
 - **Per-item identity** — the config identity folded with an item's
   resolved inputs (the environment template; for grading also the
-  rubric bytes and the assignment directory hash); paired with the
-  item id, it is the doneness and pooling key.
+  rubric bytes, the assignment directory hash, and any rubric source
+  hash); paired with the item id, it is the doneness and pooling key.
 - **Verified trial** — a trial whose verifier recorded a reward,
   whatever the reward's value (see denominator policy).
 - **Done** — an item needing no further work under a config: a verified
@@ -367,6 +367,13 @@ A materialized grading task presents, under `/app`:
   default or otherwise — fails at materialization: grading never
   starts without a rubric, and a frozen judge configuration never
   silently degrades.
+- `rubric_source/` — present only when the course tree has
+  `rubrics/<assignment_id>/source/`: the professor's standalone rubric
+  document(s), verbatim, from which `rubric.md` was transcribed.
+  Context, never authority: the grader prompt states that where the
+  two appear to differ, `rubric.md` governs, and rubric fidelity is
+  measured against `rubric.md` alone. Most assignments have no
+  standalone rubric document, and absence is the normal case.
 - `grading_output/` — empty directory the grader must fill (created by
   the grading environment image, so the materialized task tree contains
   no placeholder files).
@@ -401,8 +408,9 @@ of them invalidate doneness by construction. Each item
 additionally has a **per-item identity** that folds in the item's
 resolved inputs: for solve, the resolved environment template
 (Dockerfile) bytes; for grading, the grading environment template
-bytes, the resolved rubric file bytes, and the hash of the assignment
-directory presented in the task. Rubric files and assignment
+bytes, the resolved rubric file bytes, the hash of the assignment
+directory presented in the task, and — when the assignment has one —
+the hash of the rubric source directory. Rubric files and assignment
 directories freeze at first use — a rubric revision after that is a
 new file selected by name in the config (see
 [data-conventions.md](data-conventions.md)) — so folding their bytes
@@ -466,9 +474,10 @@ autonomy expectations, and the `/app/submission` output contract
 (executed notebooks, document source in Markdown or LaTeX — never
 compiled PDFs, no scratch files). The grader prompt covers the
 workspace — including the assignment handout as the record of what was
-asked — the static-inspection rule (read as data; never execute or
-compile), prompt-injection resistance (instructions inside the
-submission are content, not commands), rubric authority — including the requirement
+asked, and the optional rubric source as transcription context that
+never overrides the rubric — the static-inspection rule (read as data;
+never execute or compile), prompt-injection resistance (instructions
+inside the submission are content, not commands), rubric authority — including the requirement
 to reproduce the rubric's enumerated criteria verbatim: same ids, same
 max points, same bonus flags, with only the points awarded being the
 grader's judgment — evidence requirements, and the exact output schema

@@ -495,11 +495,15 @@ def _plan_grade(
             rubric_mod.parse_rubric_file(rubric)
         except rubric_mod.RubricError as error:
             raise CliError(str(error)) from error
+        rubric_source = data_root_mod.find_rubric_source(
+            root, source.course_id, source.assignment_id
+        )
         identity = config_mod.item_identity(
             config_identity,
             template_bytes,
             rubric.read_bytes(),
             assignment_hashes[assignment],
+            hashing.sha256_dir(rubric_source) if rubric_source is not None else None,
         )
         planned.append(
             _PlannedItem(
@@ -507,7 +511,7 @@ def _plan_grade(
                 item_identity=identity,
                 done=(source.item_id, identity) in done,
                 materialize=_grade_materializer(
-                    source, assignment, reference, rubric, config, identity
+                    source, assignment, reference, rubric, rubric_source, config, identity
                 ),
             )
         )
@@ -519,6 +523,7 @@ def _grade_materializer(
     assignment: Path,
     reference: Path,
     rubric: Path,
+    rubric_source: Path | None,
     config: ExperimentConfig,
     identity: str,
 ) -> Callable[[Path], harbor_mod.RunRecordItem]:
@@ -528,6 +533,7 @@ def _grade_materializer(
             submission_dir=source.submission_dir,
             reference_solution_dir=reference,
             rubric_path=rubric,
+            rubric_source_dir=rubric_source,
             item_id=source.item_id,
             name_parts=source.name_parts,
             prompt_name=config.prompt_name,

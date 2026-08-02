@@ -189,3 +189,43 @@ def test_missing_submission_dir_is_an_error(tmp_path: Path) -> None:
             prompt_name="grader",
             tasks_dir=tmp_path,
         )
+
+
+def test_grading_task_with_rubric_source(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "rubric.pdf").write_text("professor rubric\n", encoding="utf-8")
+    tasks_dir = tmp_path / "tasks"
+    tasks_dir.mkdir()
+    task = materialize_grading_task(
+        assignment_dir=COURSE_DIR / "assignments" / "HW1",
+        submission_dir=FIXTURES_DIR / "submission",
+        reference_solution_dir=COURSE_DIR / "reference_solutions" / "HW1",
+        rubric_path=COURSE_DIR / "rubrics" / "HW1" / "default.md",
+        rubric_source_dir=source,
+        item_id="x",
+        name_parts=("x",),
+        prompt_name="grader",
+        tasks_dir=tasks_dir,
+    )
+    dockerfile = (task.task_dir / "environment" / "Dockerfile").read_text(encoding="utf-8")
+    assert "COPY rubric_source /app/rubric_source" in dockerfile
+    assert (task.task_dir / "environment" / "rubric_source" / "rubric.pdf").is_file()
+    assert "rubric_source" in task.input_hashes
+
+
+def test_grading_task_without_rubric_source(tmp_path: Path) -> None:
+    task = materialize_grading_task(
+        assignment_dir=COURSE_DIR / "assignments" / "HW1",
+        submission_dir=FIXTURES_DIR / "submission",
+        reference_solution_dir=COURSE_DIR / "reference_solutions" / "HW1",
+        rubric_path=COURSE_DIR / "rubrics" / "HW1" / "default.md",
+        item_id="x",
+        name_parts=("x",),
+        prompt_name="grader",
+        tasks_dir=tmp_path,
+    )
+    dockerfile = (task.task_dir / "environment" / "Dockerfile").read_text(encoding="utf-8")
+    assert "rubric_source" not in dockerfile
+    assert not (task.task_dir / "environment" / "rubric_source").exists()
+    assert "rubric_source" not in task.input_hashes

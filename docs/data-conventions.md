@@ -46,7 +46,8 @@ $AAT_DATA_DIR/
 │       │   └── <assignment_id>/      # instructor/oracle solution
 │       └── rubrics/
 │           └── <assignment_id>/
-│               └── <name>.md         # default.md; variants are new files
+│               ├── <name>.md         # default.md; variants are new files
+│               └── source/           # professor's standalone rubric, verbatim
 ├── submissions/                # real student submissions, as received
 │   └── <course_id>/<student_id>/<assignment_id>/
 ├── tables/                     # rosters, grade exports, identity mappings
@@ -206,7 +207,21 @@ Notes:
   job has used yet is a draft and may be edited in place; once used it
   is frozen like every other artifact, and a revision is a new file
   (e.g. `strict-v2.md`) selected by name in a grading config —
-  preserving immutability and hash-based provenance.
+  preserving immutability and hash-based provenance. A rubric is a
+  **detailed grading document**, not a bare criterion list: each
+  criterion line is followed by prose stating what earns full,
+  partial, and zero credit, carried from the professor's materials
+  when they say and drafted when they do not. Only the criterion
+  lines are parsed; the prose is read by the grader.
+- `rubrics/<assignment_id>/source/`, when present, holds the
+  professor's standalone rubric document(s) verbatim (a rubric PDF or
+  grading-scheme handout — distinct from schemes embedded in the
+  assignment or reference files, which already reach the grader
+  through those directories). The grading task presents it at
+  `/app/rubric_source` as transcription context; `rubric.md` remains
+  the sole authority on criteria and points, and rubric fidelity is
+  measured against it alone. Most assignments have no standalone
+  rubric document.
 - Every assignment that will be graded must have a rubric; grading
   fails at materialization without one (docs/design.md, decision 5).
   A rubric enumerates its criteria, each with a stable id, a title,

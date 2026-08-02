@@ -38,6 +38,7 @@ def materialize_grading_task(
     submission_dir: Path,
     reference_solution_dir: Path,
     rubric_path: Path,
+    rubric_source_dir: Path | None = None,
     item_id: str,
     name_parts: Sequence[str],
     prompt_name: str,
@@ -63,6 +64,8 @@ def materialize_grading_task(
         "COPY reference_solution /app/reference_solution",
         "COPY rubric.md /app/rubric.md",
     ]
+    if rubric_source_dir is not None:
+        copy_lines.append("COPY rubric_source /app/rubric_source")
     _common.write_dockerfile(task_dir, environment_template.read_bytes(), copy_lines)
 
     environment_dir = task_dir / "environment"
@@ -70,6 +73,8 @@ def materialize_grading_task(
     _common.copy_tree(submission_dir, environment_dir / "submission")
     _common.copy_tree(reference_solution_dir, environment_dir / "reference_solution")
     (environment_dir / "rubric.md").write_bytes(rubric_path.read_bytes())
+    if rubric_source_dir is not None:
+        _common.copy_tree(rubric_source_dir, environment_dir / "rubric_source")
 
     _common.write_test_runner(task_dir, "grading_verifier.py")
     verifier_path = config.verifier_path("grade")
@@ -87,6 +92,8 @@ def materialize_grading_task(
         "verifier": sha256_file(verifier_path),
         "grading_schema": sha256_file(schema_path),
     }
+    if rubric_source_dir is not None:
+        input_hashes["rubric_source"] = sha256_dir(rubric_source_dir)
 
     return MaterializedGradingTask(
         item_id=item_id,

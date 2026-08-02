@@ -218,6 +218,16 @@ def find_rubric(root: Path, course_id: str, assignment_id: str, name: str) -> Pa
     return rubric if rubric.is_file() else None
 
 
+def find_rubric_source(root: Path, course_id: str, assignment_id: str) -> Path | None:
+    """The professor's standalone rubric document(s), when the course has any.
+
+    ``rubrics/<assignment_id>/source/`` holds them verbatim; most
+    assignments have none, so ``None`` is the normal case.
+    """
+    source = root / "courses" / course_id / "rubrics" / assignment_id / "source"
+    return source if source.is_dir() else None
+
+
 def list_student_submissions(
     root: Path,
     course_id: str,

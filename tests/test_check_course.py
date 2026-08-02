@@ -222,3 +222,11 @@ def test_cli_exit_codes(data_root: Path, capsys: pytest.CaptureFixture[str]) -> 
 
     assert cli.main(["check-course", "--course", "NOPE", "--data-root", str(data_root)]) == 2
     assert "not found" in capsys.readouterr().err
+
+
+def test_empty_rubric_source_is_a_violation(data_root: Path) -> None:
+    source = course_dir(data_root) / "rubrics" / "HW1" / "source"
+    source.mkdir()
+    assert any("rubrics/HW1/source is empty" in v for v in violations(data_root))
+    (source / "rubric.pdf").write_text("professor rubric\n", encoding="utf-8")
+    assert check_course(data_root, COURSE_ID).ok

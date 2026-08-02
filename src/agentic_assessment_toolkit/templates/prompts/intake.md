@@ -29,7 +29,9 @@ courses/{course_id}/
 ├── reference_solutions/
 │   └── <assignment_id>/       # instructor solution files
 └── rubrics/
-    └── <assignment_id>/default.md
+    └── <assignment_id>/
+        ├── default.md         # the grading rubric you draft
+        └── source/            # professor's standalone rubric files, verbatim
 ```
 
 Do not create or edit `intake-record.json`: the toolkit writes that
@@ -82,11 +84,17 @@ looked for and could not find in the notes instead.
 the assignment directory: the solver reads only `assignments/`, and
 that separation is what keeps answers away from it.
 
-**Rubrics.** For each assignment whose materials state a point split —
-grading schemes in notebook cells, points in section headers, rubric
-documents — draft `rubrics/<assignment_id>/default.md`. Ordinary
-Markdown prose plus one bullet line per criterion in exactly this
-format:
+**Rubrics.** When the professor distributed a standalone rubric
+document (a rubric PDF, a grading-scheme handout — as opposed to
+points embedded in the assignment or reference files), copy it
+verbatim into `rubrics/<assignment_id>/source/`; the grader is shown
+it alongside your transcription.
+
+For each assignment whose materials state a point split — grading
+schemes in notebook cells, points in section headers, rubric
+documents — draft `rubrics/<assignment_id>/default.md`. The rubric is
+a **detailed grading document**, not a bare list: ordinary Markdown
+prose plus one bullet line per criterion in exactly this format:
 
 ```markdown
 - `<id>` (<points> point[s][, bonus]): <title>
@@ -104,11 +112,26 @@ whitespace; points are numbers greater than zero; bonus criteria carry
 the explicit `, bonus` marking; at least one criterion is not a bonus.
 Granularity: one criterion per problem or per explicitly-pointed item,
 exactly as the source states it — never invent a finer split than the
-source supports. Surrounding prose may carry grading guidance from the
-materials. Transcribe faithfully; where the source is vague (section
-totals only, unclear bonus status), still draft the best faithful
-rubric and flag the ambiguity in the notes. Where no point information
-exists at all, draft nothing and note it.
+source supports.
+
+Follow each criterion line with indented prose stating how to grade
+it: what earns full credit, what earns partial credit and how much,
+what earns zero — carried over from the professor's materials when
+they say, drafted by you from the assignment and reference solution
+when they do not. For example:
+
+```markdown
+- `tree_fit` (20 points): a decision tree is trained on the training split.
+
+  Full credit requires max_depth chosen by validation, not hardcoded.
+  Award half if the tree is trained on the full dataset; zero if the
+  model is imported but never fit.
+```
+
+Transcribe faithfully; where the source is vague (section totals only,
+unclear bonus status), still draft the best faithful rubric and flag
+the ambiguity in the notes. Where no point information exists at all,
+draft nothing and note it.
 
 **`intake-notes.md`.** Your report to the maintainer, and the only
 place for uncertainty: the sources each registry fact came from, every

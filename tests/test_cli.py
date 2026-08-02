@@ -8,7 +8,7 @@ import pytest
 from agentic_assessment_toolkit import cli
 from agentic_assessment_toolkit import harbor as harbor_mod
 from agentic_assessment_toolkit.report import REPORT_FILENAMES
-from tests.conftest import COURSE_ID
+from tests.conftest import COURSE_ID, build_data_root
 from tests.test_config import GRADE_TOML, SOLVE_TOML, write_config
 from tests.test_data_root import make_fake_toolkit_repo
 from tests.test_harbor import GRADED_REWARDS, write_trial
@@ -679,3 +679,61 @@ def test_grade_submissions_three_level_path_and_depth_limit(
         == 2
     )
     assert "three levels" in capsys.readouterr().err
+
+
+def test_grade_presents_rubric_source_when_present(data_root: Path, grade_config: Path) -> None:
+    source = data_root / "courses" / COURSE_ID / "rubrics" / "HW1" / "source"
+    source.mkdir()
+    (source / "rubric.pdf").write_text("professor rubric\n", encoding="utf-8")
+    assert (
+        cli.main(
+            grade_args(
+                data_root,
+                grade_config,
+                "--course",
+                COURSE_ID,
+                "--assignment",
+                "HW1",
+                "--materialize-only",
+            )
+        )
+        == 0
+    )
+    job_dir = job_dirs(data_root, "grading")[0]
+    record = json.loads((job_dir / "aat-run.json").read_text(encoding="utf-8"))
+    item = record["items"][0]
+    assert "rubric_source" in item["input_hashes"]
+    task_dir = data_root / "tasks" / job_dir.name / item["task_dir_name"]
+    assert (task_dir / "environment" / "rubric_source" / "rubric.pdf").is_file()
+
+    # The source directory is part of the frozen judge: an identity
+    # computed without it must differ.
+    plain_root = build_data_root(job_dir.parent.parent / "plain")
+    assert (
+        cli.main(
+            grade_args(
+                plain_root, grade_config, "--course", COURSE_ID, "--assignment", "HW1", "--dry-run"
+            )
+        )
+        == 0
+    )
+    plain_jobs = job_dirs(plain_root, "grading")
+    assert plain_jobs == []  # dry run writes nothing; compare via a real record
+    assert (
+        cli.main(
+            grade_args(
+                plain_root,
+                grade_config,
+                "--course",
+                COURSE_ID,
+                "--assignment",
+                "HW1",
+                "--materialize-only",
+            )
+        )
+        == 0
+    )
+    plain_record = json.loads(
+        (job_dirs(plain_root, "grading")[0] / "aat-run.json").read_text(encoding="utf-8")
+    )
+    assert plain_record["items"][0]["item_identity"] != item["item_identity"]

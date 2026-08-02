@@ -230,6 +230,12 @@ def _check_rubrics(
                     parse_rubric_file(rubric)
                 except RubricError as error:
                     report.violations.append(str(error))
+            source = entry / "source"
+            if source.is_dir() and not _has_files(source):
+                report.violations.append(
+                    f"rubrics/{entry.name}/source is empty: it should hold the "
+                    "professor's rubric document(s) verbatim, or not exist at all"
+                )
     for assignment_id in assignment_ids:
         if not (rubrics_dir / assignment_id / "default.md").is_file():
             report.gaps.append(
