@@ -13,6 +13,13 @@ Decisions and contracts live under `docs/` (start with `docs/design.md`).
 Documentation is maintained in place, not as a changelog: superseded
 decisions are rewritten, not preserved as history.
 
+`docs/design.md` and the other contract documents describe only what is
+implemented, in present tense; `docs/roadmap.md` holds only planned
+work, each item with the condition that triggers it. When work lands,
+delete its roadmap entry and document the built behavior in the
+appropriate document — rewritten as a description of what exists, not a
+relocation of the planning text.
+
 ## Development
 
 The project is in its initial development stage. Backward compatibility is not

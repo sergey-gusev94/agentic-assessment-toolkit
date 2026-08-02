@@ -14,8 +14,8 @@ the maintainer's procedure around it.
 
 **Scope: course materials only.** Ingesting student submissions (LMS
 exports into `submissions/`, rosters and pseudonym tables under
-`tables/`) is a separate, later procedure with its own privacy stakes;
-intake never touches those trees.
+`tables/`) is a separate planned procedure with its own privacy stakes
+([roadmap.md](roadmap.md)); intake never touches those trees.
 
 ## Procedure
 

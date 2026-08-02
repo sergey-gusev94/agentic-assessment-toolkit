@@ -3,8 +3,9 @@
 This is the decision and design layer between the vision in
 [brief.md](brief.md) and implementation. [research.md](research.md) is a
 frozen research snapshot (2026-07-30) that surveys the landscape; this
-document records what was actually decided and what is being built. When the
-two disagree, this document wins. This document is maintained in place, not
+document records what was decided and what is built: everything
+described here is implemented, and planned work lives in
+[roadmap.md](roadmap.md). When the two disagree, this document wins. This document is maintained in place, not
 as a changelog: superseded decisions are rewritten, not preserved as
 history.
 
@@ -43,8 +44,8 @@ analysis are in research.md.
    grading. Benchmark core, grading, validation, reporting, and hardening
    are completed for the Codex stack before Claude Code, Gemini CLI, or
    other agents are integrated. Solver and grader remain separate,
-   independently configured jobs. Multi-agent comparison remains a long-term
-   goal, not an acceptance criterion for the initial vertical slices.
+   independently configured jobs. Multi-agent comparison is a long-term
+   goal ([roadmap.md](roadmap.md)).
 5. **One grading pipeline, two submission sources.** Grading is a Harbor job
    whose tasks are "grade this submission directory against this reference
    solution and rubric, with the assignment handout alongside." A submission directory can be a Harbor solve
@@ -90,7 +91,8 @@ analysis are in research.md.
    explicit failure accounting. The checks are a documented manual
    procedure over the ordinary grading pipeline, not toolkit machinery
    (see the results contract). Calibration against trusted human
-   grading is deferred until a trustworthy human-graded corpus exists.
+   grading waits on a trustworthy human-graded corpus
+   ([roadmap.md](roadmap.md)).
 9. **Full agent capability by default; minimal trust model, accepted and
    documented.** Agents run with their normal toolset and public network
    access in both stages, because assignments and grading may legitimately
@@ -140,7 +142,7 @@ analysis are in research.md.
     so changing them never invalidates a processed course. Facts the
     materials do not state are left absent — never sentinel values —
     and surfaced by the checker. Student-submission ingest is out of
-    intake's scope and deferred. The procedure is
+    intake's scope ([roadmap.md](roadmap.md)). The procedure is
     [course-intake.md](course-intake.md).
 
 ## Vocabulary
@@ -244,14 +246,13 @@ grading_result.json + per-problem Markdown justification
         ↓
 results.py + metrics.py: grade distributions, repeat stability,
 explicit failure accounting
-(professor-grade comparison: deferred, see the roadmap)
+(professor-grade comparison: planned, see roadmap.md)
 ```
 
 ## Contracts
 
-Concrete specifications. Nothing here is ported
-from the pilots or the reference repositories; both informed these
-choices as evidence only.
+Concrete specifications. Nothing here is ported from the reference
+repositories; they informed these choices as evidence only.
 
 ### Grading output schema
 
@@ -450,11 +451,12 @@ derived from the packages the reference corpus actually uses:
 Every environment includes `file` and `jq` for basic file-type and JSON
 inspection. Every solve flavor also includes PDF text-extraction tools
 (poppler-utils, pypdf), because assignment handouts are routinely PDFs
-that the agent must read. A `latex` flavor is deferred: the output contract
-requires document source, never compiled PDFs, so no image needs TeX.
+that the agent must read. The output contract requires document
+source, never compiled PDFs, so no image needs TeX and there is no
+`latex` flavor ([roadmap.md](roadmap.md)).
 
-Images pin their Python package versions; base-image digest pinning is
-deferred to reportable runs. Solver licenses (Gurobi WLS) are
+Images pin their Python package versions; base images are not
+digest-pinned ([roadmap.md](roadmap.md)). Solver licenses (Gurobi WLS) are
 credentials: never baked into images, never committed, always injected
 at run time.
 
@@ -589,7 +591,7 @@ trials rather than overwriting them.
 
 ### Results, statistics, and reporting
 
-The read side of the data conventions (roadmap stage 3). Everything
+The read side of the data conventions. Everything
 below is read-only over the data root, derives entirely from the files
 specified above, and can be regenerated at any time. Files are the
 source of truth; there is no results database. Derived outputs land
@@ -716,8 +718,8 @@ grades — one value per student — as count, mean, median, SD, and
 quartiles. The bootstrap belongs to benchmark aggregation, never to
 individual grades. Harbor's built-in aggregation (means, binary-reward
 pass@k) is not used: it counts errored trials in score means and
-cannot express graded rewards. Pass@k is deferred until a pass
-threshold on `score_pct` is actually needed and chosen.
+cannot express graded rewards. Pass@k is not computed: no pass
+threshold on `score_pct` has been chosen ([roadmap.md](roadmap.md)).
 
 **Grader checks (a manual procedure, not machinery).** Before trusting
 a frozen grader configuration, run it through the ordinary pipeline on
@@ -750,205 +752,52 @@ derived tables (`solve_summary.csv`, `grades_by_assignment.csv`,
 `provenance.json`. The tidy tables are always emitted so any further
 question is answerable from the report directory without re-running
 the loader.
-Professor-grade comparison — grade-export ingestion under `tables/`,
-the discrepancy report (matched pairs with explicit de-duplication,
-bias, MAE, RMSE, correlation and concordance, cluster-bootstrap
-intervals), and the anonymization helpers — is **deferred** to the
-later-on-demand list: the benchmark and the grading assistant do not
-need it, and because every grade and its provenance are stored, the
-comparison is retroactively computable whenever a real need appears.
-MLflow (or any tracking UI) is likewise not adopted: it would
+Professor-grade comparison is not implemented
+([roadmap.md](roadmap.md)): the benchmark and the grading assistant do
+not need it, and because every grade and its provenance are stored,
+the comparison is retroactively computable whenever a real need
+appears. MLflow (or any tracking UI) is likewise not adopted: it would
 duplicate this layer without providing the statistics, and because
 files are the source of truth it remains retroactively adoptable via a
-backfill script if stage 4 multi-agent scale or non-Python consumers
-ever require a browsable cross-experiment UI.
+backfill script if a browsable cross-experiment UI is ever needed
+([roadmap.md](roadmap.md)).
 
-## Live validation (maintainer-only, outside repository scope)
+## Implementation
 
-No repository work — human or agent — performs or depends on live
-validation. Consistent with AGENTS.md, tests are deterministic, local,
-offline, and credential-free.
+Deterministic offline tests over small synthetic fixtures (a fake
+course and a fake submission under `tests/fixtures/`) cover every
+layer, consistent with AGENTS.md.
 
-Detailed evidence and exact limits of completed manual checks are recorded in
-[live-validation.md](live-validation.md). The current external checklist is:
-
-1. **Validated:** Codex CLI solves a synthetic Harbor task using cached
-   ChatGPT authentication while `OPENAI_API_KEY` is unset.
-2. **Validated:** a declared artifact, raw agent output, and an ATIF trajectory
-   survive the synthetic task run.
-3. **Validated:** Codex completes a manually materialized real notebook
-   assignment in Harbor; the executed notebook, plots, transcript, trajectory,
-   and source-preserving artifacts survive the run.
-4. **Validated:** RewardKit runs seven programmatic dimensions in Harbor's
-   shared task environment. (RewardKit has since been descoped; the result
-   stands as recorded history.)
-5. **Validated:** a separate Harbor grading job statically grades a
-   Harbor-produced submission using cached authentication, produces a valid
-   `grading_result.json` and Markdown justification covering all rubric
-   criteria, and has the generic grading verifier surface the score as the
-   reward.
-6. **Validated:** the implemented `aat solve` and `aat grade --from-solve`
-   commands automatically materialize and complete the real HW5 solve-to-grade
-   path. That run also exposed an older reward contract that excluded bonus
-   points and two missing inspection utilities; the corrected image and reward
-   need one post-change smoke run. The pending list in
-   [live-validation.md](live-validation.md) also covers the revised
-   job layout and grading semantics.
-7. **Descoped (validated by construction):** regrade-by-rerun is another
-   grading job over the same stored artifacts — the mechanism validated in
-   item 5; no separate check is required.
-8. **Moved to roadmap stage 3:** the grader checks — reference solution
-   near full marks, irrelevant submission near zero, repeated gradings
-   agree — are grader-prompt calibration, not infrastructure
-   validation, and run through the ordinary grading pipeline on corpus
-   data.
-9. **Deferred:** Claude Code, Gemini CLI, and other agent stacks are validated
-   only after the Codex pipeline and its hardening are complete.
-
-## Roadmap
-
-Sequence and scope only; no dates. Completion of each stage is judged by
-what the toolkit provides, not by live runs.
-
-1. **Solve core, Codex-first** — data-root and task conventions implemented;
-   the materializer converts existing course assignment folders into Harbor
-   solve tasks; environment templates; generic solve contract verifier;
-   pinned Codex job configurations. Complete when the toolkit can
-   materialize a full course from the reference corpus into runnable
-   Harbor tasks and Codex job configs.
-2. **Grading core, Codex-first** — grading-task materializer; grader prompt
-   template written to the contracts section; grading output schema;
-   generic grading verifier; grading environment template. Complete when an
-   agent solution and a real student folder both grade through the
-   identical path — the vertical-slice acceptance criterion below.
-3. **Validity and statistics** — the results, statistics, and reporting
-   contract above: results loading (`results.py`), outcome taxonomy and
-   denominator policy, `metrics.py` with clustered bootstrap confidence
-   intervals, and the read-only `aat report` command; the
-   rubric-required enforcement of decision 5 in the grading
-   materializer, CLI, and grader prompt, with test fixtures
-   regenerated accordingly; the run record's explicit lineage fields
-   (submission source, student id, solve job and trial); a full-shape
-   synthetic Harbor `result.json` test fixture pinning the fields the
-   loader consumes; plus authoring rubrics for every corpus assignment
-   (drafted by course intake, [course-intake.md](course-intake.md),
-   and reviewed per
-   [data-conventions.md](data-conventions.md)), repeat configurations
-   and frozen grader-config versioning for reportable runs (both
-   already provided by the config identity — no new machinery), the
-   grader checks run on the target corpus (the manual procedure in
-   the results contract), and evaluation across the corpus.
-   Professor-grade comparison is deferred (stage 5).
-4. **Additional agent stacks** — integrate and validate Claude Code, Gemini
-   CLI, and other agents as solvers and graders; add cross-agent
-   configurations and comparisons only after the complete Codex pipeline is
-   hardened.
-5. **Later, on demand** — LaTeX/PDF grading justifications (a grader prompt
-   change); compiled-document deliverables (a `latex`-capable flavor plus
-   an output-contract line) if the "does it compile" signal is ever
-   wanted; optional format-aware submission lints (e.g. notebook executed,
-   document compiled) if failure accounting shows the need; mechanical
-   detection of grading-time input modification (a hash manifest over
-   the materialized submission and reference, reported by the grading
-   verifier as data, not enforcement) if the static-inspection prompt
-   rule is ever observed being violated; a machine-readable rubric
-   criteria manifest, emitted by the materializer and checked by the
-   grading verifier, if the rubric-fidelity rate proves materially
-   below 100%; an `aat rubric` command that drafts rubrics for review
-   (drafting stays manual until then); intraclass correlation for
-   repeat agreement and config-vs-config significance tests (bootstrap
-   difference intervals) when multi-agent comparison arrives;
-   professor grade-export
-   ingestion, the discrepancy report, and the anonymization helpers,
-   when comparing LLM grades to professor grades becomes a real need —
-   retroactively computable from stored grades and provenance; judge
-   calibration if a trusted human-graded corpus emerges;
-   restricted network egress, host-side hardening, or a credential broker
-   if grading ever faces adversarial submissions; MLflow (retroactively
-   backfillable from the data root) when stage 4 multi-agent scale or
-   non-Python consumers need a browsable cross-experiment UI;
-   institutional or open-source packaging.
-
-### First vertical slice (stages 1–2)
-
-Stages 1 and 2 are implemented as one vertical slice with a single
-acceptance criterion: from a
-synthetic golden course under `tests/fixtures/`, the toolkit
-materializes a runnable Harbor solve task and, from a synthetic
-submission, a runnable Harbor grading task, both byte-exact against
-committed golden fixtures; the maintainer then live-validates the same
-paths on one real assignment from the data root. The pilots recorded in
-[live-validation.md](live-validation.md) are evidence that this shape
-works, not templates to reproduce. Build order:
-
-1. **Data-root resolution** — explicit path, then `AAT_DATA_DIR`, then the
-   per-user default `~/aat-data`; a missing default produces a clear error,
-   and a data root inside the toolkit's own working tree is refused (precise rule in
-   [data-conventions.md](data-conventions.md)).
-2. **Grading output schema** — the `grading_result.json` fields and
-   internal-consistency rules as a schema plus a validation function,
-   shared by the grading verifier and later statistics.
-3. **Prompt templates** — solver and grader prompts written fresh per
-   the contracts above, placeholder-free, including the
-   `/app/submission` output contract.
-4. **Solve-task materializer** — assignment directory → Harbor task
-   directory (generated `instruction.md`, `task.toml`, environment from
-   template, recorded assignment and prompt hashes).
-5. **Generic solve verifier** — the 0/1 output-contract script included in
-   every materialized solve task.
-6. **Grading-task materializer** — submission directory + reference
-   solution + rubric → Harbor grading task; one code path for solve
-   artifacts and student folders.
-7. **Generic grading verifier** — enforces the grading output schema
-   through the shared validation module.
-8. **Environment templates** — pinned per-flavor Dockerfiles:
-   `data-science`, `optimization`, `scientific-python`, and the
-   dedicated `grading` flavor.
-9. **Job-config generation** — pinned Codex job configurations (agent,
-   model, effort, repeats, concurrency) emitted beside the materialized
-   tasks.
-10. **Thin CLI wrapping Harbor** — `aat solve` and `aat grade`
-    (installed as the `aat` console script): materialize, then invoke
-    `harbor run` as a subprocess; `--materialize-only` exposes the
-    file-writing layer alone. Each run writes a run record (exact
-    `harbor --version`, toolkit version, agent and model configuration,
-    effective command line, input hashes) beside the job output.
-
-Each step lands with deterministic offline tests over small synthetic
-fixtures (a fake course and a fake submission under `tests/fixtures/`),
-consistent with AGENTS.md. Stage 3 work (results loading, statistics,
-reporting) starts after the slice passes its
-golden-fixture acceptance tests and the maintainer live-validates one
-real assignment end to end.
-
-Module layout, mapping one-to-one onto the build order:
+Module layout:
 
 ```text
 src/agentic_assessment_toolkit/
-├── data_root.py           # step 1: resolution + refusal rules
+├── data_root.py           # data-root resolution + refusal rules
 ├── hashing.py             # shared: file/dir sha256 for provenance
-├── grading_schema.py      # step 2: fields + consistency validation
+├── grading_schema.py      # grading-result fields + consistency validation
 ├── config.py              # experiment-config loading + identity
 ├── course.py              # course record + assessment registry loading
 ├── check_course.py        # `aat check-course`: violations/gaps/notes
 ├── intake.py              # `aat intake`: codex command, receipts, doneness
+├── rubric.py              # rubric criteria grammar parsing
 ├── materialize/
 │   ├── _common.py         # shared materializer helpers (naming,
 │   │                      #   Dockerfile/test-runner emission)
-│   ├── solve.py           # step 4: assignment → Harbor solve task
-│   └── grading.py         # step 6: submission → Harbor grading task
-├── jobs.py                # step 9: pinned job-config emission
-├── harbor.py              # step 10: harbor command construction,
+│   ├── solve.py           # assignment → Harbor solve task
+│   └── grading.py         # submission → Harbor grading task
+├── jobs.py                # pinned job-config emission
+├── harbor.py              # harbor command construction,
 │                          #   subprocess invocation, run record
-├── results.py             # stage 3: trials + criteria tables
-├── metrics.py             # stage 3: pooled statistics, bootstrap CIs
-├── report.py              # stage 3: report rendering behind `aat report`
-├── cli.py                 # step 10: argparse, `aat solve` / `aat grade`;
-│                          #   stage 3 adds `aat report`
+├── results.py             # trials + criteria tables
+├── metrics.py             # pooled statistics, bootstrap CIs
+├── report.py              # report rendering behind `aat report`
+├── cli.py                 # argparse: `aat solve` / `aat grade` /
+│                          #   `aat report` / `aat check-course` /
+│                          #   `aat intake` / `aat init-data`
 └── templates/             # package data (importlib.resources)
-    ├── prompts/           # step 3: solver.md, grader.md; intake.md
-    ├── verifiers/         # steps 5 + 7: two standalone scripts
-    ├── environments/      # step 8: one Dockerfile per flavor
+    ├── prompts/           # solver.md, grader.md, intake.md
+    ├── verifiers/         # two standalone scripts
+    ├── environments/      # one Dockerfile per flavor
     └── task/              # task.toml template
 ```
 
@@ -1005,7 +854,7 @@ Implementation rules:
   tasks. Deterministic tests are unaffected: library RNGs are explicitly
   seeded, and floating-point aggregates are asserted with tolerances.
 
-### CLI design
+## CLI design
 
 Every command-line option belongs to one of three axes, and the axes are
 handled differently:
@@ -1116,10 +965,10 @@ derived-output-only, new flags here never enter any identity.
 
 New options must pass the axis test: if it changes the experiment, it
 belongs in a config file; if it changes selection or mechanics, a flag is
-legitimate. Deliberately deferred: a combined solve-then-grade command
-(manual chaining is fine, and the solve/grade separation is load-bearing)
-and rich selection syntax (globs, exclusions) until a real run needs
-them. Grading selection is settled: `--from-solve NAME` grades
+legitimate. There is no combined solve-then-grade command
+(manual chaining is fine, and the solve/grade separation is
+load-bearing) and no rich selection syntax (globs, exclusions); both
+wait on a real run that needs them ([roadmap.md](roadmap.md)). Grading selection is settled: `--from-solve NAME` grades
 verified, not-yet-graded solve trials produced under the named solve
 config, optionally narrowed by `--course`/`--assignment`; without it,
 `--submissions PATH` or `--course`/`--assignment` select student

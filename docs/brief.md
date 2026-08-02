@@ -157,6 +157,6 @@ potentially an open-source package for others — clean separation of code from
 data, no hardcoded local paths in the package, documented conventions — but
 those audiences are not current requirements.
 
-Decisions, architecture, and the roadmap are recorded in
-[design.md](design.md). The underlying research — alternatives considered,
+Decisions and architecture are recorded in [design.md](design.md), and
+planned work in [roadmap.md](roadmap.md). The underlying research — alternatives considered,
 methodology, and security model — is documented in [research.md](research.md).
