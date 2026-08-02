@@ -248,6 +248,32 @@ def _check_rubrics(
                 f"assignments/{assignment_id} has no rubrics/{assignment_id}/default.md: "
                 "gradable only after the rubric is authored"
             )
+    if course is not None and course.assessments is not None:
+        for assessment in course.assessments:
+            has_default = (rubrics_dir / assessment.id / "default.md").is_file()
+            source = rubrics_dir / assessment.id / "source"
+            if assessment.rubric_provenance is not None and not has_default:
+                report.violations.append(
+                    f"assessment {assessment.id!r} records rubric_provenance "
+                    f"{assessment.rubric_provenance!r} but rubrics/{assessment.id}/default.md "
+                    "does not exist"
+                )
+            if (
+                assessment.rubric_provenance == "authored"
+                and source.is_dir()
+                and _has_files(source)
+            ):
+                report.violations.append(
+                    f"assessment {assessment.id!r} records rubric_provenance 'authored' "
+                    f"but rubrics/{assessment.id}/source/ holds a professor rubric — "
+                    "point evidence existed, so the rubric is transcribed"
+                )
+            if has_default and assessment.rubric_provenance is None:
+                report.gaps.append(
+                    f"rubrics/{assessment.id}/default.md exists but assessment "
+                    f"{assessment.id!r} records no 'rubric_provenance' "
+                    "(transcribed or authored)"
+                )
 
 
 def _check_reference_solutions(

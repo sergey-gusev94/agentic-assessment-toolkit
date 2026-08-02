@@ -27,6 +27,10 @@ def test_fixture_course_loads() -> None:
     assert exam is not None
     assert exam.excluded is not None
     assert exam.ai_use_possible is False
+    hw1 = course.assessment("HW1")
+    assert hw1 is not None
+    assert hw1.rubric_provenance == "transcribed"
+    assert exam.rubric_provenance is None
     assert course.assessment("HW9") is None
 
 
@@ -56,7 +60,8 @@ def test_registry_fields_parse(tmp_path: Path) -> None:
             'category = "homework"\n'
             'ai_policy = "allowed"\n'
             "ai_use_possible = true\n"
-            "due = 2026-02-06\n",
+            "due = 2026-02-06\n"
+            'rubric_provenance = "authored"\n',
         )
     )
     assert course.assessments is not None
@@ -64,6 +69,7 @@ def test_registry_fields_parse(tmp_path: Path) -> None:
     assert entry.weight_pct == 12.5
     assert entry.due == datetime.date(2026, 2, 6)
     assert entry.excluded is None
+    assert entry.rubric_provenance == "authored"
 
 
 def test_top_level_environment_is_rejected(tmp_path: Path) -> None:
@@ -86,6 +92,10 @@ def test_top_level_environment_is_rejected(tmp_path: Path) -> None:
         ("[[assessments]]\nid = 'HW1'\ndue = '2026-02-06'\n", "must be a plain TOML date"),
         ("[[assessments]]\nid = 'HW1'\ndue = 2026-02-06T10:00:00Z\n", "must be a plain TOML date"),
         ("[[assessments]]\nid = 'HW1'\nexcluded = ''\n", "non-empty string"),
+        (
+            "[[assessments]]\nid = 'HW1'\nrubric_provenance = 'guessed'\n",
+            "'rubric_provenance' must be one of",
+        ),
         ("[[assessments]]\nid = 'HW1'\npoints = 3\n", "unknown keys: points"),
         ("[[assessments]]\nid = 'HW1'\n[[assessments]]\nid = 'HW1'\n", "duplicate assessment id"),
         ("[course]\nsemester = 'F25'\n", r"\[course\] has unknown keys: semester"),

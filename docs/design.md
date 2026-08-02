@@ -58,8 +58,10 @@ analysis are in research.md.
    fixed format in [data-conventions.md](data-conventions.md), parsed
    and enforced at materialization. Grading never starts
    without one: a missing rubric fails at materialization, and the fix
-   is to author the rubric first (the manual procedure in
-   [data-conventions.md](data-conventions.md)). Stable criterion ids
+   is to author the rubric first (course intake does this for every
+   material-backed assignment — transcribing a stated point split,
+   authoring one where none exists; the procedure in
+   [data-conventions.md](data-conventions.md) covers the rest). Stable criterion ids
    are what make per-criterion statistics well defined across repeated
    gradings.
 6. **Grades come from the grader's artifacts, not from verifier scoring.**

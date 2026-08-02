@@ -39,7 +39,10 @@ def test_render_prompt_requires_bounded_assignment_audits() -> None:
     assert "spawn one read-only subagent per assignment" in normalized
     assert "student-facing assignment bundle" in normalized
     assert "instructor/reference-solution bundle" in normalized
-    assert "NO_RUBRIC" in normalized
+    assert "transcribe" in normalized
+    assert "authored" in normalized
+    assert "negative-search evidence" in normalized
+    assert "total exactly 100 points" in normalized
     assert "spawn one final read-only reviewer subagent" in normalized
     assert "wait for every audit" in normalized
 

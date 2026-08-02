@@ -197,6 +197,13 @@ Notes:
     feasible, independent of permission (an online exam may forbid AI
     without preventing it; an in-person exam prevents it).
   - `due` — TOML date.
+  - `rubric_provenance` — `transcribed | authored`: how
+    `rubrics/<id>/default.md` got its point split — transcribed from a
+    split the materials state, or authored by the intake agent when no
+    materials state one. Present exactly when the rubric exists: set
+    without a rubric is a contract violation, as is `authored`
+    alongside a `rubrics/<id>/source/` professor rubric; a rubric
+    without the field is a completeness gap.
   - `excluded` — non-empty reason why this assessment has no
     assignment directory and never will (not codeable, materials
     lost). An entry with both an `excluded` reason and a directory is
@@ -263,11 +270,20 @@ Notes:
   rubric; the points are a number greater than zero; at least one
   criterion is not a bonus. Stable criterion ids are what make
   per-criterion statistics comparable across repeated gradings.
-- Authoring a missing rubric is a manual procedure, not toolkit
-  machinery: course intake drafts `default.md` wherever the materials
-  state a point split ([course-intake.md](course-intake.md)), and any
-  remaining rubric is drafted the same way — with an agent (any
-  interface) from the assignment and reference solution — then
+- Every material-backed assignment leaves course intake with a
+  `default.md` ([course-intake.md](course-intake.md)): **transcribed**
+  where the materials state a point split, **authored** by the intake
+  agent from the assignment and reference solution where neither the
+  student-facing nor the instructor materials state one. Authored
+  rubrics total exactly 100 integer points, contain no bonus
+  criteria, and follow the handout's own problem structure. The
+  registry records which mode produced each rubric
+  (`rubric_provenance`, above), and the intake audit table carries the
+  same label with the evidence that no point split exists, so the
+  reviewer knows the split is the
+  agent's judgment. A rubric for anything intake did not cover is
+  drafted the same way — with an agent (any interface) from the
+  assignment and reference solution — then
   reviewed. A rubric freezes at first grading use, and the grader
   checks (reference near full marks, irrelevant near zero) double as a
   sanity check on the rubric itself.

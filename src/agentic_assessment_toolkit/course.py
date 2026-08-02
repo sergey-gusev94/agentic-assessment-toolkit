@@ -32,6 +32,10 @@ ASSESSMENT_SCOPES = (
 # separately whether AI use was physically feasible (an online exam may
 # forbid AI yet not prevent it).
 AI_POLICIES = ("allowed", "not_allowed", "not_applicable")
+# How rubrics/<id>/default.md got its point split: "transcribed" from a
+# split the materials state, "authored" by the intake agent when no
+# materials state one. Set exactly when the rubric exists.
+RUBRIC_PROVENANCES = ("transcribed", "authored")
 
 _KNOWN_COURSE_KEYS = frozenset({"title", "institution", "term", "environment"})
 _KNOWN_ASSESSMENT_KEYS = frozenset(
@@ -46,6 +50,7 @@ _KNOWN_ASSESSMENT_KEYS = frozenset(
         "ai_use_possible",
         "due",
         "excluded",
+        "rubric_provenance",
     }
 )
 
@@ -68,6 +73,7 @@ class Assessment:
     ai_use_possible: bool | None
     due: datetime.date | None
     excluded: str | None
+    rubric_provenance: str | None
 
 
 @dataclass(frozen=True)
@@ -195,6 +201,9 @@ def _parse_assessment(entry: object, index: int, path: Path) -> Assessment:
         ai_use_possible=possible,
         due=due,
         excluded=_optional_str(entry, "excluded", path, where),
+        rubric_provenance=_optional_choice(
+            entry, "rubric_provenance", RUBRIC_PROVENANCES, path, where
+        ),
     )
 
 

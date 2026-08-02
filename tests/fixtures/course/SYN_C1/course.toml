@@ -9,6 +9,7 @@ type = "homework"
 weight_pct = 40.0
 ai_policy = "allowed"
 ai_use_possible = true
+rubric_provenance = "transcribed"
 
 [[assessments]]
 id = "HW2"

@@ -236,3 +236,43 @@ def test_rubric_source_as_a_file_is_a_violation(data_root: Path) -> None:
     source = course_dir(data_root) / "rubrics" / "HW1" / "source"
     source.write_text("professor rubric\n", encoding="utf-8")
     assert any("rubrics/HW1/source is a file" in v for v in violations(data_root))
+
+
+def test_provenance_without_a_rubric_is_a_violation(data_root: Path) -> None:
+    # HW2 has no rubric in the fixture; claiming one is a contradiction.
+    toml_path = course_dir(data_root) / "course.toml"
+    text = toml_path.read_text(encoding="utf-8").replace(
+        'id = "HW2"', 'id = "HW2"\nrubric_provenance = "transcribed"'
+    )
+    toml_path.write_text(text, encoding="utf-8")
+    assert any(
+        "'HW2' records rubric_provenance" in v and "does not exist" in v
+        for v in violations(data_root)
+    )
+
+
+def test_authored_provenance_with_a_professor_rubric_is_a_violation(data_root: Path) -> None:
+    toml_path = course_dir(data_root) / "course.toml"
+    text = toml_path.read_text(encoding="utf-8").replace(
+        'rubric_provenance = "transcribed"', 'rubric_provenance = "authored"'
+    )
+    toml_path.write_text(text, encoding="utf-8")
+    source = course_dir(data_root) / "rubrics" / "HW1" / "source"
+    source.mkdir()
+    (source / "rubric.pdf").write_text("professor rubric\n", encoding="utf-8")
+    assert any(
+        "rubric_provenance 'authored'" in v and "rubrics/HW1/source/" in v
+        for v in violations(data_root)
+    )
+
+
+def test_rubric_without_provenance_is_a_gap(data_root: Path) -> None:
+    toml_path = course_dir(data_root) / "course.toml"
+    text = toml_path.read_text(encoding="utf-8").replace('rubric_provenance = "transcribed"\n', "")
+    toml_path.write_text(text, encoding="utf-8")
+    report = check_course(data_root, COURSE_ID)
+    assert report.ok
+    assert any(
+        "rubrics/HW1/default.md exists" in gap and "no 'rubric_provenance'" in gap
+        for gap in report.gaps
+    )

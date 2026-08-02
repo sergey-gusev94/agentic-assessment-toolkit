@@ -505,7 +505,7 @@ def _plan_grade(
                 f"{source.course_id}/{source.assignment_id}: grading never starts "
                 "without a rubric (docs/design.md, decision 5); author "
                 f"courses/{source.course_id}/rubrics/{source.assignment_id}/{rubric_name}.md "
-                "first (the manual procedure in docs/data-conventions.md)"
+                "first (the procedure in docs/data-conventions.md)"
             )
         # Parse at plan time so a bad rubric fails before any job
         # directory is created; the materializer parses it again.

@@ -42,8 +42,14 @@ intake never touches those trees.
 3. **Review and fill.** Fix violations, fill what the materials could
    not answer, and review every judgment call in `intake-notes.md` —
    rubric drafts most carefully, because a rubric is the frozen judge
-   of every grade produced under it. Re-run `aat check-course` until
-   clean.
+   of every grade produced under it. Every material-backed assignment
+   gets a rubric: transcribed where the materials state a point
+   split, authored by the agent where they do not. The registry
+   records the mode per assessment (`rubric_provenance` in
+   `course.toml`), and the audit table in
+   the notes labels each rubric `transcribed` or `authored`; review
+   authored ones strictest of all, since no professor source backs
+   their point split. Re-run `aat check-course` until clean.
 4. **Use.** Everything stays an editable draft until a job first
    records its hash; from that point the artifact is frozen
    (docs/data-conventions.md). Dropping later-arriving material into
