@@ -17,6 +17,7 @@ dependencies = [
   "harbor>=0.20,<0.21",
   "numpy>=2.0",
   "pandas>=2.2",
+  "pypdf>=5.0",
 ]
 
 [project.scripts]

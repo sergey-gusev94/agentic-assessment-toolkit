@@ -24,6 +24,7 @@ DEFAULT_DIRNAME = "aat-data"
 
 TOP_LEVEL_DIRS = (
     "raw",
+    "raw-submissions",
     "courses",
     "submissions",
     "tables",

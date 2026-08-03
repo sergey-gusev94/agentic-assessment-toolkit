@@ -28,6 +28,7 @@ from . import config as config_mod
 from . import data_root as data_root_mod
 from . import harbor as harbor_mod
 from . import hashing
+from . import ingest as ingest_mod
 from . import intake as intake_mod
 from . import jobs as jobs_mod
 from . import metrics as metrics_mod
@@ -182,6 +183,25 @@ def _build_parser() -> argparse.ArgumentParser:
         help="print the rendered brief for --course (for an interactive session) and exit",
     )
 
+    ingest = subparsers.add_parser(
+        "ingest-submissions",
+        help="normalize LMS submission exports into the submissions tree",
+    )
+    ingest.add_argument("--course", metavar="ID")
+    ingest.add_argument(
+        "--all",
+        action="store_true",
+        dest="all_items",
+        help="every unprocessed dump under raw-submissions/",
+    )
+    ingest.add_argument("--data-root", metavar="PATH", help=DATA_ROOT_HELP)
+    ingest.add_argument(
+        "--force",
+        action="store_true",
+        help="also reprocess courses whose raw dump is unchanged",
+    )
+    ingest.add_argument("--dry-run", action="store_true", help="list what would run, then exit")
+
     check = subparsers.add_parser(
         "check-course",
         help="report a course tree's contract violations, gaps, and intake notes (read-only)",
@@ -242,6 +262,8 @@ def _run(args: argparse.Namespace) -> int:
         return _run_check_course(args)
     if args.command == "intake":
         return _run_intake(args)
+    if args.command == "ingest-submissions":
+        return _run_ingest_submissions(args)
     stage: Stage = "solve" if args.command == "solve" else "grade"
     root = data_root_mod.resolve_data_root(args.data_root)
     config = config_mod.load_config(_config_path(args.config))
@@ -391,6 +413,67 @@ def _run_intake(args: argparse.Namespace) -> int:
     print(f"processed {done} of {len(to_run)} course(s)")
     if failures:
         print(f"failed (re-run `aat intake` to retry): {', '.join(failures)}")
+        return 1
+    return 0
+
+
+def _run_ingest_submissions(args: argparse.Namespace) -> int:
+    if args.all_items and args.course:
+        raise CliError("--all and --course are mutually exclusive")
+    root = data_root_mod.resolve_data_root(args.data_root)
+    if args.course:
+        selected = ingest_mod.list_raw_courses(root, only=args.course)
+        if not selected:
+            raise CliError(f"no raw submissions dump at {root / 'raw-submissions' / args.course}")
+    elif args.all_items:
+        selected = ingest_mod.list_raw_courses(root)
+        if not selected:
+            raise CliError(f"no submission dumps under {root / 'raw-submissions'}")
+    else:
+        raise CliError("select courses with --course or --all")
+
+    to_run = [c for c in selected if args.force or c.status == "pending"]
+
+    if args.dry_run:
+        for course in selected:
+            marker = "run " if course in to_run else "skip"
+            print(f"{marker} [{course.status:7}] {course.course_id}")
+        print(f"would ingest {len(to_run)} of {len(selected)} course(s)")
+        return 0
+
+    attention = 0
+    # A processed course can still carry skipped/frozen rows from its
+    # last run; the receipt keeps the counts so skipping the course
+    # never silently reports clean.
+    for course in selected:
+        if course in to_run:
+            continue
+        recorded = ingest_mod.recorded_attention(ingest_mod.read_record(root, course.course_id))
+        if recorded:
+            print(
+                f"ingest {course.course_id}: unchanged, but {recorded} submission(s) "
+                "from the last run still need review (see tables/"
+                f"{course.course_id}/{ingest_mod.SUBMISSIONS_CSV})"
+            )
+            attention += recorded
+
+    if not to_run and attention == 0:
+        print(f"nothing to do: {len(selected)} course(s) already processed")
+        return 0
+
+    for course in to_run:
+        try:
+            report = ingest_mod.ingest_course(root, course.course_id)
+        except ingest_mod.IngestError as error:
+            raise CliError(str(error)) from error
+        print(ingest_mod.format_report(report))
+        attention += len(report.attention)
+    if attention:
+        print(
+            f"{attention} submission(s) need review (skipped or frozen); "
+            "fix identities/zip mapping in manifest.toml, or resolve frozen "
+            "conflicts, then re-run"
+        )
         return 1
     return 0
 

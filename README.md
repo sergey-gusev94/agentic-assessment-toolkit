@@ -38,13 +38,14 @@ and the [roadmap](docs/roadmap.md) for planned work.
 
 The `aat` command materializes Harbor tasks from a data root (external
 to this repository, see [data conventions](docs/data-conventions.md))
-and launches `harbor run`. The normal flow processes everything in
-five commands (plus one-time setup):
+and launches `harbor run`. The normal flow processes everything in a
+handful of commands (plus one-time setup):
 
 ```bash
 aat init-data                                # one-time: create the ~/aat-data layout
 aat intake --all                             # build courses/ from dumps under raw/
 aat check-course --course PU_CHE597DS_S2026  # per course: re-run until clean
+aat ingest-submissions --all                 # build submissions/ from LMS exports
 aat solve --all --config codex-high          # solve every assignment of every course
 aat grade --from-solve codex-high --config codex-grader-high  # grade the agent's solutions
 aat grade --all --config codex-grader-high   # grade every student submission
@@ -59,9 +60,22 @@ grades the verified solver trials that `aat solve` left under
 
 This sequence is safe to re-run verbatim: every command skips work
 that is already done, so after a new dump lands in `raw/`, a new
-assignment appears in a course, or new student folders arrive in
-`submissions/`, the same commands do only the missing work. Narrow any
-run with `--course ID` (and `--assignment ID`) instead of `--all`.
+assignment appears in a course, or a new LMS export lands in
+`raw-submissions/`, the same commands do only the missing work. Narrow
+any run with `--course ID` (and `--assignment ID`) instead of `--all`.
+
+Student submissions enter the data root through ingest: drop the LMS
+export zips (Brightspace download folders or Gradescope graded-copy
+PDFs) into `raw-submissions/<course_id>/`, then
+`aat ingest-submissions --all` normalizes them into pseudonymized
+per-student folders under `submissions/` and identity tables under
+`tables/` — deterministic code, no agent. Gradescope grade-summary
+pages are split off so the grader never sees the professor's scores.
+The command prints a review summary and exits nonzero while anything
+needs attention (an unmatched zip name, an unresolvable identity);
+fixes are one-line entries in `raw-submissions/<course_id>/manifest.toml`,
+then re-run. The full contract is in
+[data conventions](docs/data-conventions.md), "Submission ingest".
 
 A course enters the data root through intake: copy everything
 collected for it into `raw/<course_id>/`, then `aat intake --all` (or
@@ -196,7 +210,8 @@ make check
 ```
 
 Harbor is the package's runtime-orchestration dependency; `numpy` and
-`pandas` back the statistics and reporting layer. Running actual jobs
+`pandas` back the statistics and reporting layer, and `pypdf` backs the
+submission-ingest PDF splitting. Running actual jobs
 additionally requires Docker and the agent CLIs (Codex CLI
 first), which are external tools packaging cannot provide; repository
 tests never invoke any of them.

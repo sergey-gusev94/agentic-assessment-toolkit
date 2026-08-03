@@ -27,9 +27,11 @@ analysis are in research.md.
    environment (Dockerfile) templates, the two generic contract verifiers,
    the grading output schema, results
    loading and statistics, the course record and assessment registry
-   conventions with their intake brief and checker, and the thin
+   conventions with their intake brief and checker, the
+   submission-ingest adapters and identity tables, and the thin
    `aat solve` / `aat grade` / `aat report` / `aat check-course` /
-   `aat intake` / `aat init-data` commands. It does not
+   `aat intake` / `aat ingest-submissions` / `aat init-data`
+   commands. It does not
    implement an agent runner, sandbox framework, run orchestrator, model
    abstraction, transcript schema, experiment database, or results viewer:
    Harbor does all orchestration; the toolkit constructs one command line
@@ -142,8 +144,30 @@ analysis are in research.md.
     so changing them never invalidates a processed course. Facts the
     materials do not state are left absent — never sentinel values —
     and surfaced by the checker. Student-submission ingest is out of
-    intake's scope ([roadmap.md](roadmap.md)). The procedure is
+    intake's scope (decision 15). The procedure is
     [course-intake.md](course-intake.md).
+15. **Submission ingest is deterministic code with a human review
+    gate.** LMS submission exports are dumped verbatim into
+    `raw-submissions/<course_id>/`; `aat ingest-submissions` converts
+    them into `submissions/<course_id>/<student_id>/<assignment_id>/`
+    and the identity tables under `tables/<course_id>/` with plain
+    code, never an agent — the exports are uniformly structured
+    (adapters for Brightspace upload folders and Gradescope graded-copy
+    PDFs, auto-detected per zip), and pseudonymization must happen
+    before anything reaches an LLM. Multiple uploads merge by union of
+    relative paths with exact-path supersession — nothing else is ever
+    discarded, and every supersession, ambiguity, and skip is flagged
+    for the human to review; anything the code cannot settle
+    (unmatched zip names, unresolvable identities) is a loud error or
+    a skipped-and-flagged row fixed via a small per-course manifest,
+    never a guess. Gradescope grade-summary pages are split off before
+    the submission enters the tree (the grader must never see the
+    professor's scores) and stored for the planned professor-grade
+    comparison. Doneness is a receipt hash of the raw dump, the same
+    incremental pattern as intake; a submission directory referenced
+    by a grading run record is frozen and never rewritten. The full
+    contract is in [data-conventions.md](data-conventions.md),
+    "Submission ingest".
 
 ## Vocabulary
 
@@ -195,6 +219,11 @@ identically in code, documentation, and output.
   agent per unprocessed course ([course-intake.md](course-intake.md));
   `aat check-course` is its deterministic reviewer, and the
   `intake-record.json` receipt is its doneness.
+- **Submission ingest** — the `aat ingest-submissions` procedure that
+  converts `raw-submissions/<course_id>/` LMS exports into
+  `submissions/<course_id>/` and the `tables/<course_id>/` identity
+  and bookkeeping tables, deterministically (decision 15); its
+  `ingest-record.json` receipt is its doneness.
 - **Golden fixture** — a committed byte-exact expected task tree under
   `tests/fixtures/golden/`, regenerated only deliberately.
 
@@ -204,6 +233,8 @@ identically in code, documentation, and output.
 Harbor owns                          Toolkit owns
 -----------                          ------------
 sandboxed execution (solve + grade)  assignment/dataset import conventions
+                                     LMS submission ingest (adapters,
+                                       merge policy, identity tables)
 agent adapters (Codex, Claude, ...)  grading-task materializer
 trials, jobs, -k repeats, retries    solver + grader prompt templates
 concurrency management               environment (Dockerfile) templates
@@ -782,6 +813,8 @@ src/agentic_assessment_toolkit/
 ├── course.py              # course record + assessment registry loading
 ├── check_course.py        # `aat check-course`: violations/gaps/notes
 ├── intake.py              # `aat intake`: codex command, receipts, doneness
+├── ingest.py              # `aat ingest-submissions`: LMS export adapters,
+│                          #   merge policy, identity tables, receipts
 ├── rubric.py              # rubric criteria grammar parsing
 ├── materialize/
 │   ├── _common.py         # shared materializer helpers (naming,
@@ -796,7 +829,8 @@ src/agentic_assessment_toolkit/
 ├── report.py              # report rendering behind `aat report`
 ├── cli.py                 # argparse: `aat solve` / `aat grade` /
 │                          #   `aat report` / `aat check-course` /
-│                          #   `aat intake` / `aat init-data`
+│                          #   `aat intake` / `aat ingest-submissions` /
+│                          #   `aat init-data`
 └── templates/             # package data (importlib.resources)
     ├── prompts/           # solver.md, grader.md, intake.md
     ├── verifiers/         # two standalone scripts
@@ -938,6 +972,9 @@ aat intake (--course ID | --all) [--data-root PATH]
            [--model NAME] [--reasoning-effort LEVEL]
            [--force] [--dry-run] [--print-prompt]
 
+aat ingest-submissions (--course ID | --all) [--data-root PATH]
+           [--force] [--dry-run]
+
 aat init-data [--data-root PATH] [--git]
 ```
 
@@ -953,7 +990,15 @@ processed and hand-built courses; a failed agent run writes no receipt,
 so re-running the command is the retry mechanism; `--print-prompt`
 emits the rendered brief for an interactive session instead of
 launching anything. Each run's output is teed to
-`scratch/intake/<stamp>__<course>.log`. `aat init-data` creates the
+`scratch/intake/<stamp>__<course>.log`. `aat ingest-submissions` runs
+submission ingest (decision 15) over the selected unprocessed dumps
+under `raw-submissions/`: deterministic code with the same
+receipt-hash doneness, printing each course's review summary and
+exiting nonzero while any submission is skipped or frozen (the
+receipt records the outcome counts, so an unchanged course's
+unresolved rows are re-reported rather than silently passing) —
+re-running after a `manifest.toml` fix is the retry mechanism, and
+`--force` reprocesses courses whose dump is unchanged. `aat init-data` creates the
 resolved data root — the directory, its top-level layout, and a short
 README — because resolution itself never creates anything
 (data-conventions.md); it is idempotent, and `--git` additionally makes

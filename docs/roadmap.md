@@ -16,17 +16,26 @@ and the condition that triggers building it. No dates, no history.
 
 ## Later, on demand
 
-- **Student-submission ingest** — the procedure for bringing LMS
-  exports into `submissions/` and rosters and pseudonym tables into
-  `tables/`, with its own privacy stakes; when grading real student
-  coursework begins.
 - **Professor-grade comparison** — grade-export ingestion under
   `tables/`, the discrepancy report (matched pairs with explicit
   de-duplication, bias, MAE, RMSE, correlation and concordance,
   cluster-bootstrap intervals), and the anonymization helpers; when
   comparing LLM grades to professor grades becomes a real need. Every
-  grade and its provenance are stored, so this is retroactively
-  computable at any time.
+  grade and its provenance are stored — including the per-question
+  Gradescope grade summaries submission ingest splits off into
+  `tables/<course_id>/gradescope-summaries/` and any LMS grade-export
+  CSVs kept beside the raw dumps — so this is retroactively computable
+  at any time.
+- **Deadline-cutoff selection for submission ingest** — filtering or
+  flagging uploads after a per-assignment due date, computable from
+  the `submitted_at` timestamps ingest records for Brightspace uploads
+  (Gradescope exports carry none; their times would come from a
+  grades CSV); when late-submission policy enforcement is actually
+  needed.
+- **Model-assisted merge review** — an LLM pass over flagged
+  multi-upload merges (`possible_stale_solution` and friends) to
+  propose which files to keep; if human review shows the deterministic
+  union-with-supersession policy keeping wrong content in practice.
 - **Judge calibration against human grading**; if a trustworthy
   human-graded corpus emerges.
 - **LaTeX/PDF grading justifications** — a grader prompt change; if

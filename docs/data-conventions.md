@@ -48,6 +48,10 @@ repository — only the toolkit's own tree is refused.
 $AAT_DATA_DIR/
 ├── raw/                        # as-collected course material dumps
 │   └── <course_id>/            #   intake's input; kept verbatim for provenance
+├── raw-submissions/            # as-downloaded LMS submission exports
+│   └── <course_id>/            #   ingest's input; export zips kept verbatim,
+│       ├── *.zip               #   plus an optional manifest.toml for overrides
+│       └── manifest.toml
 ├── courses/                    # source-of-truth course content (frozen at first use)
 │   └── <course_id>/            #   e.g. PU_CHE456_F2025
 │       ├── course.toml         #   course record + assessment registry
@@ -63,9 +67,15 @@ $AAT_DATA_DIR/
 │           └── <assignment_id>/
 │               ├── <name>.md         # default.md; variants are new files
 │               └── source/           # professor's standalone rubric, verbatim
-├── submissions/                # real student submissions, as received
-│   └── <course_id>/<student_id>/<assignment_id>/
+├── submissions/                # real student submissions, normalized by ingest
+│   └── <course_id>/            #   (see "Submission ingest" below)
+│       ├── ingest-record.json  #   receipt written by `aat ingest-submissions`
+│       └── <student_id>/<assignment_id>/
 ├── tables/                     # rosters, grade exports, identity mappings
+│   └── <course_id>/
+│       ├── students.csv        #   pseudonym table (the identity mapping)
+│       ├── submissions.csv     #   per-submission ingest bookkeeping
+│       └── gradescope-summaries/  # grade pages split off graded-copy PDFs
 ├── tasks/                      # materialized Harbor task inputs, per job
 │   └── <utc>__<config>__<hash8>/
 ├── solving/                    # solve jobs (Harbor job dirs + aat-run.json)
@@ -108,6 +118,14 @@ Notes:
   amended at any time; amending the `environment` default changes
   per-item identities only through the resolved Dockerfile template it
   selects.
+- `raw-submissions/<course_id>/` holds the LMS submission export zips
+  exactly as downloaded — read-only from the moment they are dumped,
+  like `raw/`. `aat ingest-submissions` reads them and writes the
+  normalized `submissions/<course_id>/` tree and the
+  `tables/<course_id>/` bookkeeping (the "Submission ingest" section
+  below). Keeping the zips verbatim means every ingested file has a
+  checkable source, superseded uploads stay recoverable, and ingest can
+  be re-run.
 - Transcripts and trajectories under `solving/` and `grading/` are data, not
   logs: they embed full assignment content and possibly student text.
 - `tables/` holds the only mapping between real identities and anonymized
@@ -294,6 +312,134 @@ Notes:
   reviewed. A rubric freezes at first grading use, and the grader
   checks (reference near full marks, irrelevant near zero) double as a
   sanity check on the rubric itself.
+
+## Submission ingest
+
+`aat ingest-submissions` converts `raw-submissions/<course_id>/` into
+the normalized submissions tree and identity tables. It is
+deterministic code, never an agent: LMS exports are uniformly
+structured, and real student identities must be pseudonymized before
+anything reaches an LLM — grading tasks and their stored transcripts
+must only ever see pseudonym ids. The command is naturally incremental:
+its receipt (`submissions/<course_id>/ingest-record.json`) records the
+hash of the whole raw dump directory — export zips, the optional
+`manifest.toml`, and any other files kept beside them — and a course
+whose current hash differs is unprocessed again, so new exports or a
+manifest fix trigger a re-run that recomputes the course from the raw
+zips.
+
+**Zip-to-assignment matching.** Each export zip maps to one assignment
+id. The zip filename is parsed for a known series word — `homework`
+(or `hw`), `pso` (or `problem set`), `exam` — plus a number, and
+matched against the course's known assignment ids (assignment
+directories and registry entries), ignoring zero padding — `hw5.zip`
+matches `HW05`. Anything unparseable or ambiguous, including series
+words the parser does not know (`Lab 3.zip`), is a hard error naming
+the zip; the fix is one line in `manifest.toml`. Non-zip files in the
+dump (a grade-export CSV kept beside the zips, say) are ignored by
+processing but still count toward the dump hash, so adding one makes
+the course pending again:
+
+```toml
+[zips]
+"oddly named export.zip" = "HW05"
+
+[identities]
+"366491495" = "Ada Lovelace"   # Gradescope submission id → display name
+"366856372" = "S014"           # or an existing student id
+```
+
+**Adapters.** The zip's internal layout selects the adapter; an
+unrecognized layout is a hard error, never a guess.
+
+- **Brightspace** — top-level folders named
+  `<person>-<assignment> - <username> <Display Name> - <date time>`,
+  one per upload. All of a student's uploads for an assignment merge
+  into one effective submission: the union of all uploads keyed by
+  relative path, where a later upload's file with exactly the same
+  path supersedes the earlier version. Nothing else is ever discarded
+  — same file type never means same role, so a later supplementary PDF
+  must never erase an earlier solution PDF. Any multi-upload merge is
+  flagged `merged_uploads`; every supersession is additionally
+  recorded (`replaced_files`, with the superseded upload's timestamp),
+  byte-identical re-uploads deduplicate (`duplicate_reupload`), and a
+  merged submission holding same-type solution files (`.pdf`,
+  `.ipynb`) from different uploads gets the advisory
+  `possible_stale_solution` flag — a renamed re-upload a human should
+  eyeball. A student whose latest upload carries a different username
+  or display name than the students table is flagged
+  `identity_changed` (the table keeps the first-seen identity).
+  Root-level export bookkeeping files (e.g. `index.html`) are
+  ignored.
+- **Gradescope** — `assignment_<n>_export/` holding one graded-copy
+  PDF per submission, named by numeric submission id. Each PDF is
+  grade-summary pages followed by submission pages, every submission
+  page headed by a question-assignment banner line; the PDF is split
+  at the first banner page, and only the submission pages are written
+  (as `submission.pdf`) into the submissions tree — the grader must
+  never see the professor's scores. The summary pages are stored under
+  `tables/<course_id>/gradescope-summaries/<assignment_id>/<student_id>.pdf`:
+  they carry the professor's per-question grading and feed the planned
+  professor-grade comparison ([roadmap](roadmap.md)). A PDF with no
+  banner page is skipped and flagged (`no_split_marker`), never cut by
+  guesswork; a PDF that fails to parse at all is skipped as
+  `unreadable_pdf` rather than aborting the course; and when two PDFs
+  of one assignment resolve to the same student, the second is skipped
+  as `duplicate_student`. Gradescope exports carry no submission
+  timestamp, so their `submitted_at` stays empty (Brightspace upload
+  folders provide one).
+
+**Identity.** `tables/<course_id>/students.csv` is the pseudonym
+table: the mapping between real identities and pseudonym ids (real
+names also remain inside the raw export zips and the stored Gradescope
+grade summaries — which is part of why `tables/` and
+`raw-submissions/` never leave the data root). Brightspace students
+are keyed by their LMS person id; Gradescope PDFs carry only a display
+name on the first summary page, matched case-insensitively against
+the table, with `manifest.toml` `[identities]` as the explicit
+override (also the fix for the occasional PDF with no extractable
+name, flagged `identity_unresolved`, and for ambiguous names, flagged
+`ambiguous_identity`). An S-id override resolves to that student
+directly — it works even when several students share a name, which is
+exactly the ambiguity it exists to settle — and is flagged
+`identity_from_manifest`; an override naming a nonexistent S-id is
+skipped as `unknown_student_id`. Unmatched names become new students.
+Ids are `S001`-style, assigned deterministically and never renumbered:
+re-running ingest extends the table, it never rewrites existing rows.
+Unresolved submissions are skipped — listed for review, never guessed.
+One accepted limitation of name matching: two different people who
+share a display name and appear only in Gradescope exports are merged
+into one pseudonym when they never collide on the same assignment
+(a same-assignment collision is caught as `duplicate_student`). The
+S-id override is the remedy when a roster or grades CSV reveals such
+a pair.
+
+**Freeze rule.** A submission directory referenced by any grading run
+record is frozen: the grading per-item identity deliberately excludes
+the submission bytes (the submission is the measured object, not part
+of the judge), so a silent rewrite would never trigger a regrade.
+When re-ingest computes different content for a frozen directory, the
+directory is left untouched and the row is flagged
+(`frozen_submission_changed`, status `frozen`); the human decides — to
+accept the new content, delete the submission directory and re-run
+with `--force` (the raw dump is unchanged, so a plain re-run would
+skip the course), then regrade: the item still counts as done, so
+regrading the new bytes takes `aat grade --force`.
+
+**Review.** `tables/<course_id>/submissions.csv` records every
+(assignment, student) pair — status `ready`, `skipped`, `frozen`, or
+`missing` (a known student with no submission for an ingested
+assignment) — with upload counts, timestamps where the source provides
+them, flags, and superseded files. The command prints the flagged rows
+after each course and exits nonzero while any submission is skipped or
+frozen — including on later runs that skip an unchanged course: the
+receipt records the outcome counts, and unresolved rows are reported
+(and keep the exit nonzero) until a fix changes the dump or `--force`
+reprocesses it. The review loop is: read the summary, fix
+`manifest.toml` or resolve the frozen conflict, re-run until clean.
+Flagged multi-upload merges are drafts like everything else
+pre-freeze: hand-prune a submission directory before grading if the
+merge kept a stale version.
 
 ## Job directories and run records
 
