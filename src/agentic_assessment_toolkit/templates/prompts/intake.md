@@ -67,6 +67,11 @@ It must return a concise, structured report containing:
   location;
 - conflicts between student-facing and instructor materials, including
   requirements added or changed by a corrected statement;
+- every administrative requirement found in either bundle — names or
+  identifiers on the work, signatures, honor affirmations, submission
+  formalities, lateness rules, escalation instructions — cited to its
+  location; these are excluded from the rubric under the rubric rules
+  below, and the citation is what lets the exclusion be recorded;
 - any standalone professor rubric files that belong in `source/`;
 - a proposed `default.md` rubric. When either bundle states a numeric
   point allocation, the rubric is **transcribed** at the most granular
@@ -170,6 +175,16 @@ labeled as authored in the notes.
 the assignment directory: the solver reads only `assignments/`, and
 that separation is what keeps answers away from it.
 
+A file that merely duplicates the assignment statement is not a
+reference solution; leave it out. When the instructor bundle contains
+no worked solution for a material-backed assignment, write
+`reference_solutions/<assignment_id>/README.md` stating that no worked
+reference solution exists and that the grader must establish
+correctness from the rubric, the submission's own derivations, and
+internal consistency checks — and record the gap in the notes. Never
+author a worked solution yourself: an invented oracle is worse than an
+absent one.
+
 **Rubrics.** When the professor distributed a standalone rubric
 document (a rubric PDF, a grading-scheme handout — as opposed to
 points embedded in the assignment or reference files), copy it
@@ -216,6 +231,21 @@ when they do not. For example:
   Award half if the tree is trained on the full dataset; zero if the
   model is imported but never fit.
 ```
+
+**Administrative requirements are never rubric content.** The rubric
+grades academic work only. Requirements about identity or course
+administration — the student's name or identifier on the work,
+signatures, honor affirmations or integrity statements, submission
+formalities such as boxing final answers, lateness penalties,
+escalation to the instructor — become neither criteria nor rubric
+prose, even when the professor's materials assign them points or
+withhold grading over them (for example "an unnamed page is not
+graded"). This applies to transcribed and authored rubrics alike. The
+professor's statement stays available verbatim in the handout and in
+`source/`; record each exclusion, with its source citation, in the
+audit table and `intake-notes.md`. Requirements about the academic
+work itself — shown work, stated assumptions, required derivations —
+are not administrative and stay in the rubric.
 
 Transcribe faithfully; where the source is vague (section totals only,
 unclear bonus status), still draft the best faithful rubric and flag

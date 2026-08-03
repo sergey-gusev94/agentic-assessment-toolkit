@@ -163,6 +163,13 @@ _FAILURE_DTYPES: dict[str, str] = {
     "share": "Float64",
 }
 
+_UNGRADED_KEYS = [*_CONFIG_KEYS, "course_id", "assignment_id", "job_name", "trial_name"]
+
+_UNGRADED_DTYPES: dict[str, str] = {
+    **dict.fromkeys(_UNGRADED_KEYS, "string"),
+    "outcome": "string",
+}
+
 
 def solve_summary(trials: pd.DataFrame) -> pd.DataFrame:
     """Solve outcome counts per config, course, and assignment.
@@ -458,6 +465,33 @@ def failure_accounting(trials: pd.DataFrame) -> pd.DataFrame:
             row.update({"outcome": category, "n_trials": count, "share": _ratio(count, len(group))})
             rows.append(row)
     return _table(rows, _FAILURE_DTYPES, _FAILURE_KEYS)
+
+
+def ungraded_solve_trials(trials: pd.DataFrame) -> pd.DataFrame:
+    """Solve trials that never became a valid grading, with their outcome.
+
+    The direct answer to "what is missing from grading and why": a
+    failed solve never produced a submission, a contract failure
+    produced an empty one, and a verified solve may simply not have
+    been graded yet. Elsewhere these trials appear only as outcome
+    counts; here each one is a named row.
+    """
+    solve = trials[_stage_mask(trials, "solve")]
+    valid = trials[_valid_grading_mask(trials)]
+    graded = set(
+        zip(valid["solve_job_name"], valid["solve_trial_name"], strict=True),
+    )
+    rows: list[dict[str, object]] = []
+    for _, trial in solve.iterrows():
+        if (trial["job_name"], trial["trial_name"]) in graded:
+            continue
+        rows.append(
+            {
+                **{key: trial[key] for key in _UNGRADED_KEYS},
+                "outcome": trial["outcome"],
+            }
+        )
+    return _table(rows, _UNGRADED_DTYPES, _UNGRADED_KEYS)
 
 
 def _pseudo_role(student_id: str) -> str:

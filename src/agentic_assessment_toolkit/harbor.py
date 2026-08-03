@@ -314,21 +314,53 @@ class SolveSubmission:
     directory: Path
 
 
+@dataclass(frozen=True)
+class SkippedSolveTrial:
+    """An in-scope solve trial that yields no gradable submission.
+
+    ``reason`` is ``"solve-failed"`` (the trial was never verified, so
+    the agent errored, timed out, or the infrastructure failed) or
+    ``"empty-submission"`` (verified, but the submission artifact is
+    missing or empty — an output-contract failure). A failed solve is
+    not done and reruns without ``--force``; an empty submission counts
+    as a verified outcome, so producing a new attempt needs ``--force``.
+    """
+
+    course_id: str
+    assignment_id: str
+    solve_job_name: str
+    trial_name: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class SolveSubmissionSelection:
+    """What ``--from-solve`` selected, and what it had to pass over."""
+
+    submissions: list[SolveSubmission]
+    skipped: list[SkippedSolveTrial]
+
+
 def verified_solve_submissions(
     solving_root: Path,
     solve_config_name: str,
     *,
     course_id: str | None = None,
     assignment_id: str | None = None,
-) -> list[SolveSubmission]:
+) -> SolveSubmissionSelection:
     """Submission artifacts of verified solve trials under a named solve config.
 
-    Each verified trial is one gradable item. Trials whose submission
-    artifact is missing or empty (e.g. an output-contract failure) are
-    skipped here; they remain visible as explicit outcomes in the solve
-    job itself.
+    Each verified trial with a non-empty submission artifact is one
+    gradable item. In-scope trials that yield no gradable submission —
+    failed solves and empty submission artifacts — are returned as
+    ``skipped`` so the caller can report them; grading nonexistent work
+    would be worse than skipping, but the skip must never be silent.
+    ``--course``/``--assignment`` narrowing excludes trials from scope
+    entirely: a trial the user did not ask about is neither selected
+    nor reported.
     """
     submissions = []
+    skipped = []
     for job_dir in job_dirs(solving_root):
         record = read_run_record(job_dir)
         if record is None or record.get("stage") != "solve":
@@ -338,8 +370,6 @@ def verified_solve_submissions(
             continue
         record_items = items_by_task_dir(record)
         for trial_dir, result in trial_results(job_dir):
-            if not is_verified_trial(result):
-                continue
             task_name = result.get("task_name")
             item = record_items.get(task_name) if isinstance(task_name, str) else None
             if item is None:
@@ -356,7 +386,22 @@ def verified_solve_submissions(
             # the trial's artifacts/ directory: /app/submission →
             # artifacts/app/submission.
             artifact_dir = trial_dir / "artifacts" / "app" / "submission"
-            if not artifact_dir.is_dir() or not any(artifact_dir.rglob("*")):
+            if not is_verified_trial(result):
+                reason = "solve-failed"
+            elif not artifact_dir.is_dir() or not any(artifact_dir.rglob("*")):
+                reason = "empty-submission"
+            else:
+                reason = None
+            if reason is not None:
+                skipped.append(
+                    SkippedSolveTrial(
+                        course_id=item_course_id,
+                        assignment_id=item_assignment_id,
+                        solve_job_name=job_dir.name,
+                        trial_name=trial_dir.name,
+                        reason=reason,
+                    )
+                )
                 continue
             submissions.append(
                 SolveSubmission(
@@ -368,4 +413,4 @@ def verified_solve_submissions(
                     directory=artifact_dir,
                 )
             )
-    return submissions
+    return SolveSubmissionSelection(submissions=submissions, skipped=skipped)

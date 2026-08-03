@@ -287,6 +287,7 @@ def _run(args: argparse.Namespace) -> int:
     else:
         gurobi_license_file = None
         planned = _plan_grade(root, config, config_identity, done, args)
+    _report_configuration_changes(planned, done)
     return _execute(
         stage,
         root,
@@ -297,6 +298,26 @@ def _run(args: argparse.Namespace) -> int:
         args,
         gurobi_license_file=gurobi_license_file,
     )
+
+
+def _report_configuration_changes(planned: list[_PlannedItem], done: set[tuple[str, str]]) -> None:
+    """Explain re-runs caused by a configuration change.
+
+    An item that is not done under the current identity but has done
+    trials under another one was measured before the configuration
+    changed (config, prompt, environment, rubric, or task inputs).
+    Re-running it is correct — doneness is per identity by design — but
+    without this note a full re-run after a one-line prompt edit looks
+    like data loss. Prior results stay untouched under their identity.
+    """
+    done_ids = {item_id for item_id, _ in done}
+    changed = [item for item in planned if not item.done and item.item_id in done_ids]
+    if changed:
+        print(
+            f"note: {len(changed)} of {len(planned)} item(s) have prior results under a "
+            "different configuration (config, prompt, environment, rubric, or inputs "
+            "changed) and will run again; prior results are kept under their old identity"
+        )
 
 
 def _run_init_data(args: argparse.Namespace) -> int:
@@ -723,12 +744,13 @@ def _grade_sources(root: Path, args: argparse.Namespace) -> list[_GradeSource]:
         raise CliError("--assignment requires --course or --from-solve")
 
     if args.from_solve:
-        submissions = harbor_mod.verified_solve_submissions(
+        selection = harbor_mod.verified_solve_submissions(
             root / SOLVE_JOBS_DIRNAME,
             args.from_solve,
             course_id=args.course,
             assignment_id=args.assignment,
         )
+        _report_skipped_solve_trials(selection, args.from_solve)
         return [
             _GradeSource(
                 item_id=sub.item_id,
@@ -740,7 +762,7 @@ def _grade_sources(root: Path, args: argparse.Namespace) -> list[_GradeSource]:
                 solve_job_name=sub.solve_job_name,
                 solve_trial_name=sub.trial_name,
             )
-            for sub in submissions
+            for sub in selection.submissions
         ]
 
     if args.submissions:
@@ -748,6 +770,58 @@ def _grade_sources(root: Path, args: argparse.Namespace) -> list[_GradeSource]:
 
     course_ids = [args.course] if args.course else _submission_courses(root)
     return _student_sources(root, course_ids, assignment_id=args.assignment, student_id=None)
+
+
+_SKIP_DESCRIPTIONS = {
+    "solve-failed": "solve failed before producing a submission",
+    "empty-submission": "submission artifact is missing or empty (output-contract failure)",
+}
+
+
+def _report_skipped_solve_trials(
+    selection: harbor_mod.SolveSubmissionSelection, solve_config_name: str
+) -> None:
+    """Say what ``--from-solve`` passed over, and how to rerun it.
+
+    Grading skips failed and empty solve trials by design — grading
+    nonexistent work would be worse — but the skip must be loud: a
+    per-trial line for every skip, and an explicit warning with the
+    exact scoped rerun command for each assignment that has no gradable
+    submission at all.
+    """
+    for skip in selection.skipped:
+        description = _SKIP_DESCRIPTIONS.get(skip.reason, skip.reason)
+        print(
+            f"skipping solve trial {skip.solve_job_name}/{skip.trial_name} "
+            f"({skip.course_id}/{skip.assignment_id}): {description}"
+        )
+    gradable = {(sub.course_id, sub.assignment_id) for sub in selection.submissions}
+    missing = sorted(
+        {(skip.course_id, skip.assignment_id) for skip in selection.skipped} - gradable
+    )
+    for course_id, assignment_id in missing:
+        # A failed solve is not done and reruns incrementally; an
+        # assignment whose every trial verified with an empty
+        # submission needs --force for a fresh attempt.
+        needs_force = all(
+            skip.reason == "empty-submission"
+            for skip in selection.skipped
+            if (skip.course_id, skip.assignment_id) == (course_id, assignment_id)
+        )
+        command = [
+            "aat",
+            "solve",
+            "--config",
+            solve_config_name,
+            "--course",
+            course_id,
+            "--assignment",
+            assignment_id,
+        ] + (["--force"] if needs_force else [])
+        print(
+            f"warning: {course_id}/{assignment_id} has no gradable submission "
+            f"under solve config {solve_config_name!r}; rerun: {shlex.join(command)}"
+        )
 
 
 def _submission_courses(root: Path) -> list[str]:
@@ -887,7 +961,51 @@ def _execute(
         print(f"materialize-only; harbor not invoked. command: {shlex.join(command)}")
         return 0
     print(f"launching: {shlex.join(command)}")
-    return harbor_mod.invoke_harbor(command)
+    harbor_status = harbor_mod.invoke_harbor(command)
+    failed = _report_run_summary(stage, job_dir, record_items, args)
+    if harbor_status != 0:
+        return harbor_status
+    return 1 if failed else 0
+
+
+def _report_run_summary(
+    stage: Stage,
+    job_dir: Path,
+    record_items: list[harbor_mod.RunRecordItem],
+    args: argparse.Namespace,
+) -> int:
+    """Print the requested/succeeded/failed accounting; return the failure count.
+
+    Harbor exits zero when the *job* finishes, even if trials inside it
+    failed — which is how a single lost assignment stays invisible. This
+    summary names every requested item that did not succeed, with the
+    exact scoped rerun command, and the caller turns a nonzero failure
+    count into a nonzero exit status. An item succeeds when at least one
+    of its trials passes the stage's doneness check (verified for solve,
+    a valid grading for grade), so failed items are exactly the not-done
+    ones and rerunning is incremental — no ``--force`` needed.
+    """
+    check = harbor_mod.is_graded_trial if stage == "grade" else harbor_mod.is_verified_trial
+    passed = harbor_mod.verified_task_names(job_dir, check)
+    failed = [item for item in record_items if item.task_dir_name not in passed]
+    succeeded_label = "graded" if stage == "grade" else "verified"
+    print(
+        f"run summary: {len(record_items)} item(s) requested, "
+        f"{len(record_items) - len(failed)} {succeeded_label}, {len(failed)} failed"
+    )
+    for item in failed:
+        print(f"  failed: {item.course_id}/{item.assignment_id} ({item.item_id})")
+    if failed:
+        from_solve = getattr(args, "from_solve", None)
+        for course_id, assignment_id in sorted(
+            {(item.course_id, item.assignment_id) for item in failed}
+        ):
+            command = ["aat", "solve" if stage == "solve" else "grade", "--config", args.config]
+            if from_solve:
+                command += ["--from-solve", from_solve]
+            command += ["--course", course_id, "--assignment", assignment_id]
+            print(f"  rerun: {shlex.join(command)}")
+    return len(failed)
 
 
 if __name__ == "__main__":

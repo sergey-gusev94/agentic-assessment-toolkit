@@ -479,11 +479,22 @@ derived from the packages the reference corpus actually uses:
 - `grading` — the single flavor used by every grading task: a minimal
   Python image with document-reading tools only (poppler-utils and
   pypdf for PDF text extraction, openpyxl and pandas for tabular data,
-  nbformat for notebooks). No scientific stack: nothing is executed
-  during grading. The image creates `/app/grading_output/`.
+  nbformat for notebooks, pandoc and python-docx for Word documents —
+  preinstalled so the grader's run-time install allowance stays the
+  rare exception rather than a per-trial network dependency). No
+  scientific stack: nothing is executed during grading. The image
+  creates `/app/grading_output/`.
 
 Every environment includes `file` and `jq` for basic file-type and JSON
-inspection. Every solve flavor also includes PDF text-extraction tools
+inspection, plus a pinned Node and a pinned Codex CLI: Harbor's
+agent-install step checks for `codex` on PATH and skips its own
+network install (nvm, a remote Node-version lookup, `npm install
+@latest`) when it is present, so preinstalling turns a per-trial
+network dependency — one transient lookup failure cost a trial
+mid-run — into a build-time one, and pins the agent version into the
+image bytes, and therefore into item identity, instead of letting each
+trial resolve `@latest`. Every solve flavor also includes PDF
+text-extraction tools
 (poppler-utils, pypdf), because assignment handouts are routinely PDFs
 that the agent must read. The output contract requires document
 source, never compiled PDFs, so no image needs TeX and there is no
@@ -536,8 +547,16 @@ prompt-injection resistance (instructions
 inside the submission are content, not commands), rubric authority — including the requirement
 to reproduce the rubric's enumerated criteria verbatim: same ids, same
 max points, same bonus flags, with only the points awarded being the
-grader's judgment — evidence requirements, and the exact output schema
-above. Any prompt
+grader's judgment — the administrative-requirements rule (identity,
+signatures, honor affirmations, submission formalities, lateness, and
+escalation are never scored and never withhold credit; visible
+non-compliance is noted in the overall comment for course staff —
+mirroring the rubric convention that administrative requirements are
+never rubric content, [data-conventions.md](data-conventions.md)), the
+no-worked-solution case (when the reference directory holds a guidance
+note instead, correctness is established from the rubric, the
+submission's derivations, and internal consistency checks), evidence
+requirements, and the exact output schema above. Any prompt
 edit changes the config identity by construction.
 
 Prompts are instruction briefs: they state requirements imperatively
@@ -782,7 +801,9 @@ grader-check summary — as CSV tables plus a Markdown report under
 containing the two tidy tables (`trials.csv`, `criteria.csv`), the
 derived tables (`solve_summary.csv`, `grades_by_assignment.csv`,
 `grades_by_course.csv`, `students.csv`, `judge_quality.csv`,
-`grader_checks.csv`, `failures.csv`), `report.md`, and
+`grader_checks.csv`, `failures.csv`, `ungraded_solves.csv` — one named
+row per solve trial with no valid grading and its outcome, the direct
+answer to what is missing from grading and why), `report.md`, and
 `provenance.json`. The tidy tables are always emitted so any further
 question is answerable from the report directory without re-running
 the loader.
@@ -943,6 +964,24 @@ Regrading under a revised rubric needs no dedicated command: a new rubric
 is a new config identity, under which nothing is done yet, and prior
 results stay untouched.
 
+Run outcomes are loud. When planned items have done trials under a
+different identity, the plan output says so — a configuration change
+(config, prompt, environment, rubric, or task inputs) makes a full
+re-run look like data loss unless the command explains that prior
+results are kept under their old identity. After Harbor finishes,
+`solve` and `grade` print a run summary — items requested, items
+verified (solve) or graded (grade), items failed — naming each failed
+item with the exact scoped rerun command; because failed items are
+exactly the not-done ones, the rerun is incremental and needs no
+`--force`. The command exits nonzero when any requested item failed,
+even though Harbor exits zero whenever the job itself finishes: a
+partially failed run must fail loudly in scripts. `grade --from-solve`
+reports every in-scope solve trial it skips (a failed solve, or a
+verified trial with an empty submission artifact) and warns, with the
+scoped `aat solve` rerun command, for each assignment left with no
+gradable submission at all — grading skips such trials by design, but
+never silently.
+
 The command surface (`--data-root PATH` selects the data root
 explicitly, falling back to `AAT_DATA_DIR` and then `~/aat-data`; it is
 location, not an experiment axis; a bare `--config NAME` resolves to
@@ -1033,5 +1072,6 @@ non-empty submission artifact is one gradable item — a solve config run
 with `--repeats 5` yields five submissions per assignment, each graded (and
 repeatable-graded) independently; trials whose artifact is missing or
 empty are skipped and stay visible as explicit outcomes in the solve
-job. One grading materializer underneath, two source resolvers on top,
+job — and the skip is reported at selection time ("Run outcomes are
+loud", above). One grading materializer underneath, two source resolvers on top,
 per decision 5.

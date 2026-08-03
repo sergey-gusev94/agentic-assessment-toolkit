@@ -132,6 +132,16 @@ CHECK_COLUMNS = [
 
 FAILURE_COLUMNS = ["stage", "config_name", "config_identity", "outcome", "n_trials", "share"]
 
+UNGRADED_COLUMNS = [
+    "config_name",
+    "config_identity",
+    "course_id",
+    "assignment_id",
+    "job_name",
+    "trial_name",
+    "outcome",
+]
+
 
 def trials_frame(rows: list[dict[str, object]]) -> pd.DataFrame:
     """A trials table with the loader's columns and dtypes, defaults filled."""
@@ -725,6 +735,29 @@ def test_failure_accounting_includes_zero_count_categories() -> None:
     assert float(solve_rows["share"].sum()) == pytest.approx(1.0)
 
 
+def test_ungraded_solve_trials_names_every_missing_trial() -> None:
+    trials = trials_frame(
+        [
+            solved("completed", trial_name="s0"),
+            solved("completed", trial_name="s1", assignment_id="HW2"),
+            solved("agent_error", trial_name="s2", assignment_id="HW3"),
+            derived(90.0, 90.0, "J/s0", solve_job_name="J", solve_trial_name="s0"),
+            # A failed grading is not a valid grading: s1 stays ungraded.
+            failed_grading(
+                submission_source="solve-trial", solve_job_name="J", solve_trial_name="s1"
+            ),
+        ]
+    )
+    table = metrics.ungraded_solve_trials(trials)
+    assert list(table.columns) == UNGRADED_COLUMNS
+    assert [
+        (row["assignment_id"], row["trial_name"], row["outcome"]) for _, row in table.iterrows()
+    ] == [
+        ("HW2", "s1", "completed"),
+        ("HW3", "s2", "agent_error"),
+    ]
+
+
 def test_empty_inputs_yield_full_columns(tmp_path: Path) -> None:
     empty = trials_frame([])
     no_criteria = criteria_frame([])
@@ -743,6 +776,7 @@ def test_empty_inputs_yield_full_columns(tmp_path: Path) -> None:
         ),
         "grader_checks": (metrics.grader_checks(empty), CHECK_COLUMNS),
         "failure_accounting": (metrics.failure_accounting(empty), FAILURE_COLUMNS),
+        "ungraded_solve_trials": (metrics.ungraded_solve_trials(empty), UNGRADED_COLUMNS),
     }
     for name, (table, columns) in expected.items():
         assert list(table.columns) == columns, name

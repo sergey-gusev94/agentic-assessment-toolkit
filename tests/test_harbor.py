@@ -275,18 +275,33 @@ def test_verified_solve_submissions(tmp_path: Path) -> None:
     write_trial(job_dir, "t1__zzz9999", task_name="t1", verified=False)
     write_trial(job_dir, "t2__ghi9012", task_name="t2", submission_files=None)  # no artifact
 
-    submissions = verified_solve_submissions(jobs_root, "codex-high")
-    assert len(submissions) == 1
-    submission = submissions[0]
+    selection = verified_solve_submissions(jobs_root, "codex-high")
+    assert len(selection.submissions) == 1
+    submission = selection.submissions[0]
     assert submission.course_id == "C1"
     assert submission.assignment_id == "HW1"
     assert submission.trial_name == "t1__abc1234"
     assert submission.item_id == f"{job_dir.name}/t1__abc1234"
     assert (submission.directory / "answer.md").read_text(encoding="utf-8") == "42"
 
-    assert verified_solve_submissions(jobs_root, "other-config") == []
-    assert verified_solve_submissions(jobs_root, "codex-high", course_id="C2") == []
-    assert verified_solve_submissions(jobs_root, "codex-high", assignment_id="HW2") == []
+    # The two non-gradable trials are reported, not silently dropped.
+    assert {(skip.trial_name, skip.reason) for skip in selection.skipped} == {
+        ("t1__zzz9999", "solve-failed"),
+        ("t2__ghi9012", "empty-submission"),
+    }
+    empty = next(skip for skip in selection.skipped if skip.trial_name == "t2__ghi9012")
+    assert (empty.course_id, empty.assignment_id) == ("C1", "HW2")
+    assert empty.solve_job_name == job_dir.name
+
+    other = verified_solve_submissions(jobs_root, "other-config")
+    assert other.submissions == [] and other.skipped == []
+    # Narrowing excludes trials from scope entirely: neither selected
+    # nor reported as skipped.
+    narrowed = verified_solve_submissions(jobs_root, "codex-high", course_id="C2")
+    assert narrowed.submissions == [] and narrowed.skipped == []
+    hw2 = verified_solve_submissions(jobs_root, "codex-high", assignment_id="HW2")
+    assert hw2.submissions == []
+    assert [skip.reason for skip in hw2.skipped] == ["empty-submission"]
 
 
 def test_grading_jobs_are_not_solve_sources(tmp_path: Path) -> None:
@@ -301,7 +316,8 @@ def test_grading_jobs_are_not_solve_sources(tmp_path: Path) -> None:
         items=[make_item("t1", "C1/HW1", "i1")],
     )
     write_trial(job_dir, "t1__abc1234", task_name="t1", submission_files={"a.md": "x"})
-    assert verified_solve_submissions(jobs_root, "codex-grader-high") == []
+    selection = verified_solve_submissions(jobs_root, "codex-grader-high")
+    assert selection.submissions == [] and selection.skipped == []
 
 
 def test_run_record_is_deterministic_json(tmp_path: Path) -> None:

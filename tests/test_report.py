@@ -19,6 +19,7 @@ from tests.test_metrics import (
     JUDGE_COLUMNS,
     SOLVE_SUMMARY_COLUMNS,
     STUDENT_COLUMNS,
+    UNGRADED_COLUMNS,
 )
 from tests.test_results import (
     CRITERIA_COLUMNS,
@@ -50,6 +51,7 @@ CSV_HEADERS = {
     "judge_quality.csv": JUDGE_COLUMNS,
     "grader_checks.csv": CHECK_COLUMNS,
     "failures.csv": FAILURE_COLUMNS,
+    "ungraded_solves.csv": UNGRADED_COLUMNS,
 }
 
 
@@ -130,6 +132,7 @@ def test_write_report_writes_exactly_the_contracted_files(tmp_path: Path) -> Non
         "judge_quality.csv",
         "grader_checks.csv",
         "failures.csv",
+        "ungraded_solves.csv",
         "report.md",
         "provenance.json",
     )

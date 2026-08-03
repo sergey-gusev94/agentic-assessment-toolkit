@@ -250,6 +250,14 @@ Notes:
   makes it structurally impossible for the solve-task materializer to
   leak grading material to the solver, which only ever reads
   `assignments/`.
+- When the instructor materials contain no worked solution for a
+  material-backed assignment, `reference_solutions/<assignment_id>/`
+  holds a guidance note (`README.md`) saying so and directing the
+  grader to establish correctness from the rubric, the submission's
+  own derivations, and internal consistency checks. A copy of the
+  assignment statement is never a reference solution, and nobody
+  authors a worked solution to fill the gap: an invented oracle is
+  worse than an absent one.
 - Rubrics are Markdown files named within
   `rubrics/<assignment_id>/`; the default is `default.md`. A rubric no
   job has used yet is a draft and may be edited in place; once used it
@@ -312,6 +320,20 @@ Notes:
   reviewed. A rubric freezes at first grading use, and the grader
   checks (reference near full marks, irrelevant near zero) double as a
   sanity check on the rubric itself.
+- Rubrics enumerate academic content only. Administrative
+  requirements — a name or identifier on the work, signatures, honor
+  affirmations or integrity statements, submission formalities such as
+  boxing final answers, lateness penalties, escalation to the
+  instructor — become neither criteria nor rubric prose, even when the
+  professor's materials assign them points or withhold grading over
+  them ("an unnamed page is not graded"). The professor's statement
+  stays available verbatim in the handout and in `source/`, and each
+  exclusion is recorded with its citation in `intake-notes.md`. The
+  grader mirrors this split: it never scores administrative
+  compliance, and notes visible non-compliance in its overall comment
+  so course staff can apply course policy. Requirements about the
+  academic work itself — shown work, stated assumptions, required
+  derivations — are not administrative and stay in the rubric.
 
 ## Submission ingest
 

@@ -463,6 +463,103 @@ def test_grade_from_solve(data_root: Path, solve_config: Path, grade_config: Pat
     assert len(job_dirs(data_root, "grading")) == 1
 
 
+def test_grade_from_solve_reports_skipped_trials(
+    data_root: Path,
+    solve_config: Path,
+    grade_config: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert (
+        cli.main(solve_args(data_root, solve_config, "--course", COURSE_ID, "--materialize-only"))
+        == 0
+    )
+    solve_job = job_dirs(data_root, "solving")[0]
+    record = json.loads((solve_job / "aat-run.json").read_text(encoding="utf-8"))
+    tasks = {item["assignment_id"]: item["task_dir_name"] for item in record["items"]}
+    # HW1: one gradable trial plus one failed solve; HW2: only a
+    # verified trial whose submission artifact is empty.
+    write_trial(solve_job, "hw1__ok11111", task_name=tasks["HW1"], submission_files={"a.md": "x"})
+    write_trial(solve_job, "hw1__bad2222", task_name=tasks["HW1"], verified=False)
+    write_trial(solve_job, "hw2__nosub33", task_name=tasks["HW2"], submission_files=None)
+    capsys.readouterr()
+
+    assert (
+        cli.main(
+            grade_args(data_root, grade_config, "--from-solve", "codex-high", "--materialize-only")
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    # Every skip is a line; only HW2, with no gradable submission at
+    # all, gets the warning — with --force, since its trial verified.
+    assert f"skipping solve trial {solve_job.name}/hw1__bad2222" in out
+    assert "solve failed before producing a submission" in out
+    assert f"skipping solve trial {solve_job.name}/hw2__nosub33" in out
+    assert "submission artifact is missing or empty" in out
+    assert f"warning: {COURSE_ID}/HW1" not in out
+    assert (
+        f"warning: {COURSE_ID}/HW2 has no gradable submission under solve config 'codex-high'; "
+        f"rerun: aat solve --config codex-high --course {COURSE_ID} --assignment HW2 --force"
+    ) in out
+
+
+def test_run_summary_names_failures_and_exits_nonzero(
+    data_root: Path,
+    solve_config: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fake_invoke(_command: list[str]) -> int:
+        job_dir = job_dirs(data_root, "solving")[0]
+        record = json.loads((job_dir / "aat-run.json").read_text(encoding="utf-8"))
+        tasks = {item["assignment_id"]: item["task_dir_name"] for item in record["items"]}
+        write_trial(job_dir, "hw1__ok11111", task_name=tasks["HW1"])
+        write_trial(job_dir, "hw2__bad2222", task_name=tasks["HW2"], verified=False)
+        return 0
+
+    monkeypatch.setattr(harbor_mod, "invoke_harbor", fake_invoke)
+    exit_code = cli.main(solve_args(data_root, solve_config, "--course", COURSE_ID))
+    # Harbor exited zero — the job finished — but a requested item
+    # failed, so the command fails loudly.
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert "run summary: 2 item(s) requested, 1 verified, 1 failed" in out
+    assert f"failed: {COURSE_ID}/HW2" in out
+    assert f"rerun: aat solve --config {solve_config} --course {COURSE_ID} --assignment HW2" in out
+
+
+def test_configuration_change_rerun_is_explained(
+    data_root: Path,
+    tmp_path: Path,
+    solve_config: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert (
+        cli.main(solve_args(data_root, solve_config, "--course", COURSE_ID, "--materialize-only"))
+        == 0
+    )
+    solve_job = job_dirs(data_root, "solving")[0]
+    record = json.loads((solve_job / "aat-run.json").read_text(encoding="utf-8"))
+    for index, item in enumerate(record["items"]):
+        write_trial(solve_job, f"trial__ok{index}", task_name=item["task_dir_name"])
+
+    # Same config again: everything is done, and nothing needs the note.
+    capsys.readouterr()
+    assert cli.main(solve_args(data_root, solve_config, "--course", COURSE_ID, "--dry-run")) == 0
+    assert "note:" not in capsys.readouterr().out
+
+    # A different config is a different identity: the items run again,
+    # and the plan says why.
+    changed = write_config(
+        tmp_path,
+        SOLVE_TOML.replace('reasoning_effort = "high"', 'reasoning_effort = "low"'),
+        "codex-low",
+    )
+    assert cli.main(solve_args(data_root, changed, "--course", COURSE_ID, "--dry-run")) == 0
+    out = capsys.readouterr().out
+    assert "note: 2 of 2 item(s) have prior results under a different configuration" in out
+
+
 def test_grade_from_solve_without_trials_is_noop(
     data_root: Path, grade_config: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -40,8 +40,29 @@ RUN micromamba install -y -n base -c conda-forge \
         nbconvert=7.16.6 \
         poppler \
         git \
+        curl \
+        ripgrep \
     && micromamba clean -a -y
 
 RUN pip install gurobipy==12.0.3
+
+# Preinstalled agent runtime: pinned Node and Codex, so Harbor's
+# agent-install step finds `codex` on PATH and becomes a no-op. This
+# removes the per-trial network install (whose remote Node lookup can
+# fail a trial mid-run) and pins the agent version into the image bytes
+# instead of letting each trial resolve `@latest`. ripgrep above is
+# what that install step would have added alongside. linux-x64: images
+# are built and run on x86_64.
+ENV NODE_VERSION=22.23.2 \
+    CODEX_VERSION=0.146.0
+RUN curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.gz" \
+    && curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt" \
+    && grep " node-v${NODE_VERSION}-linux-x64.tar.gz\$" SHASUMS256.txt | sha256sum -c - \
+    && tar -xzf "node-v${NODE_VERSION}-linux-x64.tar.gz" -C /usr/local --strip-components=1 --no-same-owner \
+    && rm "node-v${NODE_VERSION}-linux-x64.tar.gz" SHASUMS256.txt \
+    && npm install -g "@openai/codex@${CODEX_VERSION}" \
+    && npm cache clean --force \
+    && node --version \
+    && codex --version
 
 WORKDIR /app

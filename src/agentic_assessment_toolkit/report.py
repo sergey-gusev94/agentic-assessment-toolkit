@@ -39,6 +39,7 @@ REPORT_FILENAMES = (
     "judge_quality.csv",
     "grader_checks.csv",
     "failures.csv",
+    "ungraded_solves.csv",
     "report.md",
     "provenance.json",
 )
@@ -96,6 +97,7 @@ def write_report(
         "judge_quality": metrics.judge_quality(trials, criteria, data_root=data_root),
         "grader_checks": metrics.grader_checks(trials),
         "failures": metrics.failure_accounting(trials),
+        "ungraded_solves": metrics.ungraded_solve_trials(trials),
     }
     created_utc = (now if now is not None else datetime.now(UTC)).isoformat()
 
@@ -249,6 +251,7 @@ def _report_markdown(
     parts.extend(_checks_section(tables["grader_checks"]))
     parts.extend(_assistant_section(metrics.class_distribution(tables["students"])))
     parts.extend(_failures_section(tables["failures"]))
+    parts.extend(_ungraded_section(tables["ungraded_solves"]))
     return "\n\n".join(parts) + "\n"
 
 
@@ -380,6 +383,22 @@ def _failures_section(failures: pd.DataFrame) -> list[str]:
         "failures are never silently dropped."
     )
     parts.append(_markdown_table(failures))
+    return parts
+
+
+def _ungraded_section(ungraded: pd.DataFrame) -> list[str]:
+    parts = ["## Ungraded solve trials"]
+    if ungraded.empty:
+        parts.append("Every solve trial in this report has at least one valid grading.")
+        return parts
+    parts.append(
+        "Solve trials with no valid grading, one named row each — the "
+        "direct answer to what is missing from grading and why. A "
+        "`completed` trial has a gradable submission that simply has not "
+        "been graded (yet, or under the report's filters); any other "
+        "outcome never produced one, so grading correctly skipped it."
+    )
+    parts.append(_markdown_table(ungraded))
     return parts
 
 

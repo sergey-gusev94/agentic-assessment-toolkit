@@ -22,7 +22,27 @@ RUN apt-get update \
         git \
         jq \
         poppler-utils \
+        ripgrep \
     && rm -rf /var/lib/apt/lists/*
+
+# Preinstalled agent runtime: pinned Node and Codex, so Harbor's
+# agent-install step finds `codex` on PATH and becomes a no-op. This
+# removes the per-trial network install (whose remote Node lookup can
+# fail a trial mid-run) and pins the agent version into the image bytes
+# instead of letting each trial resolve `@latest`. ripgrep above is
+# what that install step would have added alongside. linux-x64: images
+# are built and run on x86_64.
+ENV NODE_VERSION=22.23.2 \
+    CODEX_VERSION=0.146.0
+RUN curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.gz" \
+    && curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt" \
+    && grep " node-v${NODE_VERSION}-linux-x64.tar.gz\$" SHASUMS256.txt | sha256sum -c - \
+    && tar -xzf "node-v${NODE_VERSION}-linux-x64.tar.gz" -C /usr/local --strip-components=1 --no-same-owner \
+    && rm "node-v${NODE_VERSION}-linux-x64.tar.gz" SHASUMS256.txt \
+    && npm install -g "@openai/codex@${CODEX_VERSION}" \
+    && npm cache clean --force \
+    && node --version \
+    && codex --version
 
 RUN pip install \
         numpy==2.3.2 \
