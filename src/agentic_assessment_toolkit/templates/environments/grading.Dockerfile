@@ -1,12 +1,14 @@
 # Environment flavor: grading (all grading tasks)
 #
 # Grading is static inspection: nothing from the submission or the
-# reference solution is ever executed, so this image carries only
-# document-reading tools — file/JSON inspection, PDF text extraction,
-# spreadsheet and tabular reading, notebook parsing, and Word-document
-# reading (pandoc, python-docx) — not a scientific stack. The reading
-# tools are preinstalled so the grader's run-time install allowance
-# stays the rare exception, not a per-trial network dependency.
+# reference solution is ever executed. This image carries
+# document-reading tools — file/JSON inspection, PDF text extraction
+# and OCR for scanned pages, spreadsheet and tabular reading, notebook
+# parsing, Word and PowerPoint reading, archive unpacking — plus scipy
+# for the grader's own independent check calculations (its code on its
+# own inputs, which the grader prompt sanctions). Everything is
+# preinstalled so the grader's run-time install allowance stays the
+# rare exception, not a per-trial network dependency.
 
 FROM python:3.12.11-slim-bookworm
 
@@ -20,16 +22,21 @@ RUN apt-get update \
         file \
         jq \
         pandoc \
+        poppler-data \
         poppler-utils \
         ripgrep \
+        tesseract-ocr \
+        unzip \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install \
         pandas==2.3.1 \
+        scipy==1.16.1 \
         openpyxl==3.1.5 \
         pypdf==5.7.0 \
         nbformat==5.10.4 \
-        python-docx==1.2.0
+        python-docx==1.2.0 \
+        python-pptx==1.0.2
 
 # Preinstalled agent runtime: pinned Node and Codex, so Harbor's
 # agent-install step finds `codex` on PATH and becomes a no-op. This

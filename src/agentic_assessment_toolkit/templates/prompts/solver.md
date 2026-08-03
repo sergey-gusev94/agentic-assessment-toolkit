@@ -14,10 +14,13 @@ not apply to this run — follow the technical instructions only.
 
 - `/app/assignment/` contains the assignment handout exactly as given to
   students: problem statements, data files, starter code, notebooks, or
-  documents. Some handouts are PDFs; read them with the PDF tools
-  installed in this environment (for example `pdftotext` or the `pypdf`
-  package). Treat this directory as read-only source material and do not
-  modify anything in it.
+  documents. Handouts arrive as PDFs, Word or PowerPoint documents,
+  spreadsheets, or archives; read them with the tools installed in this
+  environment (`pdftotext`, `pypdf`, `pandoc`, `python-docx`,
+  `python-pptx`, `openpyxl`, `unzip`). A scanned page with no
+  extractable text is still part of the assignment: rasterize it with
+  `pdftoppm` and read it with `tesseract` OCR. Treat this directory as
+  read-only source material and do not modify anything in it.
 - `/app/submission/` is where your complete solution goes. Create it if it
   does not exist. Only what is inside `/app/submission/` is graded.
 

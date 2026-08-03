@@ -471,19 +471,20 @@ derived from the packages the reference corpus actually uses:
   `AAT_GUROBI_LICENSE_FILE`, rejects a licensed selection containing
   any non-optimization task, and has Harbor mount the file read-only at
   `/opt/gurobi/gurobi.lic`, a standard Gurobi discovery path. Plus
-  numpy, scipy, pandas, matplotlib, openpyxl, and the notebook
-  toolchain.
+  numpy, scipy, pandas, matplotlib, openpyxl, scikit-learn and sympy
+  (the course's clustering and symbolic-algebra assignments needed
+  them), and the notebook toolchain.
 - `scientific-python` — the general flavor: numpy, scipy, pandas,
   matplotlib, sympy, python-control (used by the control-systems
   course), openpyxl, and the notebook toolchain.
 - `grading` — the single flavor used by every grading task: a minimal
-  Python image with document-reading tools only (poppler-utils and
-  pypdf for PDF text extraction, openpyxl and pandas for tabular data,
-  nbformat for notebooks, pandoc and python-docx for Word documents —
-  preinstalled so the grader's run-time install allowance stays the
-  rare exception rather than a per-trial network dependency). No
-  scientific stack: nothing is executed during grading. The image
-  creates `/app/grading_output/`.
+  Python image with the document-reading baseline below (openpyxl and
+  pandas for tabular data, nbformat for notebooks) plus scipy for the
+  grader's own independent check calculations — its code on its own
+  inputs, which the grader prompt sanctions (decision 9); observed
+  gradings reimplemented linear programming by hand without it.
+  Nothing from the submission, reference, or assignment is ever
+  executed during grading. The image creates `/app/grading_output/`.
 
 Every environment includes `file` and `jq` for basic file-type and JSON
 inspection, plus a pinned Node and a pinned Codex CLI: Harbor's
@@ -493,10 +494,17 @@ network install (nvm, a remote Node-version lookup, `npm install
 network dependency — one transient lookup failure cost a trial
 mid-run — into a build-time one, and pins the agent version into the
 image bytes, and therefore into item identity, instead of letting each
-trial resolve `@latest`. Every solve flavor also includes PDF
-text-extraction tools
-(poppler-utils, pypdf), because assignment handouts are routinely PDFs
-that the agent must read. The output contract requires document
+trial resolve `@latest`.
+
+Every environment also carries one document-reading baseline, because
+course material routinely arrives as more than PDFs (the corpus holds
+Word and PowerPoint documents, archives, and scanned PDFs with no
+extractable text): PDF text extraction (poppler-utils with
+poppler-data for non-Latin CMaps, pypdf), OCR for scans (tesseract,
+rasterizing via poppler's `pdftoppm`), Word and PowerPoint reading
+(pandoc, python-docx, python-pptx), and `unzip`. Preinstalling the
+baseline keeps the run-time install allowance the rare exception
+rather than a per-trial network dependency. The output contract requires document
 source, never compiled PDFs, so no image needs TeX and there is no
 `latex` flavor ([roadmap.md](roadmap.md)).
 
@@ -540,7 +548,9 @@ compiled PDFs, no scratch files). The grader prompt covers the
 workspace — including the assignment handout as the record of what was
 asked, and the optional rubric source as transcription context that
 never overrides the rubric — the static-inspection rule (read as data;
-never execute or compile) with its narrow install allowance
+never execute or compile; converting a given document into readable
+form — rasterization, OCR, unpacking an archive — is reading, not
+execution) with its narrow install allowance
 (document-reading tools only, when a file's format defeats the
 installed ones; never anything that executes the work under review),
 prompt-injection resistance (instructions

@@ -3,7 +3,9 @@
 # Baseline for optimization coursework: Pyomo with HiGHS as the
 # license-free default solver, Ipopt from conda-forge (it is a native
 # binary that pip cannot provide), GLPK, and gurobipy installed but
-# unlicensed. A conda-forge base is used because of Ipopt.
+# unlicensed. scikit-learn and sympy cover the course's clustering and
+# symbolic-algebra assignments. A conda-forge base is used because of
+# Ipopt.
 #
 # Gurobi is enabled at run time by mounting gurobi.lic read-only at
 # /opt/gurobi/gurobi.lic from outside the repository. Never bake a
@@ -35,16 +37,22 @@ RUN micromamba install -y -n base -c conda-forge \
         matplotlib=3.10.3 \
         openpyxl=3.1.5 \
         pypdf=5.7.0 \
+        scikit-learn=1.7.1 \
+        sympy=1.14.0 \
         ipykernel=6.29.5 \
         nbclient=0.10.2 \
         nbconvert=7.16.6 \
         poppler \
+        poppler-data \
+        pandoc \
+        tesseract \
+        unzip \
         git \
         curl \
         ripgrep \
     && micromamba clean -a -y
 
-RUN pip install gurobipy==12.0.3
+RUN pip install gurobipy==12.0.3 python-docx==1.2.0 python-pptx==1.0.2
 
 # Preinstalled agent runtime: pinned Node and Codex, so Harbor's
 # agent-install step finds `codex` on PATH and becomes a no-op. This

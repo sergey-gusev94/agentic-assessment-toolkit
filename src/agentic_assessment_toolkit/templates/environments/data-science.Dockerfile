@@ -21,8 +21,12 @@ RUN apt-get update \
         fonts-dejavu-core \
         git \
         jq \
+        pandoc \
+        poppler-data \
         poppler-utils \
         ripgrep \
+        tesseract-ocr \
+        unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # Preinstalled agent runtime: pinned Node and Codex, so Harbor's
@@ -54,7 +58,9 @@ RUN pip install \
         pypdf==5.7.0 \
         ipykernel==6.29.5 \
         nbclient==0.10.2 \
-        nbconvert==7.16.6
+        nbconvert==7.16.6 \
+        python-docx==1.2.0 \
+        python-pptx==1.0.2
 
 # CPU-only PyTorch: the coursework needs no GPU and the CPU wheel is
 # far smaller than the default CUDA build.
