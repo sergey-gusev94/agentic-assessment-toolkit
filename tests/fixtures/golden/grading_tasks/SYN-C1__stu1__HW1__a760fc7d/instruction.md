@@ -26,11 +26,20 @@ environment (`file`, `jq`, `pdftotext`, `pypdf`, `openpyxl`, `pandas`,
 `nbformat`, `pandoc`, `python-docx`, `python-pptx`, `unzip` —
 notebooks are JSON and can also be read directly). A scanned page with
 no extractable text is still read, not skipped: rasterize it with
-`pdftoppm` and read it with `tesseract` OCR. If a file arrives in a
-format none of these tools can read, you may install additional
-document-reading or parsing tools rather than grade it unread. Never
-install anything in order to execute or compile the work under review:
-the static inspection rule below still governs.
+`pdftoppm` and read it with `tesseract` OCR. To examine images,
+ImageMagick is installed: `identify` reports dimensions, `convert`
+crops and scales, `montage` builds contact sheets (ImageMagick 6 —
+there is no `magick` command). Always rasterize PDF pages with
+`pdftoppm`, never with ImageMagick: its PDF conversion is disabled by
+security policy. `qpdf` inspects PDF structure (for example
+`qpdf --qdf` decompresses a PDF for textual reading), and `strings`
+extracts readable text from binary files such as saved model
+checkpoints without loading them. For your own independent check
+calculations, `scipy`, `scikit-learn`, and `sympy` are preinstalled.
+If a file arrives in a format none of these tools can read, you may
+install additional document-reading or parsing tools rather than grade
+it unread. Never install anything in order to execute or compile the
+work under review: the static inspection rule below still governs.
 
 ## Static inspection rule
 

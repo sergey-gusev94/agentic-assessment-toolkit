@@ -479,12 +479,22 @@ derived from the packages the reference corpus actually uses:
   course), openpyxl, and the notebook toolchain.
 - `grading` — the single flavor used by every grading task: a minimal
   Python image with the document-reading baseline below (openpyxl and
-  pandas for tabular data, nbformat for notebooks) plus scipy for the
-  grader's own independent check calculations — its code on its own
-  inputs, which the grader prompt sanctions (decision 9); observed
-  gradings reimplemented linear programming by hand without it.
-  Nothing from the submission, reference, or assignment is ever
-  executed during grading. The image creates `/app/grading_output/`.
+  pandas for tabular data, nbformat for notebooks) plus the tools
+  observed gradings reached for. For the grader's own independent
+  check calculations — its code on its own inputs, which the grader
+  prompt sanctions (decision 9) — it carries scipy (observed gradings
+  reimplemented linear programming by hand without it), scikit-learn,
+  and sympy (which brings mpmath). For visual inspection it carries
+  ImageMagick 6 (`identify`, `convert`, `montage` — graders check
+  image dimensions, crop submitted figures, and build page contact
+  sheets), keeping Debian's default security policy that disables
+  ImageMagick's Ghostscript-based PDF conversion: rasterizing
+  untrusted PDFs stays with poppler's `pdftoppm`. It also carries
+  `qpdf` for PDF structure inspection and binutils' `strings` for
+  reading text out of binary files such as saved model checkpoints
+  without loading them. Nothing from the submission, reference, or
+  assignment is ever executed during grading. The image creates
+  `/app/grading_output/`.
 
 Every environment includes `file` and `jq` for basic file-type and JSON
 inspection, plus a pinned Node and a pinned Codex CLI: Harbor's
