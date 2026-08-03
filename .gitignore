@@ -35,6 +35,7 @@ solving/
 jobs/
 grading/
 submissions/
+presentation/
 
 # Editors and operating systems
 .idea/
