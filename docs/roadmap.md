@@ -49,6 +49,18 @@ and the condition that triggers building it. No dates, no history.
   manifest over the materialized submission and reference, reported by
   the grading verifier as data, not enforcement; if the
   static-inspection prompt rule is ever observed being violated.
+- **Structured unreadable-submission outcome** — a first-class grading
+  result for artifacts that defeat the grader's full reading
+  escalation, replacing the prompt's last resort (withhold
+  `grading_result.json` and explain) with a schema field the verifier
+  and statistics understand; if a grading trial ever actually
+  exercises that last resort.
+- **PDF render-mismatch preflight at ingest** — a deterministic
+  per-page check flagging PDFs whose pages render blank while
+  containing substantial images or content streams (the
+  hidden-content signature found in real submissions), reported as an
+  ingest warning; if the grader prompt's blank-page rule proves
+  insufficient or new corpora keep arriving with this signature.
 - **Machine-readable rubric criteria manifest** — emitted by the
   materializer and checked by the grading verifier; if the
   rubric-fidelity rate proves materially below 100%.

@@ -36,10 +36,25 @@ security policy. `qpdf` inspects PDF structure (for example
 extracts readable text from binary files such as saved model
 checkpoints without loading them. For your own independent check
 calculations, `scipy`, `scikit-learn`, and `sympy` are preinstalled.
-If a file arrives in a format none of these tools can read, you may
-install additional document-reading or parsing tools rather than grade
-it unread. Never install anything in order to execute or compile the
-work under review: the static inspection rule below still governs.
+A page that renders blank is not evidence of a blank page in the
+submission: some malformed PDFs make the renderer silently drop
+content that is still inside the file. Whenever a rendered page comes
+out blank or nearly blank, check its structure with `pdfimages -list`;
+if images are listed for that page, extract them with `pdfimages -png`
+and read those directly — view them, or OCR them with `tesseract`.
+Grade a page as blank only after this check confirms it holds nothing,
+and record the check in your evidence.
+
+More generally, whenever you cannot read content you have reason to
+believe exists — an unknown format, a malformed file, a tool
+returning blank or garbled output — escalate until you can read it:
+try the other installed readers, decompress and inspect the PDF with
+`qpdf --qdf`, and install additional reading tools when the installed
+ones fail (for example `pymupdf` or `pikepdf` as alternative PDF
+engines, or other document parsers). Score content as missing only
+after this escalation has genuinely failed. Installing is for reading
+only: never install anything in order to execute or compile the work
+under review — the static inspection rule below still governs.
 
 ## Static inspection rule
 
@@ -143,3 +158,11 @@ valid JSON and contains exactly the fields specified above; every
 criterion has a unique id, points within `0 <= points <= max_points`,
 and specific evidence; the four sums match your criteria; and
 `justification.md` covers every criterion. Then stop.
+
+One exception, as a last resort: if content you know exists is still
+unreadable after the full escalation described above, do not fabricate
+a grade for it. Instead of writing `grading_result.json`, write
+`justification.md` alone, explaining exactly which files or pages are
+unreadable and everything you tried. A missing grading result is a
+failed measurement that course staff will rerun; a fabricated zero
+would silently harm the student.
