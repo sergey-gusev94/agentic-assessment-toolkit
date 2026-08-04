@@ -505,8 +505,10 @@ derived from the packages the reference corpus actually uses:
   and sympy (which brings mpmath). For visual inspection it carries
   ImageMagick 6 (`identify`, `convert`, `montage` — graders check
   image dimensions, crop submitted figures, and build page contact
-  sheets) together with fonts-dejavu-core — ImageMagick in a
-  font-less image aborts `montage` and `convert -annotate` outright —
+  sheets) together with fonts-urw-base35 — ImageMagick resolves its
+  default font through its own type map, which lists only the URW
+  base-35 fonts, and on an empty map `montage` and `convert -annotate`
+  abort outright — plus fonts-dejavu-core for explicit `-font` use,
   keeping Debian's default security policy that disables
   ImageMagick's Ghostscript-based PDF conversion: rasterizing
   untrusted PDFs stays with poppler's `pdftoppm`. It also carries

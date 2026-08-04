@@ -15,9 +15,13 @@
 # ImageMagick keeps Debian's default security policy, which disables
 # its Ghostscript-based PDF conversion: graders rasterize untrusted
 # PDFs with poppler's pdftoppm instead, so the Ghostscript attack
-# surface stays closed. fonts-dejavu-core gives ImageMagick a font:
-# with --no-install-recommends no font is pulled in, and in a
-# font-less image `montage` and `convert -annotate` abort outright.
+# surface stays closed. fonts-urw-base35 is load-bearing: ImageMagick
+# resolves its default font through its own type map
+# (/etc/ImageMagick-6/type-*.xml), which lists only the URW base-35
+# fonts, and with --no-install-recommends none are installed — on the
+# empty map `montage` and `convert -annotate` abort (SIGABRT).
+# fonts-dejavu-core is not in that map and does not prevent the abort;
+# it only serves explicit `-font DejaVu-Sans` use.
 
 FROM python:3.12.11-slim-bookworm
 
@@ -31,6 +35,7 @@ RUN apt-get update \
         curl \
         file \
         fonts-dejavu-core \
+        fonts-urw-base35 \
         imagemagick \
         jq \
         pandoc \
@@ -62,18 +67,25 @@ RUN pip install \
 # `convert` worked. Every inspection capability the grader prompt
 # advertises must prove itself here, so a broken tool fails the build
 # instead of surfacing mid-grading.
-RUN convert -size 60x60 xc:white /tmp/a.png \
+RUN echo "smoke: convert" \
+    && convert -size 60x60 xc:white /tmp/a.png \
     && convert -size 60x60 xc:gray /tmp/b.png \
+    && echo "smoke: montage" \
     && montage /tmp/a.png /tmp/b.png -tile 2x1 -geometry +2+2 /tmp/sheet.png \
     && identify /tmp/sheet.png \
+    && echo "smoke: annotate" \
     && convert /tmp/a.png -annotate +6+30 ok /tmp/annotated.png \
+    && echo "smoke: ocr" \
     && convert -size 240x80 xc:white -pointsize 40 -annotate +20+55 OCR /tmp/ocr.png \
     && tesseract /tmp/ocr.png /tmp/ocr_out \
+    && echo "smoke: pdf" \
     && python -c "from pypdf import PdfWriter; w = PdfWriter(); w.add_blank_page(width=200, height=200); w.write('/tmp/t.pdf')" \
     && pdftoppm -png /tmp/t.pdf /tmp/t_page \
     && pdfimages -list /tmp/t.pdf \
     && qpdf --qdf /tmp/t.pdf /tmp/t_qdf.pdf \
+    && echo "smoke: python readers" \
     && python -c "import pymupdf, pikepdf, pandas, scipy, sklearn, sympy, openpyxl, nbformat, docx, pptx" \
+    && echo "smoke: binary tools" \
     && strings /bin/ls > /dev/null \
     && xxd -l 16 /bin/ls > /dev/null \
     && rm -f /tmp/a.png /tmp/b.png /tmp/sheet.png /tmp/annotated.png \
