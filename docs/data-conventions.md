@@ -346,14 +346,32 @@ Notes:
   and the conflict is recorded in `intake-notes.md`. The registry field
   `rubric_provenance` records which of the four a rubric used.
 
-  Only the *structure* transfers from a source — criterion ids, maxima,
-  bonus flags, and any score levels the scheme states. What earns each
-  level is authored from the assignment and the reference solution.
-  How individual graders applied a scheme never transfers: leniency or
-  strictness observed in particular submissions, one-off regrade
-  adjustments, and administrative items an LMS rubric happens to carry
-  (a "late submission" deduction, a discretionary "point adjustment")
-  are not evidence about what the work should earn.
+  Only the *structure* transfers from a source — item ids, maxima, and
+  bonus flags. What earns credit within an item is authored from the
+  assignment and the reference solution. Score levels a scheme states
+  are evidence for where its full-credit and zero boundaries sat, but
+  they do not bind the rubric to holistic menus: an item too large to
+  score as one judgment is divided into component criteria whose ids
+  carry the item's id as a prefix and whose maxima sum to the item's,
+  and that sub-split is the toolkit's judgment, recorded as such in
+  `intake-notes.md`. How individual graders applied a scheme never
+  transfers: leniency or strictness observed in particular submissions,
+  one-off regrade adjustments, and administrative items an LMS rubric
+  happens to carry (a "late submission" deduction, a discretionary
+  "point adjustment") are not evidence about what the work should earn.
+- **How credit is authored.** Three rules govern the prose under every
+  criterion, whatever the rubric's provenance. A component is defined
+  by the result or claim it establishes ("imposes the marginal-
+  stability condition by any valid route"), never by a step of the
+  reference solution's method ("the real/imaginary split"), so that
+  equivalent derivations are gradable. A criterion's permissible scores
+  are enumerated — a small ladder of defined states or a per-element
+  tally — and the grader never awards an unenumerated value; fine
+  gradations come from summing components, not from discretion inside
+  one. And the enumerated states must partition every possible
+  submission: each level says what it covers, decidable yes-or-no, and
+  the bottom level catches all other cases explicitly, so no submission
+  falls between descriptions.
 - A rubric covers the **whole assignment**. A rubric with criteria for
   some problems and none for others does not grade the assignment
   leniently — it grades a different, smaller assignment, and its score

@@ -216,11 +216,13 @@ the materials offer, and record which one in the registry's
 When two sources disagree, the higher one wins and the conflict goes
 in the notes — a handout that says one thing while the course graded
 another is not a judgment call. Only the *structure* transfers from a
-source: criterion ids, maxima, bonus flags, and any score levels the
-scheme states. What earns each level you draft from the assignment and
-reference solution; how individual graders applied a scheme (leniency
-on particular submissions, one-off adjustments, administrative
-deductions an LMS rubric carries) is never evidence.
+source: item ids, maxima, and bonus flags. Score levels a scheme
+states are evidence for where its full-credit and zero boundaries sat,
+but they do not bind you to holistic menus (see the granularity rule
+below). What earns credit you draft from the assignment and reference
+solution; how individual graders applied a scheme (leniency on
+particular submissions, one-off adjustments, administrative deductions
+an LMS rubric carries) is never evidence.
 
 The rubric must cover the **whole assignment**. Criteria for some
 problems and none for others do not grade the assignment leniently —
@@ -246,15 +248,30 @@ for example:
 Criterion ids are lowercase, unique, stable, and contain no
 whitespace; points are numbers greater than zero; bonus criteria carry
 the explicit `, bonus` marking; at least one criterion is not a bonus.
-Granularity when a source states the split: one criterion per problem
-or per explicitly-pointed item, exactly as the source states it — never
-invent a finer split than the source supports.
+Granularity when a source states the split: the source's items set the
+outer structure — never move points between items or change an item's
+maximum. Within an item, one criterion per item is the default, but an
+item too large to score as a single judgment (a many-result derivation,
+a multi-part question scored holistically) is divided into component
+criteria whose ids carry the item's id as a prefix and whose maxima sum
+to the item's; that sub-split is your judgment, so record it in the
+notes as authored. Never invent a finer split than the work itself
+supports.
 
 Follow each criterion line with indented prose stating how to grade
 it: what earns full credit, what earns partial credit and how much,
 what earns zero — carried over from the professor's materials when
 they say, drafted by you from the assignment and reference solution
-when they do not. For example:
+when they do not. Three rules govern that prose. Define each component
+by the result it establishes, never by a step of the reference
+solution's method, so equivalent derivations are gradable. Enumerate
+the permissible scores — a small ladder of defined states or a
+per-element tally — so the grader never awards an unenumerated value;
+fine gradations come from summing components, not from discretion
+inside one. And make the states partition every possible submission:
+each level decidable yes-or-no, the bottom level catching all other
+cases explicitly, so no submission falls between descriptions. For
+example:
 
 ```markdown
 - `tree_fit` (20 points): a decision tree is trained on the training split.
