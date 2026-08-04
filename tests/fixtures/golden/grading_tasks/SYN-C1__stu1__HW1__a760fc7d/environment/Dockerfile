@@ -2,7 +2,7 @@
 # The base image is base.Dockerfile (this task's environment flavor
 # template), built by aat under the local-only name below so this
 # build never contacts an image registry.
-FROM aat-env-grading:16a7d150d1d0b934
+FROM aat-env-grading:92bc3705120fedaa
 
 COPY assignment /app/assignment
 COPY submission /app/submission

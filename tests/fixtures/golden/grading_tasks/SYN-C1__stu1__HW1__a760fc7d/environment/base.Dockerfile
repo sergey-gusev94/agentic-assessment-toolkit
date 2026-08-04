@@ -15,7 +15,9 @@
 # ImageMagick keeps Debian's default security policy, which disables
 # its Ghostscript-based PDF conversion: graders rasterize untrusted
 # PDFs with poppler's pdftoppm instead, so the Ghostscript attack
-# surface stays closed.
+# surface stays closed. fonts-dejavu-core gives ImageMagick a font:
+# with --no-install-recommends no font is pulled in, and in a
+# font-less image `montage` and `convert -annotate` abort outright.
 
 FROM python:3.12.11-slim-bookworm
 
@@ -28,6 +30,7 @@ RUN apt-get update \
         ca-certificates \
         curl \
         file \
+        fonts-dejavu-core \
         imagemagick \
         jq \
         pandoc \
@@ -37,6 +40,7 @@ RUN apt-get update \
         ripgrep \
         tesseract-ocr \
         unzip \
+        xxd \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install \
@@ -46,9 +50,34 @@ RUN pip install \
         sympy==1.14.0 \
         openpyxl==3.1.5 \
         pypdf==5.7.0 \
+        pymupdf==1.28.0 \
+        pikepdf==10.11.0 \
         nbformat==5.10.4 \
         python-docx==1.2.0 \
         python-pptx==1.0.2
+
+# Build-time smoke test: a tool can install cleanly yet be broken at
+# run time — ImageMagick in a font-less image aborted every `montage`
+# call across two full grading runs while `identify` and plain
+# `convert` worked. Every inspection capability the grader prompt
+# advertises must prove itself here, so a broken tool fails the build
+# instead of surfacing mid-grading.
+RUN convert -size 60x60 xc:white /tmp/a.png \
+    && convert -size 60x60 xc:gray /tmp/b.png \
+    && montage /tmp/a.png /tmp/b.png -tile 2x1 -geometry +2+2 /tmp/sheet.png \
+    && identify /tmp/sheet.png \
+    && convert /tmp/a.png -annotate +6+30 ok /tmp/annotated.png \
+    && convert -size 240x80 xc:white -pointsize 40 -annotate +20+55 OCR /tmp/ocr.png \
+    && tesseract /tmp/ocr.png /tmp/ocr_out \
+    && python -c "from pypdf import PdfWriter; w = PdfWriter(); w.add_blank_page(width=200, height=200); w.write('/tmp/t.pdf')" \
+    && pdftoppm -png /tmp/t.pdf /tmp/t_page \
+    && pdfimages -list /tmp/t.pdf \
+    && qpdf --qdf /tmp/t.pdf /tmp/t_qdf.pdf \
+    && python -c "import pymupdf, pikepdf, pandas, scipy, sklearn, sympy, openpyxl, nbformat, docx, pptx" \
+    && strings /bin/ls > /dev/null \
+    && xxd -l 16 /bin/ls > /dev/null \
+    && rm -f /tmp/a.png /tmp/b.png /tmp/sheet.png /tmp/annotated.png \
+        /tmp/ocr.png /tmp/ocr_out.txt /tmp/t.pdf /tmp/t_qdf.pdf /tmp/t_page*
 
 # Preinstalled agent runtime: pinned Node and Codex, so Harbor's
 # agent-install step finds `codex` on PATH and becomes a no-op. This

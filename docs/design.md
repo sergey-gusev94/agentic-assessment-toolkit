@@ -505,14 +505,23 @@ derived from the packages the reference corpus actually uses:
   and sympy (which brings mpmath). For visual inspection it carries
   ImageMagick 6 (`identify`, `convert`, `montage` — graders check
   image dimensions, crop submitted figures, and build page contact
-  sheets), keeping Debian's default security policy that disables
+  sheets) together with fonts-dejavu-core — ImageMagick in a
+  font-less image aborts `montage` and `convert -annotate` outright —
+  keeping Debian's default security policy that disables
   ImageMagick's Ghostscript-based PDF conversion: rasterizing
   untrusted PDFs stays with poppler's `pdftoppm`. It also carries
-  `qpdf` for PDF structure inspection and binutils' `strings` for
+  `qpdf` for PDF structure inspection, pymupdf and pikepdf as
+  alternative engines for malformed PDFs that defeat poppler and
+  pypdf (observed gradings installed both at run time to recover
+  unreadable files), `xxd` for hex dumps, and binutils' `strings` for
   reading text out of binary files such as saved model checkpoints
-  without loading them. Nothing from the submission, reference, or
-  assignment is ever executed during grading. The image creates
-  `/app/grading_output/`.
+  without loading them. The template ends with a build-time smoke
+  test exercising the advertised inspection tools — contact sheets,
+  annotation, OCR, PDF rasterization and structure inspection, the
+  Python readers — so a tool that installs cleanly but cannot run
+  fails the build instead of a grading run. Nothing from the
+  submission, reference, or assignment is ever executed during
+  grading. The image creates `/app/grading_output/`.
 
 Every environment includes `file` and `jq` for basic file-type and JSON
 inspection, plus a pinned Node and a pinned Codex CLI: Harbor's

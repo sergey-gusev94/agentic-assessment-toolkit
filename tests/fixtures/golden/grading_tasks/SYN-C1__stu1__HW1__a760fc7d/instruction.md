@@ -48,10 +48,10 @@ and record the check in your evidence.
 More generally, whenever you cannot read content you have reason to
 believe exists — an unknown format, a malformed file, a tool
 returning blank or garbled output — escalate until you can read it:
-try the other installed readers, decompress and inspect the PDF with
-`qpdf --qdf`, and install additional reading tools when the installed
-ones fail (for example `pymupdf` or `pikepdf` as alternative PDF
-engines, or other document parsers). Score content as missing only
+try the other installed readers — `pymupdf` and `pikepdf` are
+preinstalled as alternative PDF engines — decompress and inspect the
+PDF with `qpdf --qdf`, and install additional reading tools when the
+installed ones fail (for example other document parsers). Score content as missing only
 after this escalation has genuinely failed. Installing is for reading
 only: never install anything in order to execute or compile the work
 under review — the static inspection rule below still governs.
@@ -185,8 +185,10 @@ say precisely what is missing or wrong.
 Before you finish, verify your output: `grading_result.json` parses as
 valid JSON and contains exactly the fields specified above; every
 criterion has a unique id, points within `0 <= points <= max_points`,
-and specific evidence; the four sums match your criteria; and
-`justification.md` covers every criterion. Then stop.
+and specific evidence; the four sums match your criteria;
+`justification.md` covers every criterion; and every page you judged
+blank or missing has the `pdfimages` check recorded in your evidence.
+Then stop.
 
 One exception, as a last resort: if content you know exists is still
 unreadable after the full escalation described above, do not fabricate
