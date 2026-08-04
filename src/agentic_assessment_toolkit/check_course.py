@@ -266,8 +266,12 @@ def _check_rubrics(
                     f"{assessment.rubric_provenance!r} but rubrics/{assessment.id}/default.md "
                     "does not exist"
                 )
+            # Only a source that ranks *below* professor_rubric is a
+            # contradiction: applied_scheme outranks it, so a course
+            # that graded by a scheme of its own legitimately records
+            # that even when a professor rubric document exists.
             if (
-                assessment.rubric_provenance not in (None, "professor_rubric")
+                assessment.rubric_provenance in ("handout", "authored")
                 and source.is_dir()
                 and _has_files(source)
             ):
@@ -275,7 +279,8 @@ def _check_rubrics(
                     f"assessment {assessment.id!r} records rubric_provenance "
                     f"{assessment.rubric_provenance!r} but rubrics/{assessment.id}/source/ "
                     "holds the professor's own rubric — that document states the "
-                    "point split, so the provenance is 'professor_rubric'"
+                    "point split, so the provenance is 'professor_rubric' (or "
+                    "'applied_scheme' if the course graded by a different scheme)"
                 )
             if has_default and assessment.rubric_provenance is None:
                 report.gaps.append(

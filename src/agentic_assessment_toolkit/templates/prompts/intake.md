@@ -96,8 +96,9 @@ After all assignment reports return, make an audit table in
 columns: assignment id, student sources checked, instructor sources
 checked, point evidence, rubric source (`applied_scheme`,
 `professor_rubric`, `handout`, or `authored`), assignment coverage
-(which problems have criteria), and conflicts. Use the reports to write the course artifacts. Every
-assignment must end with a `default.md` rubric; for each authored one,
+(which problems have criteria), and conflicts. Use the reports to write
+the course artifacts. Every assignment must end with a `default.md`
+rubric; for each authored one,
 the notes must also carry the audit's negative-search evidence — that
 record is what tells the reviewer the point split is your judgment,
 not the professor's.
@@ -193,7 +194,7 @@ absent one.
 document (a rubric PDF, a grading-scheme handout — as opposed to
 points embedded in the assignment or reference files), copy it
 verbatim into `rubrics/<assignment_id>/source/`; the grader is shown
-it alongside your transcription.
+it alongside the rubric you write.
 
 Draft `rubrics/<assignment_id>/default.md` for every material-backed
 assignment. Take its point split from the highest-precedence source
@@ -227,9 +228,9 @@ they grade a smaller assignment while the score is reported as the
 whole one. Where part of an assignment states no points, author that
 part's split like any other and say so in the notes.
 
-Either way the rubric is a **detailed grading
-document**, not a bare list: ordinary Markdown prose plus one bullet
-line per criterion in exactly this format:
+Whatever the source, the rubric is a **detailed grading document**, not
+a bare list: ordinary Markdown prose plus one bullet line per criterion
+in exactly this format:
 
 ```markdown
 - `<id>` (<points> point[s][, bonus]): <title>
@@ -245,8 +246,8 @@ for example:
 Criterion ids are lowercase, unique, stable, and contain no
 whitespace; points are numbers greater than zero; bonus criteria carry
 the explicit `, bonus` marking; at least one criterion is not a bonus.
-Granularity when transcribing: one criterion per problem or per
-explicitly-pointed item, exactly as the source states it — never
+Granularity when a source states the split: one criterion per problem
+or per explicitly-pointed item, exactly as the source states it — never
 invent a finer split than the source supports.
 
 Follow each criterion line with indented prose stating how to grade
@@ -280,9 +281,19 @@ audit table and `intake-notes.md`. Requirements about the academic
 work itself — shown work, stated assumptions, required derivations —
 are not administrative and stay in the rubric.
 
-Transcribe faithfully; where the source is vague (section totals only,
+Follow the source faithfully; where it is vague (section totals only,
 unclear bonus status), still draft the best faithful rubric and flag
 the ambiguity in the notes.
+
+Write only what is specific to the criterion. The grader already
+applies one shared policy to every assignment — equivalent answers and
+alternative derivations earn equal credit, an originating error is
+deducted once and later parts graded on the carried-forward value, one
+omission costs points under one criterion, exactly one listed level is
+awarded, ordinary rounding and sensible graph-reading tolerance are
+accepted — so a rubric that repeats those rules only adds noise. State
+this assignment's content: which result, condition, or derivation each
+level requires, and any tolerance particular to this assignment.
 
 Never write a scaling or normalization instruction into a rubric
 ("multiply the subtotal by 100/90", "divide by 15 for the gradebook").

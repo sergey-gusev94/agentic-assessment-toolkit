@@ -44,20 +44,19 @@ and the condition that triggers building it. No dates, no history.
   per-question score without parsing a PDF. That structure is also the
   evidence a rubric's `applied_scheme` provenance rests on, so
   extracting it mechanically would let `aat check-course` compare a
-  rubric's maxima against the scheme the course graded by — today that
-  comparison is done by hand at intake review.
+  rubric's maxima against the scheme the course graded by — a
+  comparison made by hand at intake review today.
 - **Rubric content lints** — flagging administrative language
   (signatures, names on pages, boxed answers, lateness), scaling or
   normalization instructions, and prose disclaiming coverage of part of
-  an assignment; if a rubric ships with these defects again despite the
-  intake rules and the grader prompt's administrative override. Held
-  back deliberately: as regular-expression heuristics over prose they
-  would fire on ordinary course vocabulary, and the strongest of them —
-  a declared total checked against the criterion sum — would not have
-  caught the real defects, which were a faithful transcription of the
-  wrong authority and a rubric covering one problem of six. Provenance,
-  coverage review, and the grader prompt address those; a lint would
-  only encode the last incident.
+  an assignment; if a rubric ships with these defects despite the
+  intake rules and the grader prompt's administrative override. As
+  regular-expression heuristics over prose these would fire on ordinary
+  course vocabulary, so the bar is evidence that review is not catching
+  them. A declared total checked against the criterion sum is not on
+  this list at all: a rubric can state its total correctly and still
+  take it from the wrong authority, which is what provenance and
+  coverage review address.
 - **Machine-enforced score levels** — an `allowed_scores` set per
   criterion, validated by the grading verifier; if graders are observed
   awarding values off the levels a rubric lists often enough to matter.

@@ -75,13 +75,7 @@ _LADDER_CONFIG_KEYS = [
 # "Results, statistics, and reporting").
 _ASSIGNMENT_KEYS = [*_LADDER_CONFIG_KEYS, "course_id", "assignment_id", "rubric_sha256"]
 _COURSE_KEYS = [*_LADDER_CONFIG_KEYS, "course_id"]
-_STUDENT_KEYS = [
-    *_CONFIG_KEYS,
-    "course_id",
-    "assignment_id",
-    "rubric_sha256",
-    "student_id",
-]
+_STUDENT_KEYS = [*_CONFIG_KEYS, "course_id", "assignment_id", "student_id", "rubric_sha256"]
 _CLASS_KEYS = [*_CONFIG_KEYS, "course_id", "assignment_id", "rubric_sha256"]
 _FAILURE_GROUP_KEYS = ["stage", *_CONFIG_KEYS]
 _FAILURE_KEYS = [*_FAILURE_GROUP_KEYS, "outcome"]
@@ -253,8 +247,8 @@ def grades_by_course(trials: pd.DataFrame, *, seed: int = DEFAULT_SEED) -> pd.Da
     it is left out of the macro-mean and counted in
     ``n_assignments_mixed_rubric``. Averaging the versions would compare
     scores measured against different point splits; dropping them
-    silently would hide it. Filter the report to one rubric version to
-    bring such an assignment back in.
+    silently would hide it. Its per-version means stay in
+    ``grades_by_assignment``, one row each.
     """
     per_assignment = grades_by_assignment(trials)
     solve = trials[_stage_mask(trials, "solve")]
@@ -263,8 +257,11 @@ def grades_by_course(trials: pd.DataFrame, *, seed: int = DEFAULT_SEED) -> pd.Da
     for key, group in per_assignment.groupby(_COURSE_KEYS, dropna=False, sort=True):
         row: dict[str, object] = dict(zip(_COURSE_KEYS, key, strict=True))
         versions = group.groupby("assignment_id", dropna=False)["rubric_sha256"].transform("size")
+        # dropna=False throughout: an NA assignment id is still one
+        # assignment, and dropping it here would remove it from the
+        # macro-mean while counting it nowhere.
         mixed_ids = group.loc[versions > 1, "assignment_id"]
-        n_mixed = int(mixed_ids.nunique())
+        n_mixed = int(mixed_ids.nunique(dropna=False))
         group = group[versions == 1]
         n_assignments = len(group)
         # Coverage denominator: distinct assignments with at least one
@@ -315,6 +312,7 @@ def judge_quality(trials: pd.DataFrame, criteria: pd.DataFrame, *, data_root: Pa
     """
     points_by_trial, shape_by_trial = _criteria_maps(criteria)
     rubric_cache: dict[Path, tuple[str | None, dict[str, tuple[float, bool]] | None]] = {}
+    versions_cache: dict[tuple[str, str], dict[str, Path]] = {}
     grading = trials[_stage_mask(trials, "grade")]
     rows: list[dict[str, object]] = []
     for key, group in grading.groupby(_CONFIG_KEYS, dropna=False, sort=True):
@@ -360,7 +358,13 @@ def judge_quality(trials: pd.DataFrame, criteria: pd.DataFrame, *, data_root: Pa
             if trial_shape is None:
                 continue
             rubric_shape = _resolved_rubric_shape(
-                rubric_cache, data_root, course_id, assignment_id, rubric_name, rubric_sha256
+                rubric_cache,
+                versions_cache,
+                data_root,
+                course_id,
+                assignment_id,
+                rubric_name,
+                rubric_sha256,
             )
             if rubric_shape is None:
                 n_unresolved += 1
@@ -571,6 +575,7 @@ def _criteria_maps(
 
 def _resolved_rubric_shape(
     cache: dict[Path, tuple[str | None, dict[str, tuple[float, bool]] | None]],
+    versions_cache: dict[tuple[str, str], dict[str, Path]],
     data_root: Path,
     course_id: Any,
     assignment_id: Any,
@@ -586,30 +591,45 @@ def _resolved_rubric_shape(
     hash; otherwise every version of that assignment's rubric —
     selectable and archived — is searched for the recorded hash.
 
-    None means the trial is unresolvable: a lineage field is missing, no
-    version with that hash is on disk, or the resolved version does not
-    parse.
+    A missing name is not fatal — the hash alone resolves — so None
+    means the trial is unresolvable: the course, assignment, or hash is
+    missing, no version with that hash is on disk, or the resolved
+    version does not parse.
     """
-    fields = (course_id, assignment_id, rubric_name, rubric_sha256)
-    if any(pd.isna(field) for field in fields):
+    if any(pd.isna(field) for field in (course_id, assignment_id, rubric_sha256)):
         return None
-    # The course-tree layout is owned by data_root; None means no file
-    # of that name exists.
-    path = find_rubric(data_root, str(course_id), str(assignment_id), str(rubric_name))
-    if path is not None:
-        if path not in cache:
-            cache[path] = _read_rubric_shape(path)
-        digest, shape = cache[path]
-        if digest == rubric_sha256:
-            return shape
-    archived = rubric_versions(data_root, str(course_id), str(assignment_id)).get(
-        str(rubric_sha256)
+    if not pd.isna(rubric_name):
+        # The course-tree layout is owned by data_root; None means no
+        # file of that name exists.
+        path = find_rubric(data_root, str(course_id), str(assignment_id), str(rubric_name))
+        if path is not None:
+            if path not in cache:
+                cache[path] = _read_rubric_shape(path)
+            digest, shape = cache[path]
+            if digest == rubric_sha256:
+                return shape
+    versions = _rubric_versions_cached(
+        versions_cache, data_root, str(course_id), str(assignment_id)
     )
+    archived = versions.get(str(rubric_sha256))
     if archived is None:
         return None
     if archived not in cache:
         cache[archived] = _read_rubric_shape(archived)
     return cache[archived][1]
+
+
+def _rubric_versions_cached(
+    cache: dict[tuple[str, str], dict[str, Path]],
+    data_root: Path,
+    course_id: str,
+    assignment_id: str,
+) -> dict[str, Path]:
+    """Per-assignment version index, hashed once rather than per trial."""
+    key = (course_id, assignment_id)
+    if key not in cache:
+        cache[key] = rubric_versions(data_root, course_id, assignment_id)
+    return cache[key]
 
 
 def _read_rubric_shape(path: Path) -> tuple[str | None, dict[str, tuple[float, bool]] | None]:

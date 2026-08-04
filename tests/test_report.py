@@ -307,8 +307,11 @@ def test_two_rubric_versions_are_reported_separately(tmp_path: Path) -> None:
     assert "| HW1 | abababab |" in report
     assert "| HW1 | ffffffff |" in report
     # The assignment has no single score, so it leaves the macro-mean —
-    # and the report says so rather than dropping it quietly.
-    assert "Left out of the macro-mean: 1 assignment(s)" in report
+    # and the report says so rather than dropping it quietly. Coverage
+    # still counts it as graded, because it was.
+    assert "Coverage: 1 of 1 assignments" in report
+    assert "Of those, 1 were graded against more than one rubric version" in report
+    assert "the macro-mean, which covers 0" in report
     course = [line for line in csv_lines(report_dir, "grades_by_course.csv")[1:] if line]
     assert len(course) == 1
     assert course[0].split(",")[COURSE_COLUMNS.index("n_assignments")] == "0"

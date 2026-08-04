@@ -24,7 +24,10 @@ class RecordedRubric:
 
     course_id: str
     assignment_id: str
-    name: str
+    # The name a config selected; absent when the record does not say.
+    # Only the hash identifies the version, so an unnamed record is
+    # still protected by the archive invariant.
+    name: str | None
     sha256: str
     job_names: tuple[str, ...]
 
@@ -40,15 +43,16 @@ def recorded_rubrics(root: Path) -> list[RecordedRubric]:
     reporting, and a record the loader cannot read is already reported
     as a missing result elsewhere.
     """
-    jobs: dict[tuple[str, str, str, str], list[str]] = {}
+    jobs: dict[tuple[str, str, str | None, str], list[str]] = {}
     for job_dir in job_dirs(root / "grading"):
         record = read_run_record(job_dir)
         if record is None or record.get("stage") != "grade":
             continue
         config = record.get("config")
-        name = config.get("rubric") if isinstance(config, dict) else None
+        raw_name = config.get("rubric") if isinstance(config, dict) else None
+        name = raw_name if isinstance(raw_name, str) else None
         items = record.get("items")
-        if not isinstance(name, str) or not isinstance(items, list):
+        if not isinstance(items, list):
             continue
         for item in items:
             if not isinstance(item, dict):
@@ -74,7 +78,9 @@ def recorded_rubrics(root: Path) -> list[RecordedRubric]:
             sha256=digest,
             job_names=tuple(job_names),
         )
-        for (course_id, assignment_id, name, digest), job_names in sorted(jobs.items())
+        for (course_id, assignment_id, name, digest), job_names in sorted(
+            jobs.items(), key=lambda item: (item[0][0], item[0][1], item[0][2] or "", item[0][3])
+        )
     ]
 
 
@@ -82,21 +88,24 @@ def orphaned_rubrics(
     root: Path,
     *,
     course_id: str | None = None,
-    assignment_id: str | None = None,
+    assignments: set[tuple[str, str]] | None = None,
 ) -> list[RecordedRubric]:
     """Recorded rubric versions whose bytes are on disk nowhere.
 
-    Optionally narrowed to one course or one (course, assignment) pair,
-    which is what `aat grade` checks for the items it is about to plan.
+    Optionally narrowed to one course, or to a set of (course,
+    assignment) pairs — what `aat grade` checks for the items it is
+    about to plan. Narrowing filters one scan rather than repeating it
+    per assignment: reading every grading run record is the expensive
+    part, and a whole-course run has many assignments.
     """
     available: dict[tuple[str, str], dict[str, Path]] = {}
     orphans = []
     for recorded in recorded_rubrics(root):
+        key = (recorded.course_id, recorded.assignment_id)
         if course_id is not None and recorded.course_id != course_id:
             continue
-        if assignment_id is not None and recorded.assignment_id != assignment_id:
+        if assignments is not None and key not in assignments:
             continue
-        key = (recorded.course_id, recorded.assignment_id)
         if key not in available:
             available[key] = rubric_versions(root, *key)
         if recorded.sha256 not in available[key]:
@@ -121,9 +130,10 @@ def orphan_message(root: Path, orphan: RecordedRubric) -> str:
         / f"{orphan.short_sha}.md"
     )
     task_rubric = root / "tasks" / orphan.job_names[0] / "*" / "environment" / "rubric.md"
+    named = f"rubric {orphan.name!r} version" if orphan.name else "rubric version"
     return (
-        f"{orphan.course_id}/{orphan.assignment_id}: rubric {orphan.name!r} "
-        f"version {orphan.short_sha} is referenced by "
+        f"{orphan.course_id}/{orphan.assignment_id}: {named} "
+        f"{orphan.short_sha} is referenced by "
         f"{', '.join(orphan.job_names)} but exists nowhere under "
         f"courses/{orphan.course_id}/rubrics/{orphan.assignment_id}/. "
         f"Recover the bytes from a materialized task ({task_rubric}) and "

@@ -704,11 +704,9 @@ def _require_resolvable_rubric_history(root: Path, sources: list[_GradeSource]) 
     means the moment a revision would strand history is the moment it is
     caught — before another job's results are added to the pile.
     """
-    orphans = []
-    for course_id, assignment_id in sorted({(s.course_id, s.assignment_id) for s in sources}):
-        orphans.extend(
-            provenance.orphaned_rubrics(root, course_id=course_id, assignment_id=assignment_id)
-        )
+    orphans = provenance.orphaned_rubrics(
+        root, assignments={(source.course_id, source.assignment_id) for source in sources}
+    )
     if orphans:
         raise CliError(
             "stored grading results refer to rubric versions that are no longer "

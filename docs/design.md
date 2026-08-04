@@ -62,8 +62,9 @@ analysis are in research.md.
    and enforced at materialization. Grading never starts
    without one: a missing rubric fails at materialization, and the fix
    is to author the rubric first (course intake does this for every
-   material-backed assignment — transcribing a stated point split,
-   authoring one where none exists; the procedure in
+   material-backed assignment, taking the point split from the
+   highest-precedence source the materials offer and authoring one
+   where no source states any; the procedure in
    [data-conventions.md](data-conventions.md) covers the rest). Stable criterion ids
    are what make per-criterion statistics well defined across repeated
    gradings.

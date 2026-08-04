@@ -283,36 +283,46 @@ def _benchmark_section(by_assignment: pd.DataFrame, by_course: pd.DataFrame) -> 
             "them:"
         )
         parts.append(_markdown_table(subset, columns=_ASSIGNMENT_TABLE_COLUMNS))
-        macro = (
-            f"Course macro-mean over {row['n_assignments']} assignment(s): "
-            f"`base_pct` {_cell(row['macro_mean_base_pct'])}, "
-            f"`score_pct` {_cell(row['macro_mean_score_pct'])}."
-        )
-        if pd.isna(row["ci_low"]):
-            macro += (
-                f" No confidence interval: {row['n_assignments']} assignment(s) with "
-                f"valid gradings is fewer than the {metrics.MIN_BOOTSTRAP_CLUSTERS} "
-                "the bootstrap needs."
+        if row["n_assignments"] == 0:
+            # Every graded assignment has more than one rubric version,
+            # so there is nothing to average — an empty mean would read
+            # as a score of zero.
+            macro = (
+                "No course macro-mean: every assignment with gradings was graded "
+                "against more than one rubric version, so none has a single score."
             )
         else:
-            macro += (
-                f" 95% confidence interval for the macro-mean `base_pct`: "
-                f"{_cell(row['ci_low'])} to {_cell(row['ci_high'])} (percentile "
-                "bootstrap over assignments; seed in provenance.json)."
+            macro = (
+                f"Course macro-mean over {row['n_assignments']} assignment(s): "
+                f"`base_pct` {_cell(row['macro_mean_base_pct'])}, "
+                f"`score_pct` {_cell(row['macro_mean_score_pct'])}."
             )
+            if pd.isna(row["ci_low"]):
+                macro += (
+                    f" No confidence interval: {row['n_assignments']} assignment(s) with "
+                    f"valid gradings is fewer than the {metrics.MIN_BOOTSTRAP_CLUSTERS} "
+                    "the bootstrap needs."
+                )
+            else:
+                macro += (
+                    f" 95% confidence interval for the macro-mean `base_pct`: "
+                    f"{_cell(row['ci_low'])} to {_cell(row['ci_high'])} (percentile "
+                    "bootstrap over assignments; seed in provenance.json)."
+                )
         parts.append(macro)
+        graded = row["n_assignments"] + row["n_assignments_mixed_rubric"]
         parts.append(
-            f"Coverage: {row['n_assignments']} of {row['n_assignments_total']} "
+            f"Coverage: {graded} of {row['n_assignments_total']} "
             f"assignments — {row['n_assignments_total']} attempted by this solver, "
-            f"{row['n_assignments']} with at least one valid grading."
+            f"{graded} with at least one valid grading."
         )
         if row["n_assignments_mixed_rubric"]:
             parts.append(
-                f"Left out of the macro-mean: {row['n_assignments_mixed_rubric']} "
-                "assignment(s) graded against more than one rubric version under "
-                "this config, which have no single per-assignment score. Their "
-                "rows are in the table above, one per version; filter the report "
-                "to one version to include them."
+                f"Of those, {row['n_assignments_mixed_rubric']} were graded against "
+                "more than one rubric version under this config. They have no "
+                "single per-assignment score, so they are left out of the "
+                f"macro-mean, which covers {row['n_assignments']}. Their "
+                "per-version means are the rows above."
             )
     return parts
 
@@ -362,7 +372,8 @@ def _checks_section(checks: pd.DataFrame) -> list[str]:
         return parts
     parts.append(
         "Known submissions graded as pseudo-students, one row per grading "
-        "config, course, assignment, and pseudo-student. Advisory thresholds on `base_pct`: a "
+        "config, course, assignment, pseudo-student, and rubric version. "
+        "Advisory thresholds on `base_pct`: a "
         "reference solution should grade at or above 95, an irrelevant "
         "submission at or below 5. The numbers are raw — nothing here is a "
         "machine pass or fail."
@@ -377,7 +388,8 @@ def _assistant_section(class_dist: pd.DataFrame) -> list[str]:
         parts.append("No student submissions in this report.")
         return parts
     parts.append(
-        "Class distribution per grading config, course, and assignment, over "
+        "Class distribution per grading config, course, assignment, and rubric "
+        "version, over "
         "per-student mean `score_pct` — one value per student; students with "
         "no valid grading are not counted. Per-student grades are in "
         "students.csv."

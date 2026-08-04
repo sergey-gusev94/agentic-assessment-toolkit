@@ -295,8 +295,10 @@ Notes:
   approved rubric is always the one a plain run selects. What is
   immutable is the *content*. Before `default.md` (or any other
   selectable name) is overwritten, its bytes are preserved under
-  `rubrics/<assignment_id>/archive/<sha8>.md`, named by the first
-  eight characters of their sha256.
+  `rubrics/<assignment_id>/archive/`. Name the file for the first eight
+  characters of its sha256 (`<sha8>.md`) so a directory listing matches
+  the hashes in the run records; nothing depends on the name, because
+  every archived version is found by hashing its content.
 
   This holds because every stored grading result refers to the rubric
   it was graded against **by hash**, recorded in the run record; the

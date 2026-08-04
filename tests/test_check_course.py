@@ -344,3 +344,18 @@ def test_an_archived_rubric_version_resolves(data_root: Path) -> None:
     (archive / f"{digest[:8]}.md").write_bytes(rubric.read_bytes())
     rubric.write_text("# HW1\n\n- `a` (10 points): a corrected split.\n", encoding="utf-8")
     assert check_course(data_root, COURSE_ID).ok
+
+
+def test_applied_scheme_outranks_a_professor_rubric(data_root: Path) -> None:
+    """The scheme the course graded by beats a distributed rubric document."""
+    toml_path = course_dir(data_root) / "course.toml"
+    toml_path.write_text(
+        toml_path.read_text(encoding="utf-8").replace(
+            'rubric_provenance = "handout"', 'rubric_provenance = "applied_scheme"'
+        ),
+        encoding="utf-8",
+    )
+    source = course_dir(data_root) / "rubrics" / "HW1" / "source"
+    source.mkdir()
+    (source / "rubric.pdf").write_text("professor rubric\n", encoding="utf-8")
+    assert check_course(data_root, COURSE_ID).ok
