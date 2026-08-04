@@ -8,7 +8,7 @@ import pytest
 
 from agentic_assessment_toolkit import __version__, metrics
 from agentic_assessment_toolkit.data_root import DataRootError
-from agentic_assessment_toolkit.harbor import utc_stamp
+from agentic_assessment_toolkit.harbor import RunRecordItem, utc_stamp
 from agentic_assessment_toolkit.report import REPORT_FILENAMES, write_report
 from tests.test_data_root import make_fake_toolkit_repo
 from tests.test_metrics import (
@@ -155,8 +155,9 @@ def test_report_md_sections_and_benchmark_prose(tmp_path: Path) -> None:
         "### SYN_C1 — solver codex-high (dddddddd), grader codex-grader-high (cccccccc)" in report
     )
     # The per-assignment means table is always printed; the lone solve
-    # trial scores base 80, score 100, and has no spread.
-    assert "| HW1 | 1 | 1 | 80.00 |  | 100.00 |" in report
+    # trial scores base 80, score 100, and has no spread. The rubric
+    # version it was graded against is named beside the assignment.
+    assert "| HW1 | abababab | 1 | 1 | 80.00 |  | 100.00 |" in report
     # One assignment is below the cluster gate: the explicit note
     # replaces the interval, and coverage is stated.
     assert "fewer than the 5 the bootstrap needs" in report
@@ -267,3 +268,48 @@ def test_out_root_inside_toolkit_tree_is_refused(tmp_path: Path) -> None:
     with pytest.raises(DataRootError, match="inside the toolkit repository"):
         run_report(root, out_root=destination)
     assert not destination.exists()
+
+
+def test_two_rubric_versions_are_reported_separately(tmp_path: Path) -> None:
+    """A revised rubric splits the assignment's row and is called out."""
+    root = build_root(tmp_path)
+    # A second grading of the same solve trial, against a revised rubric.
+    revised = make_job(
+        root,
+        tmp_path,
+        stage="grade",
+        job_name="20260801T130000Z__codex-grader-high__cccccccc",
+        items=[
+            RunRecordItem(
+                item_id=f"{SOLVE_JOB}/HW1__abc1234",
+                task_dir_name="g4",
+                item_identity="v2" * 32,
+                course_id="SYN_C1",
+                assignment_id="HW1",
+                input_hashes={"rubric": "f" * 64},
+                submission_source="solve-trial",
+                solve_job_name=SOLVE_JOB,
+                solve_trial_name="HW1__abc1234",
+            )
+        ],
+    )
+    data = grading_data([criterion("a", 5.0, 5.0)])
+    write_trial(
+        revised,
+        "g4__t1",
+        trial_result("g4", rewards=graded_rewards(data)),
+        artifact_text=json.dumps(data),
+    )
+
+    report_dir = run_report(root)
+    report = (report_dir / "report.md").read_text(encoding="utf-8")
+    # One table row per version, never one averaged row.
+    assert "| HW1 | abababab |" in report
+    assert "| HW1 | ffffffff |" in report
+    # The assignment has no single score, so it leaves the macro-mean —
+    # and the report says so rather than dropping it quietly.
+    assert "Left out of the macro-mean: 1 assignment(s)" in report
+    course = [line for line in csv_lines(report_dir, "grades_by_course.csv")[1:] if line]
+    assert len(course) == 1
+    assert course[0].split(",")[COURSE_COLUMNS.index("n_assignments")] == "0"
+    assert course[0].split(",")[COURSE_COLUMNS.index("n_assignments_mixed_rubric")] == "1"

@@ -43,16 +43,31 @@ exports into `submissions/`, rosters and pseudonym tables under
    not answer, and review every judgment call in `intake-notes.md` —
    rubric drafts most carefully, because a rubric is the frozen judge
    of every grade produced under it. Every material-backed assignment
-   gets a rubric: transcribed where the materials state a point
-   split, authored by the agent where they do not. The registry
-   records the mode per assessment (`rubric_provenance` in
-   `course.toml`), and the audit table in
-   the notes labels each rubric `transcribed` or `authored`; review
-   authored ones strictest of all, since no professor source backs
-   their point split. Re-run `aat check-course` until clean.
+   gets a rubric, its point split taken from the highest-precedence
+   source available and its source recorded per assessment
+   (`rubric_provenance` in `course.toml`, the precedence order in
+   docs/data-conventions.md). Two questions carry the review:
+
+   - **Is this the split the course graded by?** A split transcribed
+     faithfully from a handout is still wrong if the course applied a
+     different one. Where a graded-copy export or LMS rubric is
+     available, it settles the structure; where the handout and the
+     applied scheme disagree, the applied scheme wins and the conflict
+     goes in the notes.
+   - **Does the rubric cover the whole assignment?** Criteria for some
+     problems and none for others produce a score for a smaller
+     assignment, reported as if it were the whole one. Where part of an
+     assignment states no points, that part's split is authored like
+     any other.
+
+   Review authored splits strictest of all, since no source backs them.
+   Re-run `aat check-course` until clean.
 4. **Use.** Everything stays an editable draft until a job first
    records its hash; from that point the artifact is frozen
-   (docs/data-conventions.md). Dropping later-arriving material into
+   (docs/data-conventions.md) — except that a rubric found to be wrong
+   is corrected in place once its superseded bytes are archived, which
+   `aat grade` and `aat check-course` both enforce. Dropping
+   later-arriving material into
    `raw/<course_id>/` changes the dump's hash, so the course counts as
    unprocessed again and the next `aat intake` performs an incremental
    pass — the brief forbids the agent from modifying existing

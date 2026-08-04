@@ -460,13 +460,14 @@ resolved inputs: for solve, the resolved environment template
 (Dockerfile) bytes; for grading, the grading environment template
 bytes, the resolved rubric file bytes, the hash of the assignment
 directory presented in the task, and — when the assignment has one —
-the hash of the rubric source directory. Rubric files, rubric source
-directories, and assignment
-directories freeze at first use — a rubric revision after that is a
-new file selected by name in the config (see
-[data-conventions.md](data-conventions.md)) — so folding their bytes
-into the per-item identity is defense in depth, and a different rubric
-selection changes doneness for exactly the assignments it applies to. Mechanics such as `--repeats` and
+the hash of the rubric source directory. Rubric source directories and
+assignment directories freeze at first use; a rubric *version* is
+likewise immutable, but the name selecting it may advance to a
+corrected version once the superseded bytes are archived (see
+[data-conventions.md](data-conventions.md)). Folding the rubric bytes
+into the per-item identity is what makes that safe: a revised rubric
+changes doneness for exactly the assignments it applies to, and the
+prior results keep their own identity. Mechanics such as `--repeats` and
 `--max-concurrent-trials`, and all selection flags, never enter the
 identity.
 
@@ -767,7 +768,13 @@ assignment and per course, so comparisons never mix solvers or judges:
 grading repeats of a submission average to a per-solve-trial score,
 solve trials average to a per-assignment score, and assignments
 macro-average to the course score — each assignment weighs equally
-regardless of how many trials it accumulated. An assignment with no
+regardless of how many trials it accumulated. Every grading table also
+keys on the **rubric hash**, so an assignment whose rubric was revised
+appears once per version and grades measured against different point
+splits are never averaged; such an assignment has no single
+per-assignment score, so it is left out of the course macro-mean and
+counted in `n_assignments_mixed_rubric` rather than silently dropped.
+An assignment with no
 valid gradings under a config is excluded from the macro-mean, and
 the report states coverage explicitly (e.g. "7 of 9 assignments"). Course-level confidence
 intervals come from a percentile bootstrap that resamples assignments
@@ -794,10 +801,12 @@ per-id max points, and per-id bonus flags all match the rubric's
 enumerated criteria; the points awarded are the grader's judgment and
 never enter fidelity. The rubric's criteria are parsed per the fixed
 grammar in [data-conventions.md](data-conventions.md): `metrics.py`
-resolves the rubric from the course tree and verifies its bytes
-against the hash recorded in the run record, and a trial whose rubric
-is missing, changed, or unparseable is counted as unresolved rather
-than rated. Failure rates per outcome category complete the set.
+resolves the rubric version by the hash recorded in the run record —
+across the assignment's selectable rubrics and its archived versions,
+so a trial graded before the rubric advanced still resolves to the
+bytes it used — and a trial whose rubric version is on disk nowhere,
+or does not parse, is counted as unresolved rather than rated. Failure
+rates per outcome category complete the set.
 
 Grading-assistant statistics are descriptive only — per student and
 assignment: the mean over valid gradings, the repeat SD (the
@@ -980,9 +989,11 @@ trials are drawn, not the system under test or the judge, so it is
 excluded from the config identity hash (though recorded in the run
 record). Trials pool by (item id, per-item identity) across any number
 of jobs in `metrics.py`: five repeats now and five later under the same
-config are one sample of ten. Pooling is valid only while the config is truly
-frozen — any prompt or rubric edit must be a new config version, which
-the identity hash enforces automatically.
+config are one sample of ten. Pooling is valid only while the judge is
+truly frozen — and it is, by construction: a prompt or config edit
+moves the config identity, and a rubric edit moves the per-item
+identity of exactly the assignments it applies to, so trials measured
+against different bytes never pool.
 
 Idempotence: an item is **done** under a config when at least one
 verified trial exists for (item id, per-item identity) — for grading

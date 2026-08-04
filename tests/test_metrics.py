@@ -41,6 +41,7 @@ ASSIGNMENT_COLUMNS = [
     "grading_config_identity",
     "course_id",
     "assignment_id",
+    "rubric_sha256",
     "n_solve_trials",
     "n_gradings",
     "mean_base_pct",
@@ -55,6 +56,7 @@ COURSE_COLUMNS = [
     "grading_config_identity",
     "course_id",
     "n_assignments",
+    "n_assignments_mixed_rubric",
     "n_assignments_total",
     "macro_mean_base_pct",
     "macro_mean_score_pct",
@@ -91,6 +93,7 @@ STUDENT_COLUMNS = [
     "config_identity",
     "course_id",
     "assignment_id",
+    "rubric_sha256",
     "student_id",
     "n_valid_gradings",
     "mean_score_pct",
@@ -108,6 +111,7 @@ CLASS_COLUMNS = [
     "config_identity",
     "course_id",
     "assignment_id",
+    "rubric_sha256",
     "n_students",
     "mean",
     "median",
@@ -121,6 +125,7 @@ CHECK_COLUMNS = [
     "config_identity",
     "course_id",
     "assignment_id",
+    "rubric_sha256",
     "student_id",
     "role",
     "n_valid_gradings",
@@ -786,3 +791,90 @@ def test_empty_inputs_yield_full_columns(tmp_path: Path) -> None:
     assert str(expected["solve_summary"][0].dtypes["contract_pass_rate"]) == "Float64"
     assert str(expected["failure_accounting"][0].dtypes["share"]) == "Float64"
     assert str(expected["grader_checks"][0].dtypes["role"]) == "string"
+
+
+def test_rubric_fidelity_resolves_a_superseded_version_from_the_archive(tmp_path: Path) -> None:
+    """A grading made before `default` advanced still resolves, by hash."""
+    old_text = (
+        "# HW1 rubric\n\n- `a` (5 points): the answer is correct.\n"
+        "- `b` (3 points, bonus): extra polish.\n"
+    )
+    old_sha = write_rubric(tmp_path, "HW1", old_text)
+    rubric_path = tmp_path / "courses" / "C1" / "rubrics" / "HW1" / "default.md"
+    archive = rubric_path.parent / "archive"
+    archive.mkdir()
+    (archive / f"{old_sha[:8]}.md").write_text(old_text, encoding="utf-8")
+    # `default` advances: same ids, a corrected max.
+    rubric_path.write_text(
+        "# HW1 rubric\n\n- `a` (6 points): the answer is correct.\n"
+        "- `b` (3 points, bonus): extra polish.\n",
+        encoding="utf-8",
+    )
+    new_sha = sha256_file(rubric_path)
+    assert new_sha != old_sha
+
+    def row(name: str, rubric_sha256: str) -> dict[str, object]:
+        return graded(
+            75.0,
+            75.0,
+            trial_name=name,
+            item_id=name,
+            item_identity=f"{name}-id",
+            assignment_id="HW1",
+            rubric_name="default",
+            rubric_sha256=rubric_sha256,
+        )
+
+    trials = trials_frame([row("old", old_sha), row("new", new_sha)])
+    criteria = criteria_frame(
+        [
+            crit("old", "a", 4.0, 5.0),  # faithful to the archived version
+            crit("old", "b", 1.0, 3.0, bonus=True),
+            crit("new", "a", 4.0, 6.0),  # faithful to the current version
+            crit("new", "b", 1.0, 3.0, bonus=True),
+        ]
+    )
+    judge = metrics.judge_quality(trials, criteria, data_root=tmp_path).iloc[0]
+    assert judge["n_rubric_unresolved"] == 0
+    assert float(judge["rubric_fidelity_rate"]) == pytest.approx(1.0)
+
+
+def test_a_revised_rubric_never_averages_across_versions() -> None:
+    """Two versions of one assignment are separate rows, and drop out of the course mean."""
+    trials = trials_frame(
+        [
+            solved("completed", assignment_id="HW1"),
+            solved("completed", assignment_id="HW2"),
+            # One solve trial, graded under two rubric versions: the
+            # rubric bytes are in the per-item identity, so these are
+            # separate items, never repeats of one.
+            derived(
+                60.0,
+                60.0,
+                "sj/t1",
+                item_identity="v1",
+                assignment_id="HW1",
+                rubric_sha256="a" * 64,
+            ),
+            derived(
+                90.0,
+                90.0,
+                "sj/t1",
+                item_identity="v2",
+                assignment_id="HW1",
+                rubric_sha256="b" * 64,
+            ),
+            derived(80.0, 80.0, "sj/t2", assignment_id="HW2", rubric_sha256="a" * 64),
+        ]
+    )
+    by_assignment = metrics.grades_by_assignment(trials)
+    hw1 = by_assignment[by_assignment["assignment_id"] == "HW1"]
+    assert list(hw1["mean_base_pct"]) == [60.0, 90.0]
+
+    course = metrics.grades_by_course(trials).iloc[0]
+    # HW1 has no single score, so only HW2 enters the macro-mean — and
+    # the dropped assignment is counted, never silently omitted.
+    assert course["n_assignments"] == 1
+    assert course["n_assignments_mixed_rubric"] == 1
+    assert course["n_assignments_total"] == 2
+    assert float(course["macro_mean_base_pct"]) == pytest.approx(80.0)

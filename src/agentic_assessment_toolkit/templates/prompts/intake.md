@@ -73,13 +73,15 @@ It must return a concise, structured report containing:
   location; these are excluded from the rubric under the rubric rules
   below, and the citation is what lets the exclusion be recorded;
 - any standalone professor rubric files that belong in `source/`;
-- a proposed `default.md` rubric. When either bundle states a numeric
-  point allocation, the rubric is **transcribed** at the most granular
-  explicit point split the sources support. Only when **both** bundles
-  contain no numeric point allocation, the rubric is **authored** by
-  the subagent under the authoring rules below, and the report must
-  also include the negative-search evidence and any qualitative
-  grading guidance found.
+- a proposed `default.md` rubric, at the most granular explicit point
+  split its source supports, with the source named (`applied_scheme`,
+  `professor_rubric`, `handout`, or `authored` — the precedence order
+  under **Rubrics** below). Only when no bundle contains a numeric
+  point allocation is the rubric **authored** by the subagent under the
+  authoring rules below, and the report must then also include the
+  negative-search evidence and any qualitative grading guidance found.
+  Where two sources state different splits, report both and which one
+  wins.
 
 Instructor/reference materials are valid sources of rubric points and
 grading rules even when those rules do not appear in the student-facing
@@ -92,8 +94,9 @@ student-facing work, and flag anything that needs human judgment.
 After all assignment reports return, make an audit table in
 `intake-notes.md` with one row per material-backed assessment and these
 columns: assignment id, student sources checked, instructor sources
-checked, point evidence, rubric action (`transcribed` or `authored`),
-and conflicts. Use the reports to write the course artifacts. Every
+checked, point evidence, rubric source (`applied_scheme`,
+`professor_rubric`, `handout`, or `authored`), assignment coverage
+(which problems have criteria), and conflicts. Use the reports to write the course artifacts. Every
 assignment must end with a `default.md` rubric; for each authored one,
 the notes must also carry the audit's negative-search evidence — that
 record is what tells the reviewer the point split is your judgment,
@@ -156,10 +159,11 @@ and record the rule in the notes); `category`; `ai_policy` (`allowed |
 not_allowed | not_applicable` — what the course *permits*);
 `ai_use_possible` (boolean — whether AI use was physically *feasible*,
 independent of permission); `due` (plain TOML date);
-`rubric_provenance` (`transcribed | authored` — how the assessment's
-`default.md` got its point split; set it exactly when you draft the
-rubric, matching the audit table's rubric action, and leave it absent
-for assessments without a rubric); and `excluded` —
+`rubric_provenance` (`applied_scheme | professor_rubric | handout |
+authored` — which source the assessment's `default.md` took its point
+split from; set it exactly when you draft the rubric, matching the
+audit table's rubric source, and leave it absent for assessments
+without a rubric); and `excluded` —
 a short reason, only for assessments that have no assignment directory
 and never will (not codeable, materials missing from the dump).
 
@@ -192,11 +196,38 @@ verbatim into `rubrics/<assignment_id>/source/`; the grader is shown
 it alongside your transcription.
 
 Draft `rubrics/<assignment_id>/default.md` for every material-backed
-assignment. When the student-facing **or instructor/reference**
-materials state a point split — grading schemes in notebook cells,
-points in section headers, rubric documents — **transcribe** it. When
-neither bundle states one, **author** the rubric yourself under the
-authoring rules below. Either way the rubric is a **detailed grading
+assignment. Take its point split from the highest-precedence source
+the materials offer, and record which one in the registry's
+`rubric_provenance` and in the audit table:
+
+1. `applied_scheme` — the scheme the course actually graded by, when
+   the dump contains one: an LMS rubric export, a per-question score
+   export, or graded-copy summaries. This is the assignment's real
+   point structure, because it produced the grades of record.
+2. `professor_rubric` — a standalone rubric document, copied verbatim
+   into `source/` as above.
+3. `handout` — point values printed in the assignment or the reference
+   solution: grading schemes in notebook cells, points in section
+   headers.
+4. `authored` — your own split, under the authoring rules below, when
+   no source states one.
+
+When two sources disagree, the higher one wins and the conflict goes
+in the notes — a handout that says one thing while the course graded
+another is not a judgment call. Only the *structure* transfers from a
+source: criterion ids, maxima, bonus flags, and any score levels the
+scheme states. What earns each level you draft from the assignment and
+reference solution; how individual graders applied a scheme (leniency
+on particular submissions, one-off adjustments, administrative
+deductions an LMS rubric carries) is never evidence.
+
+The rubric must cover the **whole assignment**. Criteria for some
+problems and none for others do not grade the assignment leniently —
+they grade a smaller assignment while the score is reported as the
+whole one. Where part of an assignment states no points, author that
+part's split like any other and say so in the notes.
+
+Either way the rubric is a **detailed grading
 document**, not a bare list: ordinary Markdown prose plus one bullet
 line per criterion in exactly this format:
 
@@ -240,7 +271,9 @@ formalities such as boxing final answers, lateness penalties,
 escalation to the instructor — become neither criteria nor rubric
 prose, even when the professor's materials assign them points or
 withhold grading over them (for example "an unnamed page is not
-graded"). This applies to transcribed and authored rubrics alike. The
+graded"), and whatever their source — an applied grading scheme that
+carries a "late submission" deduction or a discretionary "point
+adjustment" is no different. The
 professor's statement stays available verbatim in the handout and in
 `source/`; record each exclusion, with its source citation, in the
 audit table and `intake-notes.md`. Requirements about the academic
@@ -250,6 +283,12 @@ are not administrative and stay in the rubric.
 Transcribe faithfully; where the source is vague (section totals only,
 unclear bonus status), still draft the best faithful rubric and flag
 the ambiguity in the notes.
+
+Never write a scaling or normalization instruction into a rubric
+("multiply the subtotal by 100/90", "divide by 15 for the gradebook").
+The rubric states raw points; every percentage is derived in code from
+the criterion maxima. A raw total other than 100 is fine on its own —
+it is a scale, not an error.
 
 **Authoring rules.** Where no point information exists in either the
 student-facing or instructor/reference bundle, author the rubric from

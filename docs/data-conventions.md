@@ -65,7 +65,8 @@ $AAT_DATA_DIR/
 │       │   └── <assignment_id>/      # instructor/oracle solution
 │       └── rubrics/
 │           └── <assignment_id>/
-│               ├── <name>.md         # default.md; variants are new files
+│               ├── <name>.md         # default.md is the approved rubric
+│               ├── archive/<sha8>.md # superseded versions, resolved by hash
 │               └── source/           # professor's standalone rubric, verbatim
 ├── submissions/                # real student submissions, normalized by ingest
 │   └── <course_id>/            #   (see "Submission ingest" below)
@@ -113,7 +114,11 @@ Notes:
   immutable once its hash is recorded in any job's run record, because
   results reference it by that hash. Until then it is a draft and may
   be edited freely — intake output is reviewed and corrected before
-  anything runs against it. `course.toml`, `intake-notes.md`, and
+  anything runs against it. Rubrics are the one artifact with a
+  documented way forward from there: the bytes stay immutable, but the
+  name may advance to a corrected version once the superseded bytes are
+  archived ("Course content contract" below). `course.toml`,
+  `intake-notes.md`, and
   `syllabus/` are never hashed into any identity, so they may be
   amended at any time; amending the `environment` default changes
   per-item identities only through the resolved Dockerfile template it
@@ -138,7 +143,12 @@ Notes:
   one subdirectory per job, named like the job directory. Tasks live
   outside the job directories because Harbor's resume deletes any
   job-directory subdirectory without a per-trial result file as a
-  stale trial; `harbor-job.json` references them by absolute path.
+  stale trial; `harbor-job.json` references them by absolute path. A
+  task directory is regenerable only while its inputs are unchanged:
+  each one holds the exact rubric bytes its job was built with, so
+  after a rubric advances it is the recovery source for the superseded
+  version (see the rubric contract below). Deleting `tasks/` is safe
+  only once every rubric version its jobs used is archived.
 - `analysis/` holds only derived outputs: statistics tables and
   reports. Everything in it is regenerable from `solving/`, `grading/`,
   and `tables/`; each report invocation writes one timestamped
@@ -220,13 +230,16 @@ Notes:
     feasible, independent of permission (an online exam may forbid AI
     without preventing it; an in-person exam prevents it).
   - `due` — TOML date.
-  - `rubric_provenance` — `transcribed | authored`: how
-    `rubrics/<id>/default.md` got its point split — transcribed from a
-    split the materials state, or authored by the intake agent when no
-    materials state one. Present exactly when the rubric exists: set
-    without a rubric is a contract violation, as is `authored`
-    alongside a `rubrics/<id>/source/` professor rubric; a rubric
-    without the field is a completeness gap.
+  - `rubric_provenance` — `applied_scheme | professor_rubric | handout
+    | authored`: which source `rubrics/<id>/default.md` took its point
+    split from, in the precedence order under "Course content contract"
+    below. Recording the source, not just whether one existed, is what
+    makes a wrong split visible: a split can be transcribed faithfully
+    from an authority the course did not grade by. Present exactly when
+    the rubric exists: set without a rubric is a contract violation, as
+    is anything but `professor_rubric` alongside a
+    `rubrics/<id>/source/` professor rubric; a rubric without the field
+    is a completeness gap.
   - `excluded` — non-empty reason why this assessment has no
     assignment directory and never will (not codeable, materials
     lost). An entry with both an `excluded` reason and a directory is
@@ -259,16 +272,93 @@ Notes:
   authors a worked solution to fill the gap: an invented oracle is
   worse than an absent one.
 - Rubrics are Markdown files named within
-  `rubrics/<assignment_id>/`; the default is `default.md`. A rubric no
-  job has used yet is a draft and may be edited in place; once used it
-  is frozen like every other artifact, and a revision is a new file
-  (e.g. `strict-v2.md`) selected by name in a grading config —
-  preserving immutability and hash-based provenance. A rubric is a
+  `rubrics/<assignment_id>/`; the default is `default.md`. A rubric is a
   **detailed grading document**, not a bare criterion list: each
   criterion line is followed by prose stating what earns full,
   partial, and zero credit, carried from the professor's materials
   when they say and drafted when they do not. Only the criterion
   lines are parsed; the prose is read by the grader.
+
+  What the prose does *not* carry is the grading policy every
+  assignment shares — equivalent answers, error follow-through, one
+  deduction per omission, awarding a listed level rather than a value
+  between them, rounding and reading tolerance. Those live once in the
+  grader prompt template ("Grading policy"), so a rubric states only
+  what is specific to its own criteria. A rubric also never contains a
+  scaling or normalization instruction ("multiply the subtotal by
+  100/90"): it states raw points, and every percentage is derived in
+  code from the criterion maxima.
+- **Rubric versions are immutable; the name is a label that may
+  advance.** `default.md` is the rubric currently approved for new
+  grading, not a byte string frozen forever: correcting a rubric that
+  turned out to be wrong means replacing `default.md`, so that the
+  approved rubric is always the one a plain run selects. What is
+  immutable is the *content*. Before `default.md` (or any other
+  selectable name) is overwritten, its bytes are preserved under
+  `rubrics/<assignment_id>/archive/<sha8>.md`, named by the first
+  eight characters of their sha256.
+
+  This holds because every stored grading result refers to the rubric
+  it was graded against **by hash**, recorded in the run record; the
+  recorded name is only a label. Resolution follows the hash: the
+  reporting layer looks for the recorded hash across the assignment's
+  selectable rubrics and its archive, so a grading made before the
+  revision still resolves to the exact bytes it used. The archive is
+  never presented to a grader and is never selectable by name.
+
+  The invariant is checked, not merely documented: every rubric hash
+  any grading run record references must exist on disk. `aat grade`
+  refuses to plan an assignment whose stored results have lost their
+  rubric version, and `aat check-course` reports the same condition as
+  a contract violation. Both name the recovery — the materialized task
+  under `tasks/<job>/` holds the rubric bytes that job used, so a
+  version can be restored even when nobody archived it before
+  overwriting.
+
+  Statistics never mix versions: every grading table keys on the
+  rubric hash as well as the config identity, so two generations of one
+  assignment are separate rows. An assignment graded under more than
+  one version has no single per-assignment score and is left out of the
+  course macro-mean, counted in `n_assignments_mixed_rubric` rather
+  than silently dropped.
+
+  A revision is a fresh judgment, so it is reviewed like any other
+  rubric, and why the previous version was superseded is recorded in
+  `intake-notes.md`.
+- **Where a point split comes from** decides which source wins when
+  sources disagree, in this order:
+
+  1. **The scheme the course actually applied** — an LMS rubric export
+     or the per-question grade summaries a graded-copy export carries.
+     This is the assignment's real point structure: it is what produced
+     the grades of record.
+  2. **A standalone professor rubric document** under
+     `rubrics/<assignment_id>/source/`.
+  3. **The point values printed in the handout or reference
+     solution.**
+  4. **A split authored from the assignment** when no source states
+     one.
+
+  A handout that states one split while the course graded another is
+  not a contradiction to resolve by judgment: the applied scheme wins,
+  and the conflict is recorded in `intake-notes.md`. The registry field
+  `rubric_provenance` records which of the four a rubric used.
+
+  Only the *structure* transfers from a source — criterion ids, maxima,
+  bonus flags, and any score levels the scheme states. What earns each
+  level is authored from the assignment and the reference solution.
+  How individual graders applied a scheme never transfers: leniency or
+  strictness observed in particular submissions, one-off regrade
+  adjustments, and administrative items an LMS rubric happens to carry
+  (a "late submission" deduction, a discretionary "point adjustment")
+  are not evidence about what the work should earn.
+- A rubric covers the **whole assignment**. A rubric with criteria for
+  some problems and none for others does not grade the assignment
+  leniently — it grades a different, smaller assignment, and its score
+  is reported as if it were the whole. When part of an assignment has
+  no stated point values, the split for that part is authored like any
+  other (provenance `authored`), never omitted. Which parts a rubric
+  covers, and on what evidence, belongs in `intake-notes.md`.
 - `rubrics/<assignment_id>/source/`, when present, holds the
   professor's standalone rubric document(s) verbatim (a rubric PDF or
   grading-scheme handout — distinct from schemes embedded in the
@@ -304,20 +394,17 @@ Notes:
   criterion is not a bonus. Stable criterion ids are what make
   per-criterion statistics comparable across repeated gradings.
 - Every material-backed assignment leaves course intake with a
-  `default.md` ([course-intake.md](course-intake.md)): **transcribed**
-  where the materials state a point split, **authored** by the intake
-  agent from the assignment and reference solution where neither the
-  student-facing nor the instructor materials state one. Authored
-  rubrics total exactly 100 integer points, contain no bonus
-  criteria, and follow the handout's own problem structure. The
-  registry records which mode produced each rubric
+  `default.md` ([course-intake.md](course-intake.md)), its point split
+  taken from the highest-precedence source available (above). Where no
+  source states a split, the intake agent authors one: exactly 100
+  integer points, no bonus criteria, following the handout's own
+  problem structure. The registry records the source
   (`rubric_provenance`, above), and the intake audit table carries the
-  same label with the evidence that no point split exists, so the
-  reviewer knows the split is the
+  same label with the evidence — for an authored split, the evidence
+  that no source states one — so the reviewer knows which parts are the
   agent's judgment. A rubric for anything intake did not cover is
   drafted the same way — with an agent (any interface) from the
-  assignment and reference solution — then
-  reviewed. A rubric freezes at first grading use, and the grader
+  assignment and reference solution — then reviewed. The grader
   checks (reference near full marks, irrelevant near zero) double as a
   sanity check on the rubric itself.
 - Rubrics enumerate academic content only. Administrative

@@ -93,15 +93,44 @@ the rubric's criteria; where the two appear to differ, `rubric.md`
 governs, and the discrepancy is worth noting in your justification.
 
 Judge the submission against what `/app/assignment/` actually asked for,
-using the reference solution as the oracle for correctness — but accept
-mathematically or scientifically equivalent alternative approaches.
-Award partial credit proportionate to demonstrated correct work.
+using the reference solution as the oracle for correctness. Award
+partial credit proportionate to demonstrated correct work.
 
 When `/app/reference_solution/` holds a guidance note instead of a
 worked solution, establish correctness from the rubric, the
 submission's own derivations, and internal consistency checks — and be
 correspondingly more demanding about shown work, since there is nothing
 to compare against.
+
+## Grading policy
+
+These rules hold for every assignment and every rubric. The rubric adds
+what is specific to its own criteria; it never repeats these.
+
+- **Equivalent work earns equal credit.** Accept any mathematically or
+  scientifically equivalent answer: algebraically equal expressions, a
+  correct result left unsimplified, a different but valid derivation,
+  and a consistent alternative convention (a mass-flow rather than a
+  volumetric-flow formulation, say) as long as the submission uses its
+  own choice consistently. Do not require the reference solution's
+  wording, symbols, ordering, or intermediate steps, and do not require
+  a method to be named when the work plainly performs it.
+- **Deduct an originating error once.** When a wrong value or
+  expression carries into later parts, deduct where the error is made,
+  then grade the later parts on the method applied to the submission's
+  own carried-forward value. A new, independent error later is deducted
+  on its own.
+- **One omission, one deduction.** Each missing or wrong element costs
+  points under exactly one criterion — the one whose description covers
+  it — even when several criteria touch the same work.
+- **Award a listed level, never a value between them.** When a
+  criterion lists specific scores, award exactly one of them: the level
+  whose description the submission best matches. Do not interpolate. A
+  criterion that instead states a range or a per-element amount is
+  scored the way it says.
+- **Judge numbers at the precision the work states.** Accept ordinary
+  rounding, and accept values read off a graph within a sensible
+  reading tolerance. Where the rubric states a tolerance, use it.
 
 ## Administrative requirements
 

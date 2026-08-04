@@ -18,9 +18,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .course import load_course
+from .hashing import sha256_file
 
 ENV_VAR = "AAT_DATA_DIR"
 DEFAULT_DIRNAME = "aat-data"
+
+# Superseded rubric versions live here, beside the selectable rubrics.
+# The directory is never presented to a grader and is never selected by
+# name; it exists so a historical result's recorded hash still resolves.
+RUBRIC_ARCHIVE_DIRNAME = "archive"
 
 TOP_LEVEL_DIRS = (
     "raw",
@@ -310,10 +316,45 @@ def reference_solution_dir(root: Path, course_id: str, assignment_id: str) -> Pa
     return directory
 
 
+def rubric_dir(root: Path, course_id: str, assignment_id: str) -> Path:
+    """The assignment's rubric directory; may not exist."""
+    return root / "courses" / course_id / "rubrics" / assignment_id
+
+
 def find_rubric(root: Path, course_id: str, assignment_id: str, name: str) -> Path | None:
-    """Resolve a rubric by name; ``None`` when the assignment has no such rubric."""
-    rubric = root / "courses" / course_id / "rubrics" / assignment_id / f"{name}.md"
+    """Resolve a rubric by name; ``None`` when the assignment has no such rubric.
+
+    The name is the selectable rubric a grading config asks for. It is a
+    label that may advance to new bytes; superseded bytes live under
+    ``archive/`` and are found by hash through
+    :func:`rubric_versions`, never by name.
+    """
+    rubric = rubric_dir(root, course_id, assignment_id) / f"{name}.md"
     return rubric if rubric.is_file() else None
+
+
+def rubric_versions(root: Path, course_id: str, assignment_id: str) -> dict[str, Path]:
+    """Every version of the assignment's rubric, keyed by sha256 of its bytes.
+
+    Covers the selectable rubrics (``<name>.md``) and the superseded
+    versions under ``archive/``. This is how a historical grading result
+    finds the exact rubric it was graded against after ``default`` has
+    advanced: the recorded hash is the authority, the recorded name only
+    a label (docs/data-conventions.md, "Course content contract").
+    Unreadable files are skipped — a version that cannot be read cannot
+    resolve anything.
+    """
+    directory = rubric_dir(root, course_id, assignment_id)
+    versions: dict[str, Path] = {}
+    candidates = sorted(directory.glob("*.md")) + sorted(
+        (directory / RUBRIC_ARCHIVE_DIRNAME).glob("*.md")
+    )
+    for path in candidates:
+        try:
+            versions.setdefault(sha256_file(path), path)
+        except OSError:
+            continue
+    return versions
 
 
 def find_rubric_source(root: Path, course_id: str, assignment_id: str) -> Path | None:

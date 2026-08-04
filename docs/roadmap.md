@@ -26,6 +26,44 @@ and the condition that triggers building it. No dates, no history.
   `tables/<course_id>/gradescope-summaries/` and any LMS grade-export
   CSVs kept beside the raw dumps — so this is retroactively computable
   at any time.
+
+  Two constraints the design must respect when it is built. Human
+  grades are a **diagnostic**, never a target: a systematic gap points
+  at a rubric defect to investigate, and closing it is never the goal,
+  because human application of a rubric carries mistakes, one-off
+  regrade adjustments, and inconsistent strictness that the rubric must
+  not inherit. And the applied scheme's administrative items must be
+  separated out, not summed into the comparison — real exports carry
+  "late submission" deductions and discretionary "point adjustment"
+  awards inside the academic questions, which the toolkit's rubrics
+  deliberately exclude.
+
+  A cheap first slice exists: per-question score exports (Gradescope's
+  `<assignment>_scores.csv`, whose headers carry each question's
+  maximum) give both the applied point structure and every human
+  per-question score without parsing a PDF. That structure is also the
+  evidence a rubric's `applied_scheme` provenance rests on, so
+  extracting it mechanically would let `aat check-course` compare a
+  rubric's maxima against the scheme the course graded by — today that
+  comparison is done by hand at intake review.
+- **Rubric content lints** — flagging administrative language
+  (signatures, names on pages, boxed answers, lateness), scaling or
+  normalization instructions, and prose disclaiming coverage of part of
+  an assignment; if a rubric ships with these defects again despite the
+  intake rules and the grader prompt's administrative override. Held
+  back deliberately: as regular-expression heuristics over prose they
+  would fire on ordinary course vocabulary, and the strongest of them —
+  a declared total checked against the criterion sum — would not have
+  caught the real defects, which were a faithful transcription of the
+  wrong authority and a rubric covering one problem of six. Provenance,
+  coverage review, and the grader prompt address those; a lint would
+  only encode the last incident.
+- **Machine-enforced score levels** — an `allowed_scores` set per
+  criterion, validated by the grading verifier; if graders are observed
+  awarding values off the levels a rubric lists often enough to matter.
+  The rubric states its levels and the grader prompt requires awarding
+  exactly one of them, so the first step is measuring how often that is
+  violated rather than constraining the schema.
 - **Deadline-cutoff selection for submission ingest** — filtering or
   flagging uploads after a per-assignment due date, computable from
   the `submitted_at` timestamps ingest records for Brightspace uploads

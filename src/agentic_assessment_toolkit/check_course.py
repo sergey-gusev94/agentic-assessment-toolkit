@@ -21,8 +21,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import config, data_root
-from .course import Course, CourseError, load_course
+from . import config, data_root, provenance
+from .course import RUBRIC_PROVENANCES, Course, CourseError, load_course
 from .rubric import RubricError, parse_rubric_file
 
 WEIGHT_SUM_TOLERANCE = 0.01
@@ -77,6 +77,7 @@ def check_course(root: Path, course_id: str) -> CourseCheck:
     assignment_ids = _check_assignments(course_dir, course, report)
     _check_registry(course, assignment_ids, report)
     _check_rubrics(course_dir, course, assignment_ids, report)
+    _check_rubric_history(root, course_id, report)
     _check_reference_solutions(course_dir, course, assignment_ids, report)
     _check_syllabus(course_dir, report)
     _check_unexpected_entries(course_dir, report)
@@ -230,6 +231,13 @@ def _check_rubrics(
                     parse_rubric_file(rubric)
                 except RubricError as error:
                     report.violations.append(str(error))
+            archive = entry / data_root.RUBRIC_ARCHIVE_DIRNAME
+            if archive.is_file():
+                report.violations.append(
+                    f"rubrics/{entry.name}/{data_root.RUBRIC_ARCHIVE_DIRNAME} is a file: "
+                    "superseded rubric versions go inside an "
+                    f"{data_root.RUBRIC_ARCHIVE_DIRNAME}/ directory"
+                )
             source = entry / "source"
             if source.is_file():
                 report.violations.append(
@@ -259,21 +267,35 @@ def _check_rubrics(
                     "does not exist"
                 )
             if (
-                assessment.rubric_provenance == "authored"
+                assessment.rubric_provenance not in (None, "professor_rubric")
                 and source.is_dir()
                 and _has_files(source)
             ):
                 report.violations.append(
-                    f"assessment {assessment.id!r} records rubric_provenance 'authored' "
-                    f"but rubrics/{assessment.id}/source/ holds a professor rubric — "
-                    "point evidence existed, so the rubric is transcribed"
+                    f"assessment {assessment.id!r} records rubric_provenance "
+                    f"{assessment.rubric_provenance!r} but rubrics/{assessment.id}/source/ "
+                    "holds the professor's own rubric — that document states the "
+                    "point split, so the provenance is 'professor_rubric'"
                 )
             if has_default and assessment.rubric_provenance is None:
                 report.gaps.append(
                     f"rubrics/{assessment.id}/default.md exists but assessment "
-                    f"{assessment.id!r} records no 'rubric_provenance' "
-                    "(transcribed or authored)"
+                    f"{assessment.id!r} records no 'rubric_provenance' (one of "
+                    f"{', '.join(RUBRIC_PROVENANCES)})"
                 )
+
+
+def _check_rubric_history(root: Path, course_id: str, report: CourseCheck) -> None:
+    """Every rubric version the stored grading results refer to still exists.
+
+    A rubric name may advance to new bytes, but the superseded bytes
+    must stay under ``archive/``: a stored result refers to the version
+    it was graded against by hash, and losing those bytes makes the
+    result unresolvable. Counted as a contract violation, since it
+    breaks the provenance the results tables rely on.
+    """
+    for orphan in provenance.orphaned_rubrics(root, course_id=course_id):
+        report.violations.append(provenance.orphan_message(root, orphan))
 
 
 def _check_reference_solutions(

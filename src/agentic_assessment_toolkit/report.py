@@ -56,6 +56,7 @@ _LADDER_KEYS = (
 
 _ASSIGNMENT_TABLE_COLUMNS = (
     "assignment_id",
+    "rubric",
     "n_solve_trials",
     "n_gradings",
     "mean_base_pct",
@@ -276,7 +277,10 @@ def _benchmark_section(by_assignment: pd.DataFrame, by_course: pd.DataFrame) -> 
         parts.append(
             "Per-assignment means (`n_solve_trials` graded solve trials, "
             "`n_gradings` gradings; `sd_base_pct` is the spread across "
-            "per-solve-trial means):"
+            "per-solve-trial means). `rubric` is the first 8 characters of the "
+            "sha256 of the rubric version graded against — an assignment whose "
+            "rubric was revised appears once per version, never averaged across "
+            "them:"
         )
         parts.append(_markdown_table(subset, columns=_ASSIGNMENT_TABLE_COLUMNS))
         macro = (
@@ -302,6 +306,14 @@ def _benchmark_section(by_assignment: pd.DataFrame, by_course: pd.DataFrame) -> 
             f"assignments — {row['n_assignments_total']} attempted by this solver, "
             f"{row['n_assignments']} with at least one valid grading."
         )
+        if row["n_assignments_mixed_rubric"]:
+            parts.append(
+                f"Left out of the macro-mean: {row['n_assignments_mixed_rubric']} "
+                "assignment(s) graded against more than one rubric version under "
+                "this config, which have no single per-assignment score. Their "
+                "rows are in the table above, one per version; filter the report "
+                "to one version to include them."
+            )
     return parts
 
 
@@ -320,15 +332,17 @@ def _judge_section(judge: pd.DataFrame) -> list[str]:
     )
     parts.append(
         "Rubric fidelity is checked over valid gradings whose criteria rows "
-        "and rubric are both available: the rubric is resolved from the "
-        "course tree, its bytes are verified against the recorded hash, and "
-        "a grading is faithful when its criterion ids, max points, and bonus "
-        "flags exactly match the rubric's. A grading whose rubric is "
-        "missing, changed, or unparseable is counted in `n_rubric_unresolved` "
-        "and left out of `rubric_fidelity_rate`, so the rate is empty when "
-        "no grading could be checked; a grading whose stored "
-        "`grading_result.json` could not be reloaded has no criteria rows "
-        "and is counted by `grading_load_error_rate` instead."
+        "and rubric are both available: the rubric version is resolved from "
+        "the course tree by its recorded hash — across the selectable rubrics "
+        "and the archived versions, so a grading made before the rubric was "
+        "revised still resolves — and a grading is faithful when its criterion "
+        "ids, max points, and bonus flags exactly match that version's. A "
+        "grading whose rubric version is on disk nowhere, or does not parse, "
+        "is counted in `n_rubric_unresolved` and left out of "
+        "`rubric_fidelity_rate`, so the rate is empty when no grading could be "
+        "checked; a grading whose stored `grading_result.json` could not be "
+        "reloaded has no criteria rows and is counted by "
+        "`grading_load_error_rate` instead."
     )
     parts.append(
         "The rate columns differ in denominator: `sums_consistent_rate` is "
@@ -414,7 +428,24 @@ def _ladder_mask(frame: pd.DataFrame, row: pd.Series[Any]) -> pd.Series[bool]:
     return mask
 
 
+def _short_rubric(frame: pd.DataFrame) -> pd.DataFrame:
+    """Render ``rubric_sha256`` as a short ``rubric`` column, for display only.
+
+    The full hash stays in the CSVs, which are what anyone matching a
+    row back to a rubric version uses; a 64-character cell in a Markdown
+    table only hides the numbers beside it.
+    """
+    if "rubric_sha256" not in frame.columns:
+        return frame
+    shortened = frame.copy()
+    shortened["rubric_sha256"] = frame["rubric_sha256"].map(
+        lambda value: pd.NA if pd.isna(value) else str(value)[:8]
+    )
+    return shortened.rename(columns={"rubric_sha256": "rubric"})
+
+
 def _markdown_table(frame: pd.DataFrame, columns: tuple[str, ...] | None = None) -> str:
+    frame = _short_rubric(frame)
     shown = frame if columns is None else frame[list(columns)]
     lines = [
         "| " + " | ".join(str(column) for column in shown.columns) + " |",

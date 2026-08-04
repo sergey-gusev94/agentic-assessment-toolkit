@@ -27,7 +27,7 @@ from . import check_course as check_course_mod
 from . import config as config_mod
 from . import data_root as data_root_mod
 from . import harbor as harbor_mod
-from . import hashing
+from . import hashing, provenance
 from . import ingest as ingest_mod
 from . import intake as intake_mod
 from . import jobs as jobs_mod
@@ -272,6 +272,14 @@ def _run(args: argparse.Namespace) -> int:
             f"config {config.name!r} has stage {config.stage!r}; `aat {args.command}` needs a {stage!r} config"
         )
     config_identity = config_mod.config_identity(config)
+    # The name is a label; the identity is what the results are keyed by,
+    # and it moves whenever the config, prompt, verifier, or task
+    # template bytes change. Printing both means a reader never has to
+    # guess which judge just ran.
+    rubric_note = f", rubric {config.rubric_name!r}" if config.rubric_name is not None else ""
+    print(
+        f"config: {config.name}@{config_identity[:8]} ({config.agent} {config.model}{rubric_note})"
+    )
     jobs_root = root / (SOLVE_JOBS_DIRNAME if stage == "solve" else GRADING_JOBS_DIRNAME)
     done = harbor_mod.done_items(jobs_root, stage)
     if stage == "solve":
@@ -682,7 +690,31 @@ def _plan_grade(
                 ),
             )
         )
+    _require_resolvable_rubric_history(root, sources)
     return planned
+
+
+def _require_resolvable_rubric_history(root: Path, sources: list[_GradeSource]) -> None:
+    """Refuse to grade an assignment whose stored results lost their rubric.
+
+    A rubric name may advance to new bytes; the superseded bytes must
+    stay on disk under ``archive/``, because every stored grading result
+    refers to the version it was graded against by hash
+    (docs/data-conventions.md, "Course content contract"). Checking here
+    means the moment a revision would strand history is the moment it is
+    caught — before another job's results are added to the pile.
+    """
+    orphans = []
+    for course_id, assignment_id in sorted({(s.course_id, s.assignment_id) for s in sources}):
+        orphans.extend(
+            provenance.orphaned_rubrics(root, course_id=course_id, assignment_id=assignment_id)
+        )
+    if orphans:
+        raise CliError(
+            "stored grading results refer to rubric versions that are no longer "
+            "on disk, so those results can no longer be resolved:\n"
+            + "\n".join(f"  - {provenance.orphan_message(root, orphan)}" for orphan in orphans)
+        )
 
 
 def _grade_materializer(

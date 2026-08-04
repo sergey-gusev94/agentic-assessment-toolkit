@@ -29,7 +29,7 @@ def test_fixture_course_loads() -> None:
     assert exam.ai_use_possible is False
     hw1 = course.assessment("HW1")
     assert hw1 is not None
-    assert hw1.rubric_provenance == "transcribed"
+    assert hw1.rubric_provenance == "handout"
     assert exam.rubric_provenance is None
     assert course.assessment("HW9") is None
 

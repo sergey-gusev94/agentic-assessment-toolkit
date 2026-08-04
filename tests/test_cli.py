@@ -7,6 +7,7 @@ import pytest
 
 from agentic_assessment_toolkit import cli
 from agentic_assessment_toolkit import harbor as harbor_mod
+from agentic_assessment_toolkit.data_root import RUBRIC_ARCHIVE_DIRNAME
 from agentic_assessment_toolkit.report import REPORT_FILENAMES
 from tests.conftest import COURSE_ID, build_data_root
 from tests.test_config import GRADE_TOML, SOLVE_TOML, write_config
@@ -985,3 +986,25 @@ def test_init_data_refuses_toolkit_clone(
     repo = make_fake_toolkit_repo(tmp_path)
     assert cli.main(["init-data", "--data-root", str(repo / "data")]) == 2
     assert "inside the toolkit repository" in capsys.readouterr().err
+
+
+def test_grade_refuses_to_orphan_a_superseded_rubric(
+    data_root: Path, grade_config: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Advancing `default` without archiving the old bytes is refused."""
+    args = grade_args(data_root, grade_config, "--course", COURSE_ID, "--materialize-only")
+    assert cli.main(args) == 0  # one grading job now refers to the current bytes
+
+    rubric = data_root / "courses" / COURSE_ID / "rubrics" / "HW1" / "default.md"
+    superseded = rubric.read_bytes()
+    rubric.write_text("# HW1\n\n- `a` (10 points): a corrected split.\n", encoding="utf-8")
+    assert cli.main(args) == 2
+    err = capsys.readouterr().err
+    assert "no longer on disk" in err
+    assert f"{COURSE_ID}/HW1: rubric 'default' version" in err
+
+    # Archiving the superseded bytes under any name restores resolution.
+    archive = rubric.parent / RUBRIC_ARCHIVE_DIRNAME
+    archive.mkdir()
+    (archive / "old.md").write_bytes(superseded)
+    assert cli.main(args) == 0

@@ -32,10 +32,15 @@ ASSESSMENT_SCOPES = (
 # separately whether AI use was physically feasible (an online exam may
 # forbid AI yet not prevent it).
 AI_POLICIES = ("allowed", "not_allowed", "not_applicable")
-# How rubrics/<id>/default.md got its point split: "transcribed" from a
-# split the materials state, "authored" by the intake agent when no
-# materials state one. Set exactly when the rubric exists.
-RUBRIC_PROVENANCES = ("transcribed", "authored")
+# Where rubrics/<id>/default.md got its point split from — the source,
+# not just whether one existed, because a split can be transcribed
+# faithfully from the wrong authority. In precedence order: the scheme
+# the course actually applied (an LMS rubric export or graded-copy
+# summaries), a standalone professor rubric document under
+# rubrics/<id>/source/, the point values printed in the handout or
+# reference solution, and finally a split authored from the assignment
+# when no source states one. Set exactly when the rubric exists.
+RUBRIC_PROVENANCES = ("applied_scheme", "professor_rubric", "handout", "authored")
 
 _KNOWN_COURSE_KEYS = frozenset({"title", "institution", "term", "environment"})
 _KNOWN_ASSESSMENT_KEYS = frozenset(

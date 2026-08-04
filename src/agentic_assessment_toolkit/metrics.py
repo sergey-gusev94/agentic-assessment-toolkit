@@ -38,7 +38,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from .data_root import find_rubric
+from .data_root import find_rubric, rubric_versions
 from .hashing import sha256_file
 
 # One source for the outcome taxonomy: results.py owns the tuple, and
@@ -68,10 +68,21 @@ _LADDER_CONFIG_KEYS = [
     "grading_config_name",
     "grading_config_identity",
 ]
-_ASSIGNMENT_KEYS = [*_LADDER_CONFIG_KEYS, "course_id", "assignment_id"]
+# Every grading table keys on the rubric version as well as the config:
+# a rubric name may advance to new bytes, so two generations of the same
+# assignment can share a config identity, and averaging across them
+# would compare grades to a different point split (docs/design.md,
+# "Results, statistics, and reporting").
+_ASSIGNMENT_KEYS = [*_LADDER_CONFIG_KEYS, "course_id", "assignment_id", "rubric_sha256"]
 _COURSE_KEYS = [*_LADDER_CONFIG_KEYS, "course_id"]
-_STUDENT_KEYS = [*_CONFIG_KEYS, "course_id", "assignment_id", "student_id"]
-_CLASS_KEYS = [*_CONFIG_KEYS, "course_id", "assignment_id"]
+_STUDENT_KEYS = [
+    *_CONFIG_KEYS,
+    "course_id",
+    "assignment_id",
+    "rubric_sha256",
+    "student_id",
+]
+_CLASS_KEYS = [*_CONFIG_KEYS, "course_id", "assignment_id", "rubric_sha256"]
 _FAILURE_GROUP_KEYS = ["stage", *_CONFIG_KEYS]
 _FAILURE_KEYS = [*_FAILURE_GROUP_KEYS, "outcome"]
 _POOLING_KEY = ["item_id", "item_identity"]
@@ -100,6 +111,7 @@ _ASSIGNMENT_DTYPES: dict[str, str] = {
 _COURSE_DTYPES: dict[str, str] = {
     **dict.fromkeys(_COURSE_KEYS, "string"),
     "n_assignments": "int64",
+    "n_assignments_mixed_rubric": "int64",
     "n_assignments_total": "int64",
     "macro_mean_base_pct": "Float64",
     "macro_mean_score_pct": "Float64",
@@ -235,6 +247,14 @@ def grades_by_course(trials: pd.DataFrame, *, seed: int = DEFAULT_SEED) -> pd.Da
     ``mean_base_pct`` values, NA below ``MIN_BOOTSTRAP_CLUSTERS``
     assignments. One rng is seeded once and the groups are processed in
     sorted key order, so the output is deterministic for a given seed.
+
+    An assignment graded against more than one rubric version under this
+    config has no single per-assignment score, so it contributes none:
+    it is left out of the macro-mean and counted in
+    ``n_assignments_mixed_rubric``. Averaging the versions would compare
+    scores measured against different point splits; dropping them
+    silently would hide it. Filter the report to one rubric version to
+    bring such an assignment back in.
     """
     per_assignment = grades_by_assignment(trials)
     solve = trials[_stage_mask(trials, "solve")]
@@ -242,6 +262,10 @@ def grades_by_course(trials: pd.DataFrame, *, seed: int = DEFAULT_SEED) -> pd.Da
     rows: list[dict[str, object]] = []
     for key, group in per_assignment.groupby(_COURSE_KEYS, dropna=False, sort=True):
         row: dict[str, object] = dict(zip(_COURSE_KEYS, key, strict=True))
+        versions = group.groupby("assignment_id", dropna=False)["rubric_sha256"].transform("size")
+        mixed_ids = group.loc[versions > 1, "assignment_id"]
+        n_mixed = int(mixed_ids.nunique())
+        group = group[versions == 1]
         n_assignments = len(group)
         # Coverage denominator: distinct assignments with at least one
         # solve trial under this solver config identity — never below
@@ -253,7 +277,7 @@ def grades_by_course(trials: pd.DataFrame, *, seed: int = DEFAULT_SEED) -> pd.Da
             (solve["config_identity"] == row["solver_config_identity"]).fillna(False)
             & (solve["course_id"] == row["course_id"]).fillna(False)
         ]
-        n_total = max(int(matching["assignment_id"].nunique()), n_assignments)
+        n_total = max(int(matching["assignment_id"].nunique()), n_assignments + n_mixed)
         ci_low: float | None = None
         ci_high: float | None = None
         if n_assignments >= MIN_BOOTSTRAP_CLUSTERS:
@@ -262,6 +286,7 @@ def grades_by_course(trials: pd.DataFrame, *, seed: int = DEFAULT_SEED) -> pd.Da
         row.update(
             {
                 "n_assignments": n_assignments,
+                "n_assignments_mixed_rubric": n_mixed,
                 "n_assignments_total": n_total,
                 "macro_mean_base_pct": _mean(group["mean_base_pct"]),
                 "macro_mean_score_pct": _mean(group["mean_score_pct"]),
@@ -279,13 +304,14 @@ def judge_quality(trials: pd.DataFrame, criteria: pd.DataFrame, *, data_root: Pa
     Repeat stability pools valid gradings by item; per-criterion
     agreement compares criterion ids shared by both trials of each
     unordered pair of a repeated item's gradings. Rubric fidelity
-    resolves each row's rubric from the course tree in ``data_root``,
-    verifies the file's bytes against the recorded ``rubric_sha256``,
-    and compares the criterion id set, per-id max points, and per-id
-    bonus flags — titles and the points awarded never enter fidelity. A
-    missing, hash-mismatched, or unparseable rubric makes the trial
-    unresolvable: excluded from the rate, counted in
-    ``n_rubric_unresolved``.
+    resolves each row's rubric from the course tree in ``data_root`` by
+    its recorded ``rubric_sha256`` — across the selectable rubrics and
+    the archived versions, so a trial graded before ``default`` advanced
+    still resolves — and compares the criterion id set, per-id max
+    points, and per-id bonus flags; titles and the points awarded never
+    enter fidelity. A rubric version that is on disk nowhere, or that
+    does not parse, makes the trial unresolvable: excluded from the
+    rate, counted in ``n_rubric_unresolved``.
     """
     points_by_trial, shape_by_trial = _criteria_maps(criteria)
     rubric_cache: dict[Path, tuple[str | None, dict[str, tuple[float, bool]] | None]] = {}
@@ -553,26 +579,37 @@ def _resolved_rubric_shape(
 ) -> dict[str, tuple[float, bool]] | None:
     """The trial's rubric as an id -> (max points, bonus) map, or None.
 
-    None means the trial is unresolvable: a lineage field is missing,
-    the rubric file is missing or unparseable, or its bytes do not hash
-    to the recorded ``rubric_sha256`` (a rubric freezes at first use, so
-    a mismatch means this file is not the rubric the trial was graded
-    against).
+    Resolution is by hash, not by name: the recorded ``rubric_sha256``
+    is what the trial was graded against, while the recorded name is a
+    label that may since have advanced to different bytes. The named
+    file is tried first because it is the usual answer and costs one
+    hash; otherwise every version of that assignment's rubric —
+    selectable and archived — is searched for the recorded hash.
+
+    None means the trial is unresolvable: a lineage field is missing, no
+    version with that hash is on disk, or the resolved version does not
+    parse.
     """
     fields = (course_id, assignment_id, rubric_name, rubric_sha256)
     if any(pd.isna(field) for field in fields):
         return None
-    # The course-tree layout is owned by data_root.find_rubric; None
-    # means the rubric file does not exist.
+    # The course-tree layout is owned by data_root; None means no file
+    # of that name exists.
     path = find_rubric(data_root, str(course_id), str(assignment_id), str(rubric_name))
-    if path is None:
+    if path is not None:
+        if path not in cache:
+            cache[path] = _read_rubric_shape(path)
+        digest, shape = cache[path]
+        if digest == rubric_sha256:
+            return shape
+    archived = rubric_versions(data_root, str(course_id), str(assignment_id)).get(
+        str(rubric_sha256)
+    )
+    if archived is None:
         return None
-    if path not in cache:
-        cache[path] = _read_rubric_shape(path)
-    digest, shape = cache[path]
-    if digest != rubric_sha256:
-        return None
-    return shape
+    if archived not in cache:
+        cache[archived] = _read_rubric_shape(archived)
+    return cache[archived][1]
 
 
 def _read_rubric_shape(path: Path) -> tuple[str | None, dict[str, tuple[float, bool]] | None]:

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from agentic_assessment_toolkit import cli
 from agentic_assessment_toolkit.check_course import check_course, format_report
-from agentic_assessment_toolkit.data_root import DataRootError
+from agentic_assessment_toolkit.data_root import RUBRIC_ARCHIVE_DIRNAME, DataRootError
+from agentic_assessment_toolkit.hashing import sha256_file
 from tests.conftest import COURSE_ID
 
 COURSE_TOML = "courses/" + COURSE_ID + "/course.toml"
@@ -229,6 +231,15 @@ def test_empty_rubric_source_is_a_violation(data_root: Path) -> None:
     source.mkdir()
     assert any("rubrics/HW1/source is empty" in v for v in violations(data_root))
     (source / "rubric.pdf").write_text("professor rubric\n", encoding="utf-8")
+    # A professor rubric document states the split, so the provenance
+    # names it as the source; the fixture's "handout" no longer holds.
+    toml_path = course_dir(data_root) / "course.toml"
+    toml_path.write_text(
+        toml_path.read_text(encoding="utf-8").replace(
+            'rubric_provenance = "handout"', 'rubric_provenance = "professor_rubric"'
+        ),
+        encoding="utf-8",
+    )
     assert check_course(data_root, COURSE_ID).ok
 
 
@@ -242,7 +253,7 @@ def test_provenance_without_a_rubric_is_a_violation(data_root: Path) -> None:
     # HW2 has no rubric in the fixture; claiming one is a contradiction.
     toml_path = course_dir(data_root) / "course.toml"
     text = toml_path.read_text(encoding="utf-8").replace(
-        'id = "HW2"', 'id = "HW2"\nrubric_provenance = "transcribed"'
+        'id = "HW2"', 'id = "HW2"\nrubric_provenance = "handout"'
     )
     toml_path.write_text(text, encoding="utf-8")
     assert any(
@@ -251,10 +262,10 @@ def test_provenance_without_a_rubric_is_a_violation(data_root: Path) -> None:
     )
 
 
-def test_authored_provenance_with_a_professor_rubric_is_a_violation(data_root: Path) -> None:
+def test_non_professor_provenance_with_a_professor_rubric_is_a_violation(data_root: Path) -> None:
     toml_path = course_dir(data_root) / "course.toml"
     text = toml_path.read_text(encoding="utf-8").replace(
-        'rubric_provenance = "transcribed"', 'rubric_provenance = "authored"'
+        'rubric_provenance = "handout"', 'rubric_provenance = "authored"'
     )
     toml_path.write_text(text, encoding="utf-8")
     source = course_dir(data_root) / "rubrics" / "HW1" / "source"
@@ -268,7 +279,7 @@ def test_authored_provenance_with_a_professor_rubric_is_a_violation(data_root: P
 
 def test_rubric_without_provenance_is_a_gap(data_root: Path) -> None:
     toml_path = course_dir(data_root) / "course.toml"
-    text = toml_path.read_text(encoding="utf-8").replace('rubric_provenance = "transcribed"\n', "")
+    text = toml_path.read_text(encoding="utf-8").replace('rubric_provenance = "handout"\n', "")
     toml_path.write_text(text, encoding="utf-8")
     report = check_course(data_root, COURSE_ID)
     assert report.ok
@@ -276,3 +287,60 @@ def test_rubric_without_provenance_is_a_gap(data_root: Path) -> None:
         "rubrics/HW1/default.md exists" in gap and "no 'rubric_provenance'" in gap
         for gap in report.gaps
     )
+
+
+def test_orphaned_rubric_version_is_a_violation(data_root: Path) -> None:
+    """A stored result whose rubric version is gone breaks provenance."""
+    job_dir = data_root / "grading" / "20260101T000000Z__grader__abcdef12"
+    job_dir.mkdir(parents=True)
+    (job_dir / "aat-run.json").write_text(
+        json.dumps(
+            {
+                "stage": "grade",
+                "config": {"name": "grader", "rubric": "default"},
+                "items": [
+                    {
+                        "item_id": f"{COURSE_ID}/stu1/HW1",
+                        "course_id": COURSE_ID,
+                        "assignment_id": "HW1",
+                        "input_hashes": {"rubric": "0" * 64},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert any(
+        "version 00000000 is referenced by" in v and "exists nowhere" in v
+        for v in violations(data_root)
+    )
+
+
+def test_an_archived_rubric_version_resolves(data_root: Path) -> None:
+    """Archiving the superseded bytes clears the violation."""
+    rubric = course_dir(data_root) / "rubrics" / "HW1" / "default.md"
+    digest = sha256_file(rubric)
+    job_dir = data_root / "grading" / "20260101T000000Z__grader__abcdef12"
+    job_dir.mkdir(parents=True)
+    (job_dir / "aat-run.json").write_text(
+        json.dumps(
+            {
+                "stage": "grade",
+                "config": {"name": "grader", "rubric": "default"},
+                "items": [
+                    {
+                        "item_id": f"{COURSE_ID}/stu1/HW1",
+                        "course_id": COURSE_ID,
+                        "assignment_id": "HW1",
+                        "input_hashes": {"rubric": digest},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    archive = rubric.parent / RUBRIC_ARCHIVE_DIRNAME
+    archive.mkdir()
+    (archive / f"{digest[:8]}.md").write_bytes(rubric.read_bytes())
+    rubric.write_text("# HW1\n\n- `a` (10 points): a corrected split.\n", encoding="utf-8")
+    assert check_course(data_root, COURSE_ID).ok

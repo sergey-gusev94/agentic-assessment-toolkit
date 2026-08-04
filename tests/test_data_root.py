@@ -8,6 +8,7 @@ import pytest
 from agentic_assessment_toolkit.data_root import (
     DEFAULT_DIRNAME,
     ENV_VAR,
+    RUBRIC_ARCHIVE_DIRNAME,
     TOP_LEVEL_DIRS,
     DataRootError,
     find_rubric,
@@ -17,7 +18,9 @@ from agentic_assessment_toolkit.data_root import (
     list_student_submissions,
     reference_solution_dir,
     resolve_data_root,
+    rubric_versions,
 )
+from agentic_assessment_toolkit.hashing import sha256_file
 from tests.conftest import COURSE_ID
 
 
@@ -129,6 +132,23 @@ def test_reference_solution_and_rubric_resolution(data_root: Path) -> None:
     assert rubric is not None and rubric.name == "default.md"
     assert find_rubric(data_root, COURSE_ID, "HW2", "default") is None
     assert find_rubric(data_root, COURSE_ID, "HW1", "strict-v2") is None
+
+
+def test_rubric_versions_cover_the_selectable_and_archived_bytes(data_root: Path) -> None:
+    """A superseded version resolves by hash after `default` advances."""
+    rubric = data_root / "courses" / COURSE_ID / "rubrics" / "HW1" / "default.md"
+    old_sha = sha256_file(rubric)
+    archive = rubric.parent / RUBRIC_ARCHIVE_DIRNAME
+    archive.mkdir()
+    (archive / f"{old_sha[:8]}.md").write_bytes(rubric.read_bytes())
+    rubric.write_text("# HW1\n\n- `a` (10 points): corrected split.\n", encoding="utf-8")
+    new_sha = sha256_file(rubric)
+
+    versions = rubric_versions(data_root, COURSE_ID, "HW1")
+    assert versions[new_sha] == rubric
+    assert versions[old_sha] == archive / f"{old_sha[:8]}.md"
+    # An assignment with no rubric directory has no versions, not an error.
+    assert rubric_versions(data_root, COURSE_ID, "HW2") == {}
 
 
 def test_list_student_submissions(data_root: Path) -> None:
