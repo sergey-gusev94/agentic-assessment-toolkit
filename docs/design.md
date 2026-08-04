@@ -536,6 +536,24 @@ rather than a per-trial network dependency. The output contract requires documen
 source, never compiled PDFs, so no image needs TeX and there is no
 `latex` flavor ([roadmap.md](roadmap.md)).
 
+A task's Dockerfile does not embed its flavor template. Instead the
+template is built once per launch as a shared local base image named
+`aat-env-<flavor>:<template-content-hash>`, and each task's generated
+Dockerfile starts `FROM` that name with only the task's `COPY` lines
+on top. The name exists in no registry namespace, so per-task builds
+resolve entirely locally — without this, every trial's build
+re-resolved the template's public base tag against its registry, and
+a transient registry failure or throttle failed trials mid-run. The
+launch-time base build is the one build that still reaches a registry;
+`aat` runs it before starting Harbor, retries it with backoff, and
+skips it when the image already exists locally. The content-hash tag
+means a template edit yields a fresh name and a stale image is never
+reused, and the template bytes enter per-item identity exactly as
+before. Each task directory keeps its template verbatim as
+`environment/base.Dockerfile`, so the image a task ran on can always
+be rebuilt from the task directory alone; `--materialize-only` prints
+the required base image name, since Harbor is then launched by hand.
+
 Images pin their Python package versions; base images are not
 digest-pinned ([roadmap.md](roadmap.md)). Solver licenses (Gurobi WLS) are
 credentials: never baked into images, never committed, always injected
@@ -674,11 +692,20 @@ grading trials remain on disk as explicit outcomes. The doneness
 check fails closed: a job whose recorded stage does not match the
 requested stage contributes nothing.
 
-Harbor-level retries stay at Harbor's default of zero: Harbor retries
-overwrite the failed attempt in place, which would erase the
-per-attempt history that explicit failure accounting depends on.
-Re-running an `aat` command is the retry mechanism, and it accumulates
-trials rather than overwriting them.
+Harbor-level retries are enabled for infrastructure failures only. The
+generated job config sets a retry policy — up to three retries per
+trial, waiting 10 s, 60 s, then 300 s — whose include list names
+exactly the two exception types Harbor raises when a trial's
+environment never came up: `RuntimeError` (Docker command failures,
+which is how transient image-registry errors surfaced in practice) and
+`EnvironmentStartTimeoutError`. Such an attempt holds no measurement,
+so nothing is lost when Harbor erases the failed attempt's directory
+and reruns it in place. Every outcome-bearing failure — agent
+timeouts, refusals, an invalid grading result — is outside the
+include list and is never retried, because Harbor's in-place retry
+would erase the per-attempt history that explicit failure accounting
+depends on. For those, re-running the `aat` command is the retry
+mechanism, and it accumulates trials rather than overwriting them.
 
 ### Results, statistics, and reporting
 
@@ -888,6 +915,8 @@ src/agentic_assessment_toolkit/
 │   │                      #   Dockerfile/test-runner emission)
 │   ├── solve.py           # assignment → Harbor solve task
 │   └── grading.py         # submission → Harbor grading task
+├── base_images.py         # shared per-flavor base images: naming,
+│                          #   launch-time build with retries
 ├── jobs.py                # pinned job-config emission
 ├── harbor.py              # harbor command construction,
 │                          #   subprocess invocation, run record
@@ -1023,7 +1052,13 @@ item with the exact scoped rerun command; because failed items are
 exactly the not-done ones, the rerun is incremental and needs no
 `--force`. The command exits nonzero when any requested item failed,
 even though Harbor exits zero whenever the job itself finishes: a
-partially failed run must fail loudly in scripts. `grade --from-solve`
+partially failed run must fail loudly in scripts. With `--repeats N`
+an item can succeed while losing trials — graded, but on fewer
+samples than requested — so the summary also names each such
+incomplete item with its trial count, and the command exits nonzero
+for it too. Incomplete items are done, so a plain rerun skips them;
+the summary says that topping up takes `--force`, which adds trials
+to every item in scope. `grade --from-solve`
 reports every in-scope solve trial it skips (a failed solve, or a
 verified trial with an empty submission artifact) and warns, with the
 scoped `aat solve` rerun command, for each assignment left with no

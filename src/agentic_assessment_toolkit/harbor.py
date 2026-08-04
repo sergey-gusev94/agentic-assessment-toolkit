@@ -240,16 +240,29 @@ def is_graded_trial(result: dict[str, object]) -> bool:
     return isinstance(rewards, dict) and "base_pct" in rewards
 
 
-def verified_task_names(
+def done_trial_counts(
     job_dir: Path, check: Callable[[dict[str, object]], bool] = is_verified_trial
-) -> set[str]:
-    names = set()
+) -> dict[str, int]:
+    """How many of each task's trials pass ``check`` in one job directory.
+
+    With ``--repeats N`` a task has N trials in its job; the count is
+    what tells a fully sampled item apart from one that lost trials to
+    failures, which the run summary must report (docs/design.md, "Run
+    records and idempotence").
+    """
+    counts: dict[str, int] = {}
     for _, result in trial_results(job_dir):
         if check(result):
             task_name = result.get("task_name")
             if isinstance(task_name, str):
-                names.add(task_name)
-    return names
+                counts[task_name] = counts.get(task_name, 0) + 1
+    return counts
+
+
+def verified_task_names(
+    job_dir: Path, check: Callable[[dict[str, object]], bool] = is_verified_trial
+) -> set[str]:
+    return set(done_trial_counts(job_dir, check))
 
 
 def _record_items(record: dict[str, object]) -> list[dict[str, object]]:

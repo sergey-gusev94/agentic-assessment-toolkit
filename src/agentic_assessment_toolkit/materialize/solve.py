@@ -46,11 +46,7 @@ def materialize_solve_task(
     (task_dir / "task.toml").write_text(config.rendered_task_toml("solve"), encoding="utf-8")
 
     environment_template = config.environment_path(environment_flavor)
-    _common.write_dockerfile(
-        task_dir,
-        environment_template.read_bytes(),
-        ["COPY assignment /app/assignment"],
-    )
+    _common.write_dockerfile(task_dir, environment_flavor, ["COPY assignment /app/assignment"])
     _common.copy_tree(assignment_dir, task_dir / "environment" / "assignment")
 
     _common.write_test_runner(task_dir, "solve_verifier.py")

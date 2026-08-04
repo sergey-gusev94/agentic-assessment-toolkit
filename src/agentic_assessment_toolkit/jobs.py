@@ -19,6 +19,25 @@ DEFAULT_MAX_CONCURRENT_TRIALS = 8
 
 GUROBI_LICENSE_CONTAINER_PATH = "/opt/gurobi/gurobi.lic"
 
+# Trial retry policy for infrastructure failures (docs/design.md, "Run
+# records and idempotence"). The include list limits retries to the two
+# exception types Harbor raises when the trial's environment never came
+# up — Docker command failures surface as RuntimeError, environment
+# build timeouts as EnvironmentStartTimeoutError — so a retried attempt
+# never held a measurement. Harbor erases the failed attempt and reruns
+# it in place, which is why outcome-bearing failures (agent timeouts,
+# refusals, invalid grading output) must never enter this list; they
+# stay handled by re-running the aat command, which accumulates trials.
+# Backoff waits 10 s, then 60 s, then 300 s (capped) — sized for the
+# registry and network blips observed to last seconds to a few minutes.
+HARBOR_RETRY_POLICY: dict[str, object] = {
+    "max_retries": 3,
+    "include_exceptions": ["EnvironmentStartTimeoutError", "RuntimeError"],
+    "min_wait_sec": 10.0,
+    "wait_multiplier": 6.0,
+    "max_wait_sec": 300.0,
+}
+
 
 def agent_kwargs(config: ExperimentConfig) -> dict[str, str]:
     kwargs: dict[str, str] = {}
@@ -58,6 +77,7 @@ def build_harbor_job_config(
         "job_name": job_dir.name,
         "n_attempts": repeats,
         "n_concurrent_trials": max_concurrent_trials,
+        "retry": HARBOR_RETRY_POLICY,
         "agents": [agent],
         "tasks": [{"path": str(task_dir)} for task_dir in task_dirs],
     }

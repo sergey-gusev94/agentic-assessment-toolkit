@@ -23,6 +23,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import base_images as base_images_mod
 from . import check_course as check_course_mod
 from . import config as config_mod
 from . import data_root as data_root_mod
@@ -34,6 +35,7 @@ from . import jobs as jobs_mod
 from . import metrics as metrics_mod
 from . import report as report_mod
 from . import rubric as rubric_mod
+from .base_images import BaseImageError
 from .config import ConfigError, ExperimentConfig, Stage
 from .course import CourseError
 from .data_root import DataRootError
@@ -56,6 +58,7 @@ class _PlannedItem:
     item_id: str
     item_identity: str
     done: bool
+    environment_flavor: str
     materialize: Callable[[Path], harbor_mod.RunRecordItem]
 
 
@@ -63,7 +66,14 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
         return _run(args)
-    except (CliError, ConfigError, CourseError, DataRootError, MaterializeError) as error:
+    except (
+        BaseImageError,
+        CliError,
+        ConfigError,
+        CourseError,
+        DataRootError,
+        MaterializeError,
+    ) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
@@ -584,6 +594,7 @@ def _plan_solve(
                     item_id=assignment.item_id,
                     item_identity=identity,
                     done=(assignment.item_id, identity) in done,
+                    environment_flavor=assignment.environment_flavor,
                     materialize=_solve_materializer(assignment, config, identity),
                 )
             )
@@ -685,6 +696,7 @@ def _plan_grade(
                 item_id=source.item_id,
                 item_identity=identity,
                 done=(source.item_id, identity) in done,
+                environment_flavor=config_mod.GRADING_FLAVOR,
                 materialize=_grade_materializer(
                     source, assignment, reference, rubric, rubric_source, config, identity
                 ),
@@ -987,9 +999,17 @@ def _execute(
     print(f"max concurrent trials: {args.max_concurrent_trials}")
     if gurobi_license_file is not None:
         print(f"Gurobi license: read-only mount from {gurobi_license_file}")
+    flavors = sorted({item.environment_flavor for item in to_run})
     if args.materialize_only:
+        for flavor in flavors:
+            print(
+                f"base image {base_images_mod.base_image_reference(flavor)} is built "
+                "when aat launches harbor; a manual run must build it first from any "
+                "task's environment/base.Dockerfile"
+            )
         print(f"materialize-only; harbor not invoked. command: {shlex.join(command)}")
         return 0
+    base_images_mod.ensure_base_images(flavors)
     print(f"launching: {shlex.join(command)}")
     harbor_status = harbor_mod.invoke_harbor(command)
     failed = _report_run_summary(stage, job_dir, record_items, args)
@@ -1014,10 +1034,22 @@ def _report_run_summary(
     of its trials passes the stage's doneness check (verified for solve,
     a valid grading for grade), so failed items are exactly the not-done
     ones and rerunning is incremental — no ``--force`` needed.
+
+    Succeeding is not the whole request: with ``--repeats N`` an item
+    can succeed on fewer than N trials, silently thinning its
+    statistics. Such items are named with their trial count and counted
+    into the returned failure total — the run did not deliver what was
+    asked — but they are done, so a plain rerun skips them; topping up
+    takes ``--force``, which adds trials to every item in scope.
     """
     check = harbor_mod.is_graded_trial if stage == "grade" else harbor_mod.is_verified_trial
-    passed = harbor_mod.verified_task_names(job_dir, check)
-    failed = [item for item in record_items if item.task_dir_name not in passed]
+    counts = harbor_mod.done_trial_counts(job_dir, check)
+    failed = [item for item in record_items if item.task_dir_name not in counts]
+    incomplete = [
+        (item, counts[item.task_dir_name])
+        for item in record_items
+        if 0 < counts.get(item.task_dir_name, 0) < args.repeats
+    ]
     succeeded_label = "graded" if stage == "grade" else "verified"
     print(
         f"run summary: {len(record_items)} item(s) requested, "
@@ -1035,7 +1067,17 @@ def _report_run_summary(
                 command += ["--from-solve", from_solve]
             command += ["--course", course_id, "--assignment", assignment_id]
             print(f"  rerun: {shlex.join(command)}")
-    return len(failed)
+    for item, count in incomplete:
+        print(
+            f"  incomplete: {item.course_id}/{item.assignment_id} ({item.item_id}): "
+            f"{count} of {args.repeats} trial(s) {succeeded_label}"
+        )
+    if incomplete:
+        print(
+            "  note: incomplete items are done, so a plain rerun skips them; "
+            "--force --repeats N adds N trials to every item in scope"
+        )
+    return len(failed) + len(incomplete)
 
 
 if __name__ == "__main__":

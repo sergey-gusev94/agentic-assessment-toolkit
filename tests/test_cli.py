@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from agentic_assessment_toolkit import base_images as base_images_mod
 from agentic_assessment_toolkit import cli
 from agentic_assessment_toolkit import harbor as harbor_mod
 from agentic_assessment_toolkit.data_root import RUBRIC_ARCHIVE_DIRNAME
@@ -29,6 +30,19 @@ def no_harbor_invocation(monkeypatch: pytest.MonkeyPatch) -> None:
     # subprocess the harbor binary, so it is stubbed too.
     monkeypatch.setattr(harbor_mod, "invoke_harbor", refuse)
     monkeypatch.setattr(harbor_mod, "cli_harbor_version", lambda: "0.20.0-test")
+
+
+@pytest.fixture(autouse=True)
+def base_image_calls(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """Repository tests never run docker: base-image preparation is
+    recorded, not performed (its mechanics live in test_base_images.py)."""
+    calls: list[list[str]] = []
+
+    def record(flavors: list[str]) -> None:
+        calls.append(sorted(set(flavors)))
+
+    monkeypatch.setattr(base_images_mod, "ensure_base_images", record)
+    return calls
 
 
 @pytest.fixture
@@ -116,6 +130,8 @@ def test_solve_materialize_only_writes_job_dir(
     assert record["command"] == ["harbor", "run", "-c", str(job_dir / "harbor-job.json"), "--yes"]
     out = capsys.readouterr().out
     assert "materialize-only" in out
+    # The base image is named for a later manual run, never built here.
+    assert "base image aat-env-scientific-python:" in out
 
 
 def test_solve_mounts_explicit_gurobi_license(
@@ -527,6 +543,57 @@ def test_run_summary_names_failures_and_exits_nonzero(
     assert "run summary: 2 item(s) requested, 1 verified, 1 failed" in out
     assert f"failed: {COURSE_ID}/HW2" in out
     assert f"rerun: aat solve --config {solve_config} --course {COURSE_ID} --assignment HW2" in out
+
+
+def test_run_summary_reports_incomplete_repeats(
+    data_root: Path,
+    solve_config: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fake_invoke(_command: list[str]) -> int:
+        job_dir = job_dirs(data_root, "solving")[0]
+        record = json.loads((job_dir / "aat-run.json").read_text(encoding="utf-8"))
+        tasks = {item["assignment_id"]: item["task_dir_name"] for item in record["items"]}
+        write_trial(job_dir, "hw1__ok11111", task_name=tasks["HW1"])
+        write_trial(job_dir, "hw1__ok22222", task_name=tasks["HW1"])
+        write_trial(job_dir, "hw2__ok11111", task_name=tasks["HW2"])
+        write_trial(job_dir, "hw2__bad2222", task_name=tasks["HW2"], verified=False)
+        return 0
+
+    monkeypatch.setattr(harbor_mod, "invoke_harbor", fake_invoke)
+    exit_code = cli.main(
+        solve_args(data_root, solve_config, "--course", COURSE_ID, "--repeats", "2")
+    )
+    # HW2 verified — it is done and a plain rerun skips it — but it lost
+    # one of its two requested trials, so the run must not exit clean.
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert "run summary: 2 item(s) requested, 2 verified, 0 failed" in out
+    assert f"incomplete: {COURSE_ID}/HW2 ({COURSE_ID}/HW2): 1 of 2 trial(s) verified" in out
+    assert f"incomplete: {COURSE_ID}/HW1" not in out
+    assert "--force --repeats N adds N trials" in out
+
+
+def test_launch_prepares_base_images_before_harbor(
+    data_root: Path, solve_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[object] = []
+    monkeypatch.setattr(
+        base_images_mod,
+        "ensure_base_images",
+        lambda flavors: events.append(sorted(set(flavors))),
+    )
+
+    def fake_invoke(_command: list[str]) -> int:
+        events.append("harbor")
+        return 0
+
+    monkeypatch.setattr(harbor_mod, "invoke_harbor", fake_invoke)
+    cli.main(solve_args(data_root, solve_config, "--course", COURSE_ID))
+    # One preparation call covers every selected flavor, and it happens
+    # first: a trial cannot build FROM a base image that does not exist.
+    assert events == [["data-science", "scientific-python"], "harbor"]
 
 
 def test_configuration_change_rerun_is_explained(

@@ -32,6 +32,13 @@ def test_job_config_shape(tmp_path: Path) -> None:
         "job_name": "20260731T000000Z__codex-high__cccccccc",
         "n_attempts": 3,
         "n_concurrent_trials": 5,
+        "retry": {
+            "max_retries": 3,
+            "include_exceptions": ["EnvironmentStartTimeoutError", "RuntimeError"],
+            "min_wait_sec": 10.0,
+            "wait_multiplier": 6.0,
+            "max_wait_sec": 300.0,
+        },
         "agents": [
             {
                 "name": "codex",

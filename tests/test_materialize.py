@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from agentic_assessment_toolkit.base_images import base_image_reference
+from agentic_assessment_toolkit.config import environment_path
 from agentic_assessment_toolkit.materialize._common import MaterializeError, slugify, task_dir_name
 from agentic_assessment_toolkit.materialize.grading import materialize_grading_task
 from agentic_assessment_toolkit.materialize.solve import materialize_solve_task
@@ -102,6 +104,11 @@ def test_solve_task_structure(tmp_path: Path) -> None:
     assert 'network_mode = "public"' in task_toml
     dockerfile = (task_dir / "environment" / "Dockerfile").read_text(encoding="utf-8")
     assert dockerfile.endswith("COPY assignment /app/assignment\n")
+    # The Dockerfile builds FROM the flavor's shared base image, and the
+    # task carries the base recipe verbatim (docs/design.md).
+    assert f"FROM {base_image_reference('scientific-python')}\n" in dockerfile
+    base = (task_dir / "environment" / "base.Dockerfile").read_bytes()
+    assert base == environment_path("scientific-python").read_bytes()
     assert (task_dir / "environment" / "assignment" / "statement.md").is_file()
     assert (task_dir / "tests" / "solve_verifier.py").is_file()
     assert (task_dir / "tests" / "input_manifest.json").is_file()
@@ -125,6 +132,9 @@ def test_grading_task_structure(tmp_path: Path) -> None:
     dockerfile = (task_dir / "environment" / "Dockerfile").read_text(encoding="utf-8")
     assert "COPY assignment /app/assignment" in dockerfile
     assert "COPY rubric.md /app/rubric.md" in dockerfile
+    assert f"FROM {base_image_reference('grading')}\n" in dockerfile
+    base = (task_dir / "environment" / "base.Dockerfile").read_bytes()
+    assert base == environment_path("grading").read_bytes()
     assert (task_dir / "environment" / "assignment" / "statement.md").is_file()
     assert (task_dir / "environment" / "rubric.md").is_file()
     assert set(task.input_hashes) == {

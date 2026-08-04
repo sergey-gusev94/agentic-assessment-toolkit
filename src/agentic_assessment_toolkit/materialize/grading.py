@@ -66,7 +66,7 @@ def materialize_grading_task(
     ]
     if rubric_source_dir is not None:
         copy_lines.append("COPY rubric_source /app/rubric_source")
-    _common.write_dockerfile(task_dir, environment_template.read_bytes(), copy_lines)
+    _common.write_dockerfile(task_dir, config.GRADING_FLAVOR, copy_lines)
 
     environment_dir = task_dir / "environment"
     _common.copy_tree(assignment_dir, environment_dir / "assignment")
