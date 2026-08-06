@@ -33,7 +33,7 @@ GRADING_FLAVOR = "grading"
 # identity via rendered_task_toml().
 STAGE_TASK_SETTINGS: dict[Stage, tuple[str, float]] = {
     "solve": ("/app/submission", 3600.0),
-    "grade": ("/app/grading_output", 1800.0),
+    "grade": ("/app/grading_output", 3600.0),
 }
 
 # Keeps importlib.resources-provided paths alive for the process lifetime

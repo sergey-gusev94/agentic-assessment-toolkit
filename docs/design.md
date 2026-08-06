@@ -449,6 +449,11 @@ course content: agent, model, reasoning effort, solver or grader prompt
 template name, rubric name, and agent-argument passthrough. Selection
 and mechanics never appear in configs (see CLI design).
 
+Materialized solve and grading tasks each give the agent 3,600 seconds.
+They give environment startup 1,800 seconds and verification 600
+seconds. Harbor applies these as separate phase limits, not as one
+whole-trial deadline.
+
 The config identity is `sha256` over the config file bytes, the
 referenced prompt template bytes, the stage's generic verifier
 bytes (for grading, the verifier script plus the copied
