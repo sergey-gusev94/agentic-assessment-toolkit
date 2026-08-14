@@ -118,6 +118,63 @@ one timestamped directory under `analysis/` in the data root (`--out`
 moves the destination, which is never allowed inside this repository).
 See the [design](docs/design.md) for the full CLI contract.
 
+### Authentication for solving and grading
+
+Live Codex runs automatically reuse the file-based login of the local
+Codex CLI. In normal use, authenticate once with `codex login`, then run
+`aat solve` or `aat grade` without exporting anything. AAT finds
+`${CODEX_HOME:-~/.codex}/auth.json`, validates it before creating a job,
+and tells Harbor to copy it into the Codex container. This works for both
+ChatGPT subscription login and API-key login saved by Codex; OpenAI's
+[Codex authentication documentation](https://learn.chatgpt.com/docs/auth)
+describes those login and storage choices.
+
+AAT resolves Codex authentication in this order:
+
+1. `CODEX_AUTH_JSON_PATH` selects a specific auth file.
+2. `CODEX_FORCE_AUTH_JSON=true` selects `~/.codex/auth.json`;
+   `CODEX_FORCE_AUTH_JSON=false` explicitly selects `OPENAI_API_KEY`.
+3. Otherwise, the cached file under `CODEX_HOME` (or `~/.codex`) is used.
+4. If no cached file exists, a non-empty `OPENAI_API_KEY` is used.
+
+The cached file deliberately wins when both it and `OPENAI_API_KEY` are
+present, which prevents an unrelated shell API key from silently changing a
+subscription-backed run to usage-based billing. To choose a separate auth
+file for one run:
+
+```bash
+CODEX_AUTH_JSON_PATH=/protected/path/auth.json \
+  aat grade --all --config codex-grader-terra-high
+```
+
+To explicitly choose usage-based API authentication even when a cached login
+exists:
+
+```bash
+CODEX_FORCE_AUTH_JSON=0 OPENAI_API_KEY=... \
+  aat grade --all --config codex-grader-terra-high
+```
+
+An absent, empty, unreadable, or invalid selected credential fails before AAT
+creates job or task directories. If `codex login status` succeeds but no
+`auth.json` exists because Codex uses the operating-system keyring, set
+`cli_auth_credentials_store = "file"` in the Codex `config.toml` and run
+`codex login` again. Treat `auth.json` like a password: Harbor temporarily
+copies it into each Codex container. AAT records only the non-secret method and
+selection source in `aat-run.json`, never the credential, token, or auth-file
+path.
+
+This preflight validates the selected local credential file or environment
+variable, not the remote account. A provider can still reject a revoked login,
+an expired key that cannot be refreshed, or an account without access.
+
+`--dry-run` and `--materialize-only` remain offline and do not require
+authentication. Running the command printed by `--materialize-only` manually
+bypasses AAT's automatic injection; set `CODEX_AUTH_JSON_PATH` or
+`OPENAI_API_KEY` in that shell first. `aat intake` invokes the host Codex CLI
+directly, so it already uses the same local cached login without Harbor
+injection.
+
 ### Gurobi WLS for optimization tasks
 
 Keep `gurobi.lic` outside this repository and the data root. Give `aat

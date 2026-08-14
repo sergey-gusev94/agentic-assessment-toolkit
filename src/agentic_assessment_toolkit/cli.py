@@ -72,6 +72,7 @@ def main(argv: list[str] | None = None) -> int:
         ConfigError,
         CourseError,
         DataRootError,
+        harbor_mod.HarborAuthenticationError,
         MaterializeError,
     ) as error:
         print(f"error: {error}", file=sys.stderr)
@@ -956,6 +957,10 @@ def _execute(
         print(f"nothing to do: {len(planned)} item(s) already done under config {config.name!r}")
         return 0
 
+    authentication = (
+        None if args.materialize_only else harbor_mod.resolve_harbor_authentication(config.agent)
+    )
+
     job_dir = harbor_mod.create_unique_dir(
         jobs_root, harbor_mod.job_dir_name(config.name, config_identity)
     )
@@ -992,6 +997,7 @@ def _execute(
         max_concurrent_trials=args.max_concurrent_trials,
         items=record_items,
         cli_version=cli_version,
+        authentication=authentication,
     )
 
     print(f"job directory: {job_dir}")
@@ -1009,9 +1015,11 @@ def _execute(
             )
         print(f"materialize-only; harbor not invoked. command: {shlex.join(command)}")
         return 0
+    if authentication is not None:
+        print(f"authentication: {authentication.description}")
     base_images_mod.ensure_base_images(flavors)
     print(f"launching: {shlex.join(command)}")
-    harbor_status = harbor_mod.invoke_harbor(command)
+    harbor_status = harbor_mod.invoke_harbor(command, authentication)
     failed = _report_run_summary(stage, job_dir, record_items, args)
     if harbor_status != 0:
         return harbor_status

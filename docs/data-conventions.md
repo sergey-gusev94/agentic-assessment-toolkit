@@ -592,7 +592,11 @@ lineage (submission source, student id for student grading items, solve
 job and trial for solve-derived grading items), config identity, and
 input hashes (assignment, prompt, environment template, verifier,
 rubric, rubric source, submission, reference solution, grading schema —
-as applicable). When present, `harbor-job.json` records the Gurobi
+as applicable), and the non-secret authentication method and selection
+source for a live AAT-managed login. Authentication is `null` for
+materialize-only runs or agents whose login AAT does not manage; credential
+values and auth-file paths are never recorded. When present,
+`harbor-job.json` records the Gurobi
 license's host path and read-only container mount. Doneness of an item
 under a config is derived from these
 directories and Harbor's per-trial result files; there is no separate

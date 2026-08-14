@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from agentic_assessment_toolkit import harbor as harbor_mod
 from agentic_assessment_toolkit.config import load_config
@@ -42,6 +45,181 @@ def test_harbor_environment_disables_telemetry() -> None:
     assert environment["PATH"] == "/bin"
 
 
+def write_codex_auth(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"tokens": {}}', encoding="utf-8")
+    return path
+
+
+def test_authentication_defaults_to_cached_codex_login_over_api_key(tmp_path: Path) -> None:
+    auth_path = write_codex_auth(tmp_path / ".codex" / "auth.json")
+
+    authentication = harbor_mod.resolve_harbor_authentication(
+        "codex", {"OPENAI_API_KEY": "api-secret"}, home=tmp_path
+    )
+
+    assert authentication is not None
+    assert authentication.provenance() == {
+        "method": "codex-auth-json",
+        "source": "automatic-cache",
+    }
+    assert authentication.description == "cached Codex login"
+    assert authentication.environment_changes == {
+        "CODEX_AUTH_JSON_PATH": str(auth_path),
+        "CODEX_FORCE_AUTH_JSON": None,
+        "OPENAI_API_KEY": None,
+    }
+
+
+def test_authentication_honors_codex_home(tmp_path: Path) -> None:
+    codex_home = tmp_path / "separate-codex-home"
+    auth_path = write_codex_auth(codex_home / "auth.json")
+
+    authentication = harbor_mod.resolve_harbor_authentication(
+        "codex", {"CODEX_HOME": str(codex_home)}, home=tmp_path / "unused"
+    )
+
+    assert authentication is not None
+    assert authentication.environment_changes["CODEX_AUTH_JSON_PATH"] == str(auth_path)
+
+
+def test_explicit_auth_path_has_precedence(tmp_path: Path) -> None:
+    explicit = write_codex_auth(tmp_path / "explicit.json")
+    write_codex_auth(tmp_path / ".codex" / "auth.json")
+
+    authentication = harbor_mod.resolve_harbor_authentication(
+        "codex",
+        {
+            "CODEX_AUTH_JSON_PATH": str(explicit),
+            "CODEX_FORCE_AUTH_JSON": "false",
+            "OPENAI_API_KEY": "api-secret",
+        },
+        home=tmp_path,
+    )
+
+    assert authentication is not None
+    assert authentication.provenance() == {
+        "method": "codex-auth-json",
+        "source": "CODEX_AUTH_JSON_PATH",
+    }
+    assert authentication.environment_changes["CODEX_AUTH_JSON_PATH"] == str(explicit)
+
+
+def test_force_auth_json_selects_default_auth_file(tmp_path: Path) -> None:
+    auth_path = write_codex_auth(tmp_path / ".codex" / "auth.json")
+
+    authentication = harbor_mod.resolve_harbor_authentication(
+        "codex", {"CODEX_FORCE_AUTH_JSON": "yes"}, home=tmp_path
+    )
+
+    assert authentication is not None
+    assert authentication.source == "CODEX_FORCE_AUTH_JSON"
+    assert authentication.environment_changes["CODEX_AUTH_JSON_PATH"] == str(auth_path)
+
+
+def test_force_auth_json_false_selects_api_key(tmp_path: Path) -> None:
+    write_codex_auth(tmp_path / ".codex" / "auth.json")
+
+    authentication = harbor_mod.resolve_harbor_authentication(
+        "codex",
+        {"CODEX_FORCE_AUTH_JSON": "0", "OPENAI_API_KEY": "api-secret"},
+        home=tmp_path,
+    )
+
+    assert authentication is not None
+    assert authentication.provenance() == {
+        "method": "openai-api-key",
+        "source": "CODEX_FORCE_AUTH_JSON",
+    }
+    assert authentication.environment_changes["OPENAI_API_KEY"] == "api-secret"
+
+
+def test_api_key_is_fallback_when_cached_login_is_absent(tmp_path: Path) -> None:
+    authentication = harbor_mod.resolve_harbor_authentication(
+        "codex", {"OPENAI_API_KEY": "api-secret"}, home=tmp_path
+    )
+
+    assert authentication is not None
+    assert authentication.provenance() == {
+        "method": "openai-api-key",
+        "source": "OPENAI_API_KEY",
+    }
+
+
+@pytest.mark.parametrize(
+    ("environment", "message"),
+    [
+        ({}, "no file-based Codex login"),
+        ({"OPENAI_API_KEY": ""}, "OPENAI_API_KEY is missing or empty"),
+        ({"CODEX_AUTH_JSON_PATH": ""}, "CODEX_AUTH_JSON_PATH is set but empty"),
+        ({"CODEX_FORCE_AUTH_JSON": "sometimes"}, "invalid CODEX_FORCE_AUTH_JSON"),
+        (
+            {"CODEX_FORCE_AUTH_JSON": "false", "OPENAI_API_KEY": ""},
+            "selected API-key authentication",
+        ),
+    ],
+)
+def test_authentication_rejects_missing_or_invalid_configuration(
+    tmp_path: Path, environment: dict[str, str], message: str
+) -> None:
+    with pytest.raises(harbor_mod.HarborAuthenticationError, match=message):
+        harbor_mod.resolve_harbor_authentication("codex", environment, home=tmp_path)
+
+
+def test_authentication_rejects_invalid_cached_file(tmp_path: Path) -> None:
+    auth_path = tmp_path / ".codex" / "auth.json"
+    auth_path.parent.mkdir(parents=True)
+    auth_path.write_text("not json", encoding="utf-8")
+
+    with pytest.raises(harbor_mod.HarborAuthenticationError, match="invalid Codex auth file"):
+        harbor_mod.resolve_harbor_authentication("codex", {}, home=tmp_path)
+
+
+def test_other_agents_keep_harbor_authentication_behavior(tmp_path: Path) -> None:
+    assert harbor_mod.resolve_harbor_authentication("claude-code", {}, home=tmp_path) is None
+
+
+def test_harbor_environment_applies_authentication_changes() -> None:
+    environment = harbor_subprocess_env(
+        {"OPENAI_API_KEY": "old", "PATH": "/bin"},
+        {"OPENAI_API_KEY": None, "CODEX_AUTH_JSON_PATH": "/auth.json"},
+    )
+    assert "OPENAI_API_KEY" not in environment
+    assert environment["CODEX_AUTH_JSON_PATH"] == "/auth.json"
+    assert environment["HARBOR_TELEMETRY"] == "0"
+
+
+def test_invoke_harbor_passes_resolved_authentication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(
+        command: list[str], *, env: dict[str, str], check: bool
+    ) -> subprocess.CompletedProcess[str]:
+        captured.update(command=command, environment=env, check=check)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setenv("OPENAI_API_KEY", "competing-key")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    authentication = harbor_mod.HarborAuthentication(
+        method="codex-auth-json",
+        source="automatic-cache",
+        description="cached Codex login",
+        environment_changes={
+            "CODEX_AUTH_JSON_PATH": "/auth.json",
+            "OPENAI_API_KEY": None,
+        },
+    )
+
+    assert harbor_mod.invoke_harbor(["harbor", "run"], authentication) == 0
+    environment = captured["environment"]
+    assert isinstance(environment, dict)
+    assert environment["CODEX_AUTH_JSON_PATH"] == "/auth.json"
+    assert "OPENAI_API_KEY" not in environment
+    assert environment["HARBOR_TELEMETRY"] == "0"
+
+
 def test_job_dir_name_format() -> None:
     moment = datetime(2026, 7, 31, 12, 30, 5, tzinfo=UTC)
     assert job_dir_name("codex-high", "a" * 64, moment) == "20260731T123005Z__codex-high__aaaaaaaa"
@@ -71,6 +249,7 @@ def write_job(
     stage: str,
     config_path: Path,
     items: list[RunRecordItem],
+    authentication: harbor_mod.HarborAuthentication | None = None,
 ) -> Path:
     job_dir = jobs_root / job_name
     job_dir.mkdir(parents=True)
@@ -85,6 +264,7 @@ def write_job(
         repeats=1,
         max_concurrent_trials=8,
         items=items,
+        authentication=authentication,
     )
     return job_dir
 
@@ -130,7 +310,8 @@ def test_run_record_roundtrip(tmp_path: Path) -> None:
     record: dict[str, Any] | None = read_run_record(job_dir)
     assert record is not None
     assert record["stage"] == "solve"
-    assert record["schema_version"] == 1
+    assert record["schema_version"] == 2
+    assert record["authentication"] is None
     assert record["max_concurrent_trials"] == 8
     assert record["toolkit_version"]
     assert record["harbor_version"].startswith("0.20.")
@@ -143,6 +324,36 @@ def test_run_record_roundtrip(tmp_path: Path) -> None:
     assert record["items"][0]["student_id"] is None
     assert record["items"][0]["solve_job_name"] is None
     assert record["items"][0]["solve_trial_name"] is None
+
+
+def test_run_record_authentication_excludes_credentials_and_paths(tmp_path: Path) -> None:
+    config_path = write_config(tmp_path, SOLVE_TOML, "codex-high")
+    authentication = harbor_mod.HarborAuthentication(
+        method="codex-auth-json",
+        source="automatic-cache",
+        description="cached Codex login",
+        environment_changes={
+            "CODEX_AUTH_JSON_PATH": "/secret/place/auth.json",
+            "OPENAI_API_KEY": "api-secret",
+        },
+    )
+    job_dir = write_job(
+        tmp_path / "solving",
+        "job",
+        stage="solve",
+        config_path=config_path,
+        items=[make_item("t1", "C1/HW1", "i" * 64)],
+        authentication=authentication,
+    )
+
+    record_text = (job_dir / "aat-run.json").read_text(encoding="utf-8")
+    record = json.loads(record_text)
+    assert record["authentication"] == {
+        "method": "codex-auth-json",
+        "source": "automatic-cache",
+    }
+    assert "api-secret" not in record_text
+    assert "/secret/place" not in record_text
 
 
 def test_read_run_record_handles_garbage(tmp_path: Path) -> None:

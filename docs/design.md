@@ -39,8 +39,11 @@ analysis are in research.md.
    budget.
 3. **Subscription-backed execution.** Agents and graders run through existing
    Codex CLI / Claude Code / Gemini CLI subscriptions, not per-token API
-   billing. Harbor supports this natively, and the same cached-authentication
-   mechanism serves both solve jobs and grading jobs.
+   billing. Harbor supports this natively. Before a live Codex solve or grading
+   job is materialized, the toolkit finds and validates the same file-based
+   cached login used by the local Codex CLI and explicitly passes it to Harbor;
+   the mechanism is identical for both stages. API-key authentication remains
+   available as an explicit override or a fallback when no cached login exists.
 4. **Codex-first implementation.** The first complete benchmark and
    grading-assistant pipelines use Codex for both assignment solving and
    grading. Benchmark core, grading, validation, reporting, and hardening
@@ -640,6 +643,47 @@ is directional: an enforcement-only change (what the verifier fails,
 flags, or ignores) must never require a prompt edit, so enforcement
 details are never copied into prompt text.
 
+### Authentication at launch
+
+Authentication is run-time host configuration, not experiment identity. For a
+live job whose configured agent is `codex`, `aat` resolves authentication before
+creating either the job directory or its materialized task directory. It uses
+the first applicable source:
+
+1. A non-empty `CODEX_AUTH_JSON_PATH`, which selects that file.
+2. `CODEX_FORCE_AUTH_JSON`: `true`, `1`, or `yes` selects
+   `~/.codex/auth.json`; `false`, `0`, or `no` selects `OPENAI_API_KEY`.
+3. The file `${CODEX_HOME:-~/.codex}/auth.json` when it exists.
+4. A non-empty `OPENAI_API_KEY` when the cached file does not exist.
+
+The automatically discovered cached file therefore wins over an API key that
+happens to be present in the shell. Once a source is selected, its competing
+authentication variables are removed from the Harbor subprocess environment;
+the run never silently falls back to another billing route. A selected auth file
+must exist, be readable, and contain a non-empty JSON object. A selected API key
+must be non-empty, and `CODEX_FORCE_AUTH_JSON` must contain one of the listed
+boolean values. Any violation exits with a usage error before durable run output
+is created. This is a local structural preflight, not a provider call: a revoked
+login, an unrefreshable expired credential, or an account without access can
+still fail after launch. Agents other than Codex retain Harbor's own
+authentication behavior.
+
+File-based Codex credentials may represent either ChatGPT subscription access or
+an API-key login. If the local Codex installation stores its cached login only in
+an operating-system keyring, the user selects file storage with
+`cli_auth_credentials_store = "file"` in Codex configuration and logs in again;
+Harbor needs a host file that it can copy into the container. The credential is
+treated as secret: it is held only in the subprocess environment or selected
+file, and neither its value nor its path enters the run record. The run record
+contains only the resolved method (`codex-auth-json` or `openai-api-key`) and
+selection source.
+
+`--dry-run` and `--materialize-only` do not resolve authentication and remain
+credential-free. A user who manually runs the Harbor command printed by
+`--materialize-only` is bypassing the AAT launch boundary and must provide one of
+Harbor's authentication variables in that shell. `aat intake` runs the host
+Codex CLI directly, so the CLI itself reuses its cached login.
+
 ### Run records and idempotence
 
 Each `aat` invocation creates one job directory —
@@ -680,6 +724,11 @@ explicit lineage fields exist so no consumer ever parses an item id.
 On a rare same-second collision the job directory name gains a `-N`
 suffix; a job's identity lives in `aat-run.json`, never in the
 directory name.
+
+Run-record schema version 2 adds `authentication`. It is `null` for an offline
+materialization or an agent whose authentication AAT does not manage; otherwise
+it contains only `method` and `source`. Credential values and auth-file paths are
+never recorded.
 
 Because the layout is flat, Harbor's viewer works at both levels:
 `harbor view` on the shared `solving/` or `grading/` parent browses all

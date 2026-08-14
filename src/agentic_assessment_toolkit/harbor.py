@@ -12,7 +12,7 @@ import json
 import os
 import subprocess
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from importlib import metadata
 from pathlib import Path
@@ -22,7 +22,37 @@ from .config import ExperimentConfig, Stage
 from .hashing import sha256_bytes
 
 RUN_RECORD_FILENAME = "aat-run.json"
-RUN_RECORD_SCHEMA_VERSION = 1
+RUN_RECORD_SCHEMA_VERSION = 2
+
+CODEX_AUTH_JSON_PATH_ENV = "CODEX_AUTH_JSON_PATH"
+CODEX_FORCE_AUTH_JSON_ENV = "CODEX_FORCE_AUTH_JSON"
+CODEX_HOME_ENV = "CODEX_HOME"
+OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
+
+_TRUE_ENV_VALUES = frozenset({"true", "1", "yes"})
+_FALSE_ENV_VALUES = frozenset({"false", "0", "no"})
+
+
+class HarborAuthenticationError(Exception):
+    """A live Harbor run cannot authenticate its configured agent."""
+
+
+@dataclass(frozen=True)
+class HarborAuthentication:
+    """Resolved, non-interactive authentication for one Harbor launch.
+
+    ``environment_changes`` may contain credentials and is deliberately
+    excluded from the representation and run record. Only ``method`` and
+    ``source`` are durable provenance.
+    """
+
+    method: str
+    source: str
+    description: str
+    environment_changes: Mapping[str, str | None] = field(repr=False, compare=False)
+
+    def provenance(self) -> dict[str, str]:
+        return {"method": self.method, "source": self.source}
 
 
 def harbor_version() -> str:
@@ -59,19 +89,163 @@ def build_harbor_command(job_config_path: Path) -> list[str]:
     return ["harbor", "run", "-c", str(job_config_path), "--yes"]
 
 
-def harbor_subprocess_env(base: Mapping[str, str] | None = None) -> dict[str, str]:
+def resolve_harbor_authentication(
+    agent: str,
+    environ: Mapping[str, str] | None = None,
+    *,
+    home: Path | None = None,
+) -> HarborAuthentication | None:
+    """Resolve authentication before a live Harbor job is materialized.
+
+    Codex runs prefer the same file-based cached login used by the local
+    Codex CLI. Explicit Harbor overrides retain precedence, and an API key
+    is used only when explicitly selected or no cached login exists.
+    Other agents retain Harbor's own authentication behavior.
+    """
+    if agent != "codex":
+        return None
+
+    environment = os.environ if environ is None else environ
+    user_home = Path.home() if home is None else home
+
+    if CODEX_AUTH_JSON_PATH_ENV in environment:
+        raw_path = environment[CODEX_AUTH_JSON_PATH_ENV]
+        if not raw_path.strip():
+            raise HarborAuthenticationError(f"{CODEX_AUTH_JSON_PATH_ENV} is set but empty")
+        auth_path = Path(raw_path).expanduser().resolve()
+        _validate_codex_auth_file(auth_path, source=CODEX_AUTH_JSON_PATH_ENV)
+        return _auth_file_authentication(auth_path, source=CODEX_AUTH_JSON_PATH_ENV)
+
+    if CODEX_FORCE_AUTH_JSON_ENV in environment:
+        force_file = _parse_env_bool(
+            environment[CODEX_FORCE_AUTH_JSON_ENV], name=CODEX_FORCE_AUTH_JSON_ENV
+        )
+        if force_file:
+            auth_path = user_home / ".codex" / "auth.json"
+            _validate_codex_auth_file(auth_path, source=CODEX_FORCE_AUTH_JSON_ENV)
+            return _auth_file_authentication(auth_path, source=CODEX_FORCE_AUTH_JSON_ENV)
+        return _api_key_authentication(environment, explicitly_selected=True)
+
+    codex_home = environment.get(CODEX_HOME_ENV)
+    auth_path = (
+        Path(codex_home).expanduser() / "auth.json"
+        if codex_home and codex_home.strip()
+        else user_home / ".codex" / "auth.json"
+    ).resolve()
+    try:
+        auth_path.stat()
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        raise HarborAuthenticationError(
+            f"cannot inspect the automatic Codex auth file: {auth_path}"
+        ) from error
+    else:
+        _validate_codex_auth_file(auth_path, source="automatic-cache")
+        return _auth_file_authentication(auth_path, source="automatic-cache")
+
+    api_key = environment.get(OPENAI_API_KEY_ENV)
+    if api_key is not None:
+        return _api_key_authentication(environment, explicitly_selected=False)
+
+    raise HarborAuthenticationError(
+        "no file-based Codex login or OpenAI API key is available; run 'codex login' "
+        f"so {auth_path} exists, or set {OPENAI_API_KEY_ENV}. If Codex stores its login "
+        'in the OS keyring, set cli_auth_credentials_store = "file" in Codex config '
+        "and log in again"
+    )
+
+
+def _parse_env_bool(value: str, *, name: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized in _TRUE_ENV_VALUES:
+        return True
+    if normalized in _FALSE_ENV_VALUES:
+        return False
+    raise HarborAuthenticationError(
+        f"invalid {name} value {value!r}; expected true/false/1/0/yes/no"
+    )
+
+
+def _validate_codex_auth_file(path: Path, *, source: str) -> None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise HarborAuthenticationError(
+            f"{source} selected a missing Codex auth file: {path}"
+        ) from error
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise HarborAuthenticationError(
+            f"{source} selected an unreadable or invalid Codex auth file: {path}"
+        ) from error
+    if not isinstance(data, dict) or not data:
+        raise HarborAuthenticationError(
+            f"{source} selected an empty or invalid Codex auth file: {path}"
+        )
+
+
+def _auth_file_authentication(path: Path, *, source: str) -> HarborAuthentication:
+    return HarborAuthentication(
+        method="codex-auth-json",
+        source=source,
+        description=(
+            "cached Codex login" if source == "automatic-cache" else "explicit Codex auth file"
+        ),
+        environment_changes={
+            CODEX_AUTH_JSON_PATH_ENV: str(path),
+            CODEX_FORCE_AUTH_JSON_ENV: None,
+            OPENAI_API_KEY_ENV: None,
+        },
+    )
+
+
+def _api_key_authentication(
+    environment: Mapping[str, str], *, explicitly_selected: bool
+) -> HarborAuthentication:
+    api_key = environment.get(OPENAI_API_KEY_ENV)
+    if api_key is None or not api_key.strip():
+        selection = (
+            f" because {CODEX_FORCE_AUTH_JSON_ENV}=false selected API-key authentication"
+            if explicitly_selected
+            else ""
+        )
+        raise HarborAuthenticationError(f"{OPENAI_API_KEY_ENV} is missing or empty{selection}")
+    return HarborAuthentication(
+        method="openai-api-key",
+        source=(CODEX_FORCE_AUTH_JSON_ENV if explicitly_selected else OPENAI_API_KEY_ENV),
+        description="OpenAI API key",
+        environment_changes={
+            CODEX_AUTH_JSON_PATH_ENV: None,
+            CODEX_FORCE_AUTH_JSON_ENV: "0",
+            OPENAI_API_KEY_ENV: api_key,
+        },
+    )
+
+
+def harbor_subprocess_env(
+    base: Mapping[str, str] | None = None,
+    changes: Mapping[str, str | None] | None = None,
+) -> dict[str, str]:
     """Subprocess environment for Harbor runs.
 
     Telemetry is disabled: nothing leaves the machine except calls to
     the model providers (docs/brief.md, constraints).
     """
     environment = dict(os.environ if base is None else base)
+    for name, value in (changes or {}).items():
+        if value is None:
+            environment.pop(name, None)
+        else:
+            environment[name] = value
     environment["HARBOR_TELEMETRY"] = "0"
     return environment
 
 
-def invoke_harbor(command: list[str]) -> int:
-    completed = subprocess.run(command, env=harbor_subprocess_env(), check=False)  # noqa: S603
+def invoke_harbor(command: list[str], authentication: HarborAuthentication | None = None) -> int:
+    changes = None if authentication is None else authentication.environment_changes
+    completed = subprocess.run(  # noqa: S603
+        command, env=harbor_subprocess_env(changes=changes), check=False
+    )
     return completed.returncode
 
 
@@ -138,6 +312,7 @@ def write_run_record(
     max_concurrent_trials: int,
     items: list[RunRecordItem],
     cli_version: str | None = None,
+    authentication: HarborAuthentication | None = None,
 ) -> Path:
     record = {
         "schema_version": RUN_RECORD_SCHEMA_VERSION,
@@ -161,6 +336,7 @@ def write_run_record(
         "max_concurrent_trials": max_concurrent_trials,
         "command": command,
         "executed": executed,
+        "authentication": None if authentication is None else authentication.provenance(),
         "items": [asdict(item) for item in items],
     }
     path = job_dir / RUN_RECORD_FILENAME

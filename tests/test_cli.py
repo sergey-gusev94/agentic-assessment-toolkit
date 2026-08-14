@@ -22,7 +22,16 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 def no_harbor_invocation(monkeypatch: pytest.MonkeyPatch) -> None:
     """Repository tests never invoke Harbor (AGENTS.md)."""
 
-    def refuse(command: list[str]) -> int:
+    authentication = harbor_mod.HarborAuthentication(
+        method="codex-auth-json",
+        source="automatic-cache",
+        description="cached Codex login",
+        environment_changes={"CODEX_AUTH_JSON_PATH": "/test/auth.json"},
+    )
+
+    def refuse(
+        command: list[str], _authentication: harbor_mod.HarborAuthentication | None = None
+    ) -> int:
         raise AssertionError(f"harbor invoked during tests: {command}")
 
     # cli calls harbor_mod.invoke_harbor via the shared module object,
@@ -30,6 +39,11 @@ def no_harbor_invocation(monkeypatch: pytest.MonkeyPatch) -> None:
     # subprocess the harbor binary, so it is stubbed too.
     monkeypatch.setattr(harbor_mod, "invoke_harbor", refuse)
     monkeypatch.setattr(harbor_mod, "cli_harbor_version", lambda: "0.20.0-test")
+    monkeypatch.setattr(
+        harbor_mod,
+        "resolve_harbor_authentication",
+        lambda _agent: authentication,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -83,6 +97,75 @@ def test_solve_dry_run_lists_items_without_writing(
     assert job_dirs(data_root, "solving") == []
 
 
+def test_offline_run_modes_do_not_resolve_authentication(
+    data_root: Path,
+    solve_config: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def refuse(_agent: str) -> harbor_mod.HarborAuthentication:
+        raise AssertionError("offline mode resolved authentication")
+
+    monkeypatch.setattr(harbor_mod, "resolve_harbor_authentication", refuse)
+    assert (
+        cli.main(
+            solve_args(
+                data_root,
+                solve_config,
+                "--course",
+                COURSE_ID,
+                "--assignment",
+                "HW1",
+                "--dry-run",
+            )
+        )
+        == 0
+    )
+    assert (
+        cli.main(
+            solve_args(
+                data_root,
+                solve_config,
+                "--course",
+                COURSE_ID,
+                "--assignment",
+                "HW1",
+                "--materialize-only",
+            )
+        )
+        == 0
+    )
+
+
+def test_missing_authentication_fails_before_job_or_task_creation(
+    data_root: Path,
+    solve_config: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fail(_agent: str) -> harbor_mod.HarborAuthentication:
+        raise harbor_mod.HarborAuthenticationError("login unavailable")
+
+    monkeypatch.setattr(harbor_mod, "resolve_harbor_authentication", fail)
+
+    assert (
+        cli.main(
+            solve_args(
+                data_root,
+                solve_config,
+                "--course",
+                COURSE_ID,
+                "--assignment",
+                "HW1",
+            )
+        )
+        == 2
+    )
+    assert "error: login unavailable" in capsys.readouterr().err
+    assert job_dirs(data_root, "solving") == []
+    tasks_root = data_root / "tasks"
+    assert not tasks_root.exists() or list(tasks_root.iterdir()) == []
+
+
 def test_solve_materialize_only_writes_job_dir(
     data_root: Path, solve_config: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -108,6 +191,7 @@ def test_solve_materialize_only_writes_job_dir(
     record = json.loads((job_dir / "aat-run.json").read_text(encoding="utf-8"))
     assert record["stage"] == "solve"
     assert record["executed"] is False
+    assert record["authentication"] is None
     assert record["max_concurrent_trials"] == 8
     assert len(record["items"]) == 1
     assert record["items"][0]["item_id"] == f"{COURSE_ID}/HW1"
@@ -526,7 +610,9 @@ def test_run_summary_names_failures_and_exits_nonzero(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    def fake_invoke(_command: list[str]) -> int:
+    def fake_invoke(
+        _command: list[str], _authentication: harbor_mod.HarborAuthentication | None
+    ) -> int:
         job_dir = job_dirs(data_root, "solving")[0]
         record = json.loads((job_dir / "aat-run.json").read_text(encoding="utf-8"))
         tasks = {item["assignment_id"]: item["task_dir_name"] for item in record["items"]}
@@ -551,7 +637,9 @@ def test_run_summary_reports_incomplete_repeats(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    def fake_invoke(_command: list[str]) -> int:
+    def fake_invoke(
+        _command: list[str], _authentication: harbor_mod.HarborAuthentication | None
+    ) -> int:
         job_dir = job_dirs(data_root, "solving")[0]
         record = json.loads((job_dir / "aat-run.json").read_text(encoding="utf-8"))
         tasks = {item["assignment_id"]: item["task_dir_name"] for item in record["items"]}
@@ -585,7 +673,9 @@ def test_launch_prepares_base_images_before_harbor(
         lambda flavors: events.append(sorted(set(flavors))),
     )
 
-    def fake_invoke(_command: list[str]) -> int:
+    def fake_invoke(
+        _command: list[str], _authentication: harbor_mod.HarborAuthentication | None
+    ) -> int:
         events.append("harbor")
         return 0
 
@@ -846,8 +936,13 @@ def test_solve_launch_propagates_harbor_exit_code(
 ) -> None:
     invoked: list[list[str]] = []
 
-    def fake_invoke(command: list[str]) -> int:
+    invoked_authentication: list[harbor_mod.HarborAuthentication | None] = []
+
+    def fake_invoke(
+        command: list[str], authentication: harbor_mod.HarborAuthentication | None
+    ) -> int:
         invoked.append(command)
+        invoked_authentication.append(authentication)
         return 7
 
     monkeypatch.setattr(harbor_mod, "invoke_harbor", fake_invoke)
@@ -860,7 +955,12 @@ def test_solve_launch_propagates_harbor_exit_code(
     assert record["executed"] is True
     assert record["harbor_version"] == "0.20.0-test"
     assert record["harbor_version_source"] == "cli"
+    assert record["authentication"] == {
+        "method": "codex-auth-json",
+        "source": "automatic-cache",
+    }
     assert invoked == [record["command"]]
+    assert invoked_authentication[0] is not None
 
 
 def test_solve_all_and_grade_all(
