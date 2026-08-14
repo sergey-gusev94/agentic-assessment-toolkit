@@ -26,8 +26,12 @@ from collections.abc import Iterable
 from . import config
 from .hashing import sha256_file
 
-# One initial build attempt, then one retry per delay.
-BUILD_RETRY_DELAYS_SEC = (10.0, 60.0)
+# One initial build attempt, then one retry per delay. This build is
+# the launch's only registry contact, so the last delay is generous:
+# registry auth throttling observed in practice (DeadlineExceeded from
+# docker.io) persists for minutes, and waiting out one build before any
+# trial starts is strictly cheaper than failing the whole launch.
+BUILD_RETRY_DELAYS_SEC = (10.0, 60.0, 300.0)
 
 
 class BaseImageError(Exception):

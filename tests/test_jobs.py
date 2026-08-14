@@ -34,7 +34,11 @@ def test_job_config_shape(tmp_path: Path) -> None:
         "n_concurrent_trials": 5,
         "retry": {
             "max_retries": 3,
-            "include_exceptions": ["EnvironmentStartTimeoutError", "RuntimeError"],
+            "include_exceptions": [
+                "EnvironmentStartTimeoutError",
+                "NonZeroAgentExitCodeError",
+                "RuntimeError",
+            ],
             "min_wait_sec": 10.0,
             "wait_multiplier": 6.0,
             "max_wait_sec": 300.0,

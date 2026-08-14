@@ -14,9 +14,11 @@ from tests.test_data_root import make_fake_toolkit_repo
 from tests.test_metrics import (
     ASSIGNMENT_COLUMNS,
     CHECK_COLUMNS,
+    CONSISTENCY_COLUMNS,
     COURSE_COLUMNS,
     FAILURE_COLUMNS,
     JUDGE_COLUMNS,
+    NEAR_TIMEOUT_COLUMNS,
     SOLVE_SUMMARY_COLUMNS,
     STUDENT_COLUMNS,
     UNGRADED_COLUMNS,
@@ -34,6 +36,7 @@ from tests.test_results import (
     solve_trial_item,
     student_item,
     trial_result,
+    write_task_toml,
     write_trial,
 )
 
@@ -49,8 +52,10 @@ CSV_HEADERS = {
     "grades_by_course.csv": COURSE_COLUMNS,
     "students.csv": STUDENT_COLUMNS,
     "judge_quality.csv": JUDGE_COLUMNS,
+    "repeat_consistency.csv": CONSISTENCY_COLUMNS,
     "grader_checks.csv": CHECK_COLUMNS,
     "failures.csv": FAILURE_COLUMNS,
+    "near_timeouts.csv": NEAR_TIMEOUT_COLUMNS,
     "ungraded_solves.csv": UNGRADED_COLUMNS,
 }
 
@@ -130,8 +135,10 @@ def test_write_report_writes_exactly_the_contracted_files(tmp_path: Path) -> Non
         "grades_by_course.csv",
         "students.csv",
         "judge_quality.csv",
+        "repeat_consistency.csv",
         "grader_checks.csv",
         "failures.csv",
+        "near_timeouts.csv",
         "ungraded_solves.csv",
         "report.md",
         "provenance.json",
@@ -164,11 +171,17 @@ def test_report_md_sections_and_benchmark_prose(tmp_path: Path) -> None:
     assert "Coverage: 1 of 1 assignments" in report
 
     assert "## Judge quality" in report
+    assert "## Cross-run consistency" in report
+    # No item is graded twice in this root, so the section is prose only.
+    assert "No item in this report was graded more than once under one config." in report
     assert "## Grader checks" in report
     assert "_reference" in report
     assert "at or above 95" in report and "at or below 5" in report
     assert "## Grading assistant" in report
     assert "## Failure accounting" in report
+    assert "## Near-timeout trials" in report
+    # No trial in this root has a duration or a materialized task.toml.
+    assert "0 of 0 measured trial(s) near timeout; 4 trial(s) not measurable." in report
 
 
 def test_empty_data_root_report_is_header_only(tmp_path: Path) -> None:
@@ -181,6 +194,7 @@ def test_empty_data_root_report_is_header_only(tmp_path: Path) -> None:
     for line in (
         "No solve-derived gradings in this report.",
         "No grading trials in this report.",
+        "No item in this report was graded more than once under one config.",
         "No grader-check pseudo-students in this report.",
         "No student submissions in this report.",
         "No trials in this report.",
@@ -207,6 +221,11 @@ def test_provenance_records_the_computation(tmp_path: Path) -> None:
         "resamples": metrics.BOOTSTRAP_RESAMPLES,
         "confidence": metrics.BOOTSTRAP_CONFIDENCE,
         "min_clusters": metrics.MIN_BOOTSTRAP_CLUSTERS,
+    }
+    assert provenance["flag_thresholds"] == {
+        "repeat_range_pct": metrics.REPEAT_RANGE_FLAG_PCT,
+        "repeat_deviation_pct": metrics.REPEAT_DEVIATION_FLAG_PCT,
+        "near_timeout_fraction": metrics.NEAR_TIMEOUT_FRACTION,
     }
     assert provenance["configs"] == [
         {"name": "codex-grader-high", "identity": "c" * 64, "stage": "grade"},
@@ -316,3 +335,71 @@ def test_two_rubric_versions_are_reported_separately(tmp_path: Path) -> None:
     assert len(course) == 1
     assert course[0].split(",")[COURSE_COLUMNS.index("n_assignments")] == "0"
     assert course[0].split(",")[COURSE_COLUMNS.index("n_assignments_mixed_rubric")] == "1"
+
+
+def test_consistency_section_lists_a_flagged_repeat_group(tmp_path: Path) -> None:
+    """A wildly disagreeing regrade of one item is flagged, never excluded."""
+    root = build_root(tmp_path)
+    repeat_job = "20260801T140000Z__codex-grader-high__cccccccc"
+    repeat = make_job(
+        root, tmp_path, stage="grade", job_name=repeat_job, items=[student_item("g2")]
+    )
+    # The same student item as build_root's g2 (base 80), regraded at 0.
+    data = grading_data([criterion("a", 0.0, 5.0), criterion("b", 0.0, 2.0, bonus=True)])
+    write_trial(
+        repeat,
+        "g2__t2",
+        trial_result("g2", rewards=graded_rewards(data)),
+        artifact_text=json.dumps(data),
+    )
+
+    report_dir = run_report(root)
+    report = (report_dir / "report.md").read_text(encoding="utf-8")
+    assert "1 of 1 repeated item(s) flagged; 2 grading(s) deviate more than 10 points" in report
+    assert "| 0; 80 |" in report  # the score list, sorted ascending
+    assert f"{GRADE_JOB}/g2__t1; {repeat_job}/g2__t2" in report
+    body = [line for line in csv_lines(report_dir, "repeat_consistency.csv")[1:] if line]
+    assert len(body) == 1
+    assert "0; 80" in body[0]
+    assert "True" in body[0]  # range_flagged
+    # Flag only: both gradings still enter the student aggregates.
+    students = [line for line in csv_lines(report_dir, "students.csv")[1:] if line]
+    stu1 = next(line for line in students if ",stu1," in line)
+    assert stu1.split(",")[STUDENT_COLUMNS.index("n_valid_gradings")] == "2"
+
+
+def test_near_timeout_section_flags_long_trials(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    solve_dir = make_job(
+        root, tmp_path, stage="solve", job_name=SOLVE_JOB, items=[solve_item("HW1")]
+    )
+    write_task_toml(root, SOLVE_JOB, "HW1", timeout_sec=3600.0)
+    # 2400 s of agent execution against a 3600 s timeout: above 60%.
+    write_trial(
+        solve_dir,
+        "HW1__long",
+        trial_result(
+            "HW1",
+            rewards={"reward": 1.0},
+            agent_execution={
+                "started_at": "2026-07-31T10:00:00",
+                "finished_at": "2026-07-31T10:40:00",
+            },
+        ),
+    )
+
+    report_dir = run_report(root)
+    report = (report_dir / "report.md").read_text(encoding="utf-8")
+    assert "1 of 1 measured trial(s) near timeout; 0 trial(s) not measurable." in report
+    assert f"| solve | {SOLVE_JOB} |" in report
+    # The Markdown table drops the 64-char config identity (the
+    # consistency-section convention); the CSV keeps the full hash.
+    section = report.split("## Near-timeout trials")[1].split("\n## ")[0]
+    assert "config_identity" not in section
+    assert csv_lines(report_dir, "near_timeouts.csv")[0].split(",") == list(NEAR_TIMEOUT_COLUMNS)
+    body = [line for line in csv_lines(report_dir, "near_timeouts.csv")[1:] if line]
+    assert len(body) == 1
+    fields = body[0].split(",")
+    assert fields[NEAR_TIMEOUT_COLUMNS.index("n_near_timeout")] == "1"
+    assert fields[NEAR_TIMEOUT_COLUMNS.index("max_agent_execution_sec")] == "2400.0"
+    assert fields[NEAR_TIMEOUT_COLUMNS.index("agent_timeout_sec")] == "3600.0"

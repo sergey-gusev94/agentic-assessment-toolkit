@@ -19,20 +19,36 @@ DEFAULT_MAX_CONCURRENT_TRIALS = 8
 
 GUROBI_LICENSE_CONTAINER_PATH = "/opt/gurobi/gurobi.lic"
 
-# Trial retry policy for infrastructure failures (docs/design.md, "Run
-# records and idempotence"). The include list limits retries to the two
-# exception types Harbor raises when the trial's environment never came
-# up — Docker command failures surface as RuntimeError, environment
-# build timeouts as EnvironmentStartTimeoutError — so a retried attempt
-# never held a measurement. Harbor erases the failed attempt and reruns
-# it in place, which is why outcome-bearing failures (agent timeouts,
-# refusals, invalid grading output) must never enter this list; they
-# stay handled by re-running the aat command, which accumulates trials.
-# Backoff waits 10 s, then 60 s, then 300 s (capped) — sized for the
-# registry and network blips observed to last seconds to a few minutes.
+# Trial retry policy for failures that hold no measurement
+# (docs/design.md, "Run records and idempotence"). Harbor compares the
+# failed trial's exception class name against these names exactly — no
+# inheritance — so a subclass must be listed by its own name. The
+# include list:
+# - RuntimeError: Docker command failures — the trial's environment
+#   never came up.
+# - EnvironmentStartTimeoutError: the environment build timed out.
+# - NonZeroAgentExitCodeError: the agent command exited nonzero before
+#   verification. Observed when the provider rejects a run with a
+#   transient capacity error that the agent surfaces only as exit
+#   code 1; a hard agent failure looks the same, but the attempt held
+#   no measurement either way, so a persistent failure merely exhausts
+#   the retries.
+# A retried attempt never held a measurement: Harbor erases the failed
+# attempt and reruns it in place, which is why outcome-bearing failures
+# (agent timeouts, refusals, invalid grading output) must never enter
+# this list; they stay handled by re-running the aat command, which
+# accumulates trials. ApiUsageLimitError stays out deliberately: it
+# means an exhausted subscription quota, which backoff cannot fix;
+# doneness-based reruns recover those trials once quota returns.
+# Backoff waits 10 s, then 60 s, then 300 s (capped) — sized for Docker
+# and network blips of seconds and provider capacity dips of minutes.
 HARBOR_RETRY_POLICY: dict[str, object] = {
     "max_retries": 3,
-    "include_exceptions": ["EnvironmentStartTimeoutError", "RuntimeError"],
+    "include_exceptions": [
+        "EnvironmentStartTimeoutError",
+        "NonZeroAgentExitCodeError",
+        "RuntimeError",
+    ],
     "min_wait_sec": 10.0,
     "wait_multiplier": 6.0,
     "max_wait_sec": 300.0,

@@ -9,6 +9,7 @@ import pytest
 from agentic_assessment_toolkit.grading_schema import (
     computed_sums,
     derive_scores,
+    expected_criteria_errors,
     load_grading_result,
     sums_report,
     validate_grading_result,
@@ -291,3 +292,38 @@ def test_non_finite_max_points_rejected() -> None:
     data = valid_result()
     data["criteria"][0]["max_points"] = float("inf")
     assert any("finite" in e for e in validate_grading_result(data))
+
+
+def expected_for_valid_result() -> list[dict[str, object]]:
+    return [
+        {"id": "p1", "max_points": 8.0, "bonus": False},
+        {"id": "p2", "max_points": 2.0, "bonus": False},
+        {"id": "extra", "max_points": 1.0, "bonus": True},
+    ]
+
+
+def test_expected_criteria_match_yields_no_errors() -> None:
+    assert expected_criteria_errors(expected_for_valid_result(), valid_result()) == []
+
+
+def test_expected_criteria_report_every_divergence() -> None:
+    """One report per divergence: drop, add, reweight, and bonus flip."""
+    data = valid_result()
+    data["criteria"][1]["id"] = "p2-renamed"  # drops p2, adds p2-renamed
+    data["criteria"][0]["max_points"] = 5
+    data["criteria"][0]["points"] = 4
+    data["criteria"][2]["bonus"] = False
+    assert validate_grading_result(data) == []
+    assert expected_criteria_errors(expected_for_valid_result(), data) == [
+        "rubric mismatch: criterion 'p2' from the rubric is missing from the grading result",
+        "rubric mismatch: criterion 'p2-renamed' is not in the rubric",
+        "rubric mismatch: criterion 'p1': max_points 5 does not match the rubric's 8",
+        "rubric mismatch: criterion 'extra': bonus false does not match the rubric's true",
+    ]
+
+
+def test_expected_criteria_tolerate_float_representation() -> None:
+    """8 vs 8.0 and a within-tolerance float are not divergences."""
+    data = valid_result()
+    data["criteria"][0]["max_points"] = 8.0 + 1e-9
+    assert expected_criteria_errors(expected_for_valid_result(), data) == []

@@ -1,8 +1,10 @@
 """Grading output schema: structural validation and authoritative sums.
 
 Specified in docs/design.md ("Grading output schema"). Structural
-violations fail the contract; the grader's authored sums are a
-self-check only — the sums computed from the criteria are authoritative
+violations fail the contract, and so does any divergence between the
+grader's authored criteria and the rubric's expected criteria (see
+expected_criteria_errors); the grader's authored sums are a self-check
+only — the sums computed from the criteria are authoritative
 everywhere, and an authored-sum mismatch is reported as an
 inconsistency, never a failure. This module is stdlib-only and
 self-contained by design: it is imported by the package and also copied
@@ -19,6 +21,11 @@ from pathlib import Path
 SCHEMA_VERSION = 1
 RESULT_FILENAME = "grading_result.json"
 JUSTIFICATION_FILENAME = "justification.md"
+# Written by the grading-task materializer beside the verifier: the
+# rubric's criteria as an ordered list of {id, max_points, bonus}
+# objects. The verifier compares the grader's authored criteria against
+# it; see expected_criteria_errors.
+EXPECTED_CRITERIA_FILENAME = "expected_criteria.json"
 
 _REQUIRED_FIELDS = (
     "schema_version",
@@ -132,6 +139,69 @@ def _validate_criterion(label: str, entry: dict[str, object], seen_ids: set[str]
     if not isinstance(bonus, bool):
         errors.append(f"{label}: bonus must be a boolean")
 
+    return errors
+
+
+def _format_points(value: float) -> str:
+    return format(value, "g")
+
+
+def expected_criteria_errors(
+    expected: list[dict[str, object]], data: dict[str, object]
+) -> list[str]:
+    """Compare the grader's authored criteria against the rubric's.
+
+    ``expected`` is the materializer-written expected-criteria list —
+    the rubric's criteria as {id, max_points, bonus} objects. The
+    grader must reproduce the rubric exactly: the id sets must match,
+    and each criterion's max_points and bonus flag must equal the
+    rubric's. Any divergence is a contract failure — a dropped,
+    renamed, added, or reweighted criterion silently changes the score
+    denominator, so it must fail the trial loudly. Call only on data
+    that passed validate_grading_result.
+    """
+    criteria = data["criteria"]
+    if not isinstance(criteria, list):
+        raise ValueError("criteria must be a list")
+    authored: dict[str, dict[str, object]] = {}
+    for entry in criteria:
+        if not isinstance(entry, dict):
+            raise ValueError("criteria entries must be objects")
+        authored[str(entry["id"])] = entry
+
+    errors = []
+    expected_ids = {str(entry["id"]) for entry in expected}
+    for entry in expected:
+        criterion_id = str(entry["id"])
+        if criterion_id not in authored:
+            errors.append(
+                f"rubric mismatch: criterion {criterion_id!r} from the rubric"
+                " is missing from the grading result"
+            )
+    for criterion_id in authored:
+        if criterion_id not in expected_ids:
+            errors.append(f"rubric mismatch: criterion {criterion_id!r} is not in the rubric")
+    for entry in expected:
+        criterion_id = str(entry["id"])
+        got = authored.get(criterion_id)
+        if got is None:
+            continue
+        expected_max = _as_number(entry["max_points"])
+        got_max = _as_number(got["max_points"])
+        if not _close(got_max, expected_max):
+            errors.append(
+                f"rubric mismatch: criterion {criterion_id!r}: max_points"
+                f" {_format_points(got_max)} does not match the rubric's"
+                f" {_format_points(expected_max)}"
+            )
+        got_bonus = bool(got.get("bonus", False))
+        expected_bonus = bool(entry.get("bonus", False))
+        if got_bonus != expected_bonus:
+            errors.append(
+                f"rubric mismatch: criterion {criterion_id!r}: bonus"
+                f" {json.dumps(got_bonus)} does not match the rubric's"
+                f" {json.dumps(expected_bonus)}"
+            )
     return errors
 
 

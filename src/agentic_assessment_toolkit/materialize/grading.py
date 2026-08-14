@@ -4,19 +4,23 @@ One code path for both submission sources — a Harbor solve artifact or a
 real student folder (design decision 5). The task presents the
 assignment handout, submission, reference solution, and rubric under
 /app as data; the grader writes into /app/grading_output; the generic
-grading verifier validates the output schema and derives score_pct as
-the reward. Grading never starts without a rubric (decision 5): a
+grading verifier validates the output schema, cross-checks the
+grader's criteria against the expected-criteria file written here from
+the parsed rubric, and derives score_pct as the reward. Grading never
+starts without a rubric (decision 5): a
 missing or unparseable rubric fails materialization before anything is
 written.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from .. import config
+from ..grading_schema import EXPECTED_CRITERIA_FILENAME
 from ..hashing import sha256_dir, sha256_file
 from ..rubric import RubricError, parse_rubric_file
 from . import _common
@@ -45,7 +49,7 @@ def materialize_grading_task(
     tasks_dir: Path,
 ) -> MaterializedGradingTask:
     try:
-        parse_rubric_file(rubric_path)
+        criteria = parse_rubric_file(rubric_path)
     except RubricError as error:
         raise _common.MaterializeError(str(error)) from error
 
@@ -81,6 +85,16 @@ def materialize_grading_task(
     schema_path = config.grading_schema_source_path()
     (task_dir / "tests" / "grading_verifier.py").write_bytes(verifier_path.read_bytes())
     (task_dir / "tests" / "grading_schema.py").write_bytes(schema_path.read_bytes())
+    # The rubric's criteria, written beside the verifier so it can fail
+    # the trial when the grader's authored criteria diverge from the
+    # rubric (dropped, renamed, added, or reweighted criteria).
+    expected_criteria = [
+        {"id": criterion.id, "max_points": criterion.max_points, "bonus": criterion.bonus}
+        for criterion in criteria
+    ]
+    (task_dir / "tests" / EXPECTED_CRITERIA_FILENAME).write_text(
+        json.dumps(expected_criteria, indent=2) + "\n", encoding="utf-8"
+    )
 
     input_hashes = {
         "assignment": sha256_dir(assignment_dir),

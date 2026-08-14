@@ -10,11 +10,15 @@ regenerated at any time.
 Missing values load as pandas NA, never as zero: zero never means
 unknown. Reading Harbor's ``result.json`` as plain JSON is the one
 deliberate coupling to Harbor's on-disk output format, pinned by the
-``tests/fixtures/harbor/result_full.json`` fixture.
+``tests/fixtures/harbor/result_full.json`` fixture. The agent timeout
+is read from each trial's materialized ``task.toml`` under the data
+root's ``tasks/`` tree — toolkit-written, so an old job keeps the
+timeout it actually ran under.
 """
 
 from __future__ import annotations
 
+import tomllib
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -136,6 +140,7 @@ _TRIALS_DTYPES: dict[str, str] = {
     "agent_setup_sec": "Float64",
     "agent_execution_sec": "Float64",
     "verifier_sec": "Float64",
+    "agent_timeout_sec": "Float64",
     "started_at": "string",
     "finished_at": "string",
     "submission_source": "string",
@@ -200,7 +205,7 @@ def load_results(data_root: Path) -> ResultTables:
                 continue
             if stage == "solve":
                 solver_configs[job_dir.name] = _solver_config(record)
-            _load_job(stage, job_dir, record, solver_configs, trial_rows, criteria_rows)
+            _load_job(stage, data_root, job_dir, record, solver_configs, trial_rows, criteria_rows)
     trials = _frame(trial_rows, _TRIALS_DTYPES).sort_values(
         ["stage", "job_name", "trial_name"], kind="stable", ignore_index=True
     )
@@ -214,6 +219,7 @@ def load_results(data_root: Path) -> ResultTables:
 
 def _load_job(
     stage: str,
+    data_root: Path,
     job_dir: Path,
     record: dict[str, object],
     solver_configs: dict[str, tuple[str | None, str | None, str | None]],
@@ -224,9 +230,15 @@ def _load_job(
     config = config_value if isinstance(config_value, dict) else {}
     config_identity = _opt_str(record.get("config_identity"))
     items = items_by_task_dir(record)
+    # Tasks are materialized beside the job (docs/data-conventions.md):
+    # <data_root>/tasks/<job_name>/<task_dir_name>/task.toml.
+    tasks_dir = data_root / "tasks" / job_dir.name
+    timeout_cache: dict[str, float | None] = {}
     for trial_dir, result in trial_results(job_dir):
         task_name = result.get("task_name")
-        item = items.get(task_name) if isinstance(task_name, str) else None
+        if not isinstance(task_name, str):
+            continue
+        item = items.get(task_name)
         if item is None:
             continue
         row, criteria = _trial_row(
@@ -238,6 +250,7 @@ def _load_job(
             config=config,
             config_identity=config_identity,
             solver_configs=solver_configs,
+            task_timeout_sec=_task_agent_timeout(tasks_dir, task_name, timeout_cache),
         )
         trial_rows.append(row)
         criteria_rows.extend(criteria)
@@ -253,6 +266,7 @@ def _trial_row(
     config: dict[str, object],
     config_identity: str | None,
     solver_configs: dict[str, tuple[str | None, str | None, str | None]],
+    task_timeout_sec: float | None,
 ) -> tuple[dict[str, object], list[dict[str, object]]]:
     config_name = _opt_str(config.get("name"))
     rewards = _rewards(result)
@@ -358,6 +372,11 @@ def _trial_row(
         "n_output_tokens": n_output,
         "cost_usd": cost,
         **{column: _duration_sec(result.get(field)) for field, column in _TIMING_COLUMNS},
+        "agent_timeout_sec": (
+            None
+            if task_timeout_sec is None or (multiplier := _timeout_multiplier(result)) is None
+            else task_timeout_sec * multiplier
+        ),
         "started_at": _opt_str(result.get("started_at")),
         "finished_at": _opt_str(result.get("finished_at")),
         "submission_source": submission_source,
@@ -469,6 +488,54 @@ def _token_cost_totals(
         if cost_value is not None:
             cost = (cost or 0.0) + cost_value
     return n_input, n_cache, n_output, cost
+
+
+def _task_agent_timeout(
+    tasks_dir: Path, task_name: str, cache: dict[str, float | None]
+) -> float | None:
+    """The ``[agent] timeout_sec`` of the trial's materialized task.toml.
+
+    The task.toml is toolkit-written at materialization time, so it
+    records the timeout the trial actually ran under — a job launched
+    before the timeout constant changed keeps its own value. None when
+    the file is missing, unreadable, malformed, or holds no positive
+    number: an unknown timeout is missing, never a default.
+    """
+    if task_name not in cache:
+        cache[task_name] = _read_task_agent_timeout(tasks_dir / task_name / "task.toml")
+    return cache[task_name]
+
+
+def _read_task_agent_timeout(path: Path) -> float | None:
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return None
+    agent = data.get("agent")
+    if not isinstance(agent, dict):
+        return None
+    value = _opt_number(agent.get("timeout_sec"))
+    return value if value is not None and value > 0 else None
+
+
+def _timeout_multiplier(result: dict[str, object]) -> float | None:
+    """Harbor's per-trial timeout multiplier; 1.0 when absent.
+
+    ``result.json`` records the trial config's ``timeout_multiplier``,
+    which scales the task's timeouts at run time — the effective agent
+    timeout is the task.toml value times this factor. A recorded value
+    that is non-numeric or non-positive is unusable and yields None, so
+    the effective timeout loads as missing — the same policy as a
+    non-positive task.toml timeout.
+    """
+    config = result.get("config")
+    recorded = config.get("timeout_multiplier") if isinstance(config, dict) else None
+    if recorded is None:
+        return 1.0
+    value = _opt_number(recorded)
+    if value is None or value <= 0:
+        return None
+    return value
 
 
 def _duration_sec(timing: object) -> float | None:

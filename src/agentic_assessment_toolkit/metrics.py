@@ -53,6 +53,20 @@ BOOTSTRAP_CONFIDENCE = 0.95
 # the too-few-clusters note instead).
 MIN_BOOTSTRAP_CLUSTERS = 5
 
+# Cross-run consistency thresholds, in percentage points of base_pct: a
+# repeated item is flagged when its score range exceeds the first, an
+# individual grading when it deviates from the group median by more than
+# the second. Sized from observed schema-valid but wrong grades, whose
+# ranges reached tens of points while honest repeat noise stayed within
+# a few. Flag-only: nothing is ever excluded by these.
+REPEAT_RANGE_FLAG_PCT = 20.0
+REPEAT_DEVIATION_FLAG_PCT = 10.0
+
+# A trial whose agent-execution duration exceeds this fraction of its
+# agent timeout is counted as near-timeout, so duration creep is visible
+# before it becomes timeout failures.
+NEAR_TIMEOUT_FRACTION = 0.6
+
 # One absolute tolerance for comparing authored points: per-criterion
 # exact agreement and rubric-fidelity max-points matching.
 _POINTS_TOLERANCE = 1e-9
@@ -174,6 +188,37 @@ _UNGRADED_KEYS = [*_CONFIG_KEYS, "course_id", "assignment_id", "job_name", "tria
 _UNGRADED_DTYPES: dict[str, str] = {
     **dict.fromkeys(_UNGRADED_KEYS, "string"),
     "outcome": "string",
+}
+
+# Repeat groups key on the grading config plus the pooling key — the
+# item identity already folds in the rubric and environment bytes, so a
+# group never mixes rubric versions or configs.
+_CONSISTENCY_KEYS = [*_CONFIG_KEYS, "course_id", "assignment_id", "item_id", "item_identity"]
+
+_CONSISTENCY_DTYPES: dict[str, str] = {
+    **dict.fromkeys(_CONSISTENCY_KEYS, "string"),
+    "student_id": "string",
+    "submission_source": "string",
+    "rubric_sha256": "string",
+    "n_gradings": "int64",
+    "base_pct_values": "string",
+    "median_base_pct": "Float64",
+    "range_base_pct": "Float64",
+    "range_flagged": "bool",
+    "n_deviant_gradings": "int64",
+    "deviant_trials": "string",
+}
+
+_NEAR_TIMEOUT_KEYS = ["stage", "job_name", *_CONFIG_KEYS]
+
+_NEAR_TIMEOUT_DTYPES: dict[str, str] = {
+    **dict.fromkeys(_NEAR_TIMEOUT_KEYS, "string"),
+    "n_trials": "int64",
+    "n_measured": "int64",
+    "n_unmeasured": "int64",
+    "n_near_timeout": "int64",
+    "max_agent_execution_sec": "Float64",
+    "agent_timeout_sec": "Float64",
 }
 
 
@@ -522,6 +567,88 @@ def ungraded_solve_trials(trials: pd.DataFrame) -> pd.DataFrame:
             }
         )
     return _table(rows, _UNGRADED_DTYPES, _UNGRADED_KEYS)
+
+
+def repeat_consistency(trials: pd.DataFrame) -> pd.DataFrame:
+    """Cross-run consistency of repeated gradings, one row per repeated item.
+
+    Valid gradings group by grading config and pooling key — the same
+    submission graded more than once under one config and rubric
+    version; an item with a single valid grading contributes no row.
+    Per group: the sorted ``base_pct`` values, their median and range,
+    the group flag (range above ``REPEAT_RANGE_FLAG_PCT``), and the
+    gradings deviating from the median by more than
+    ``REPEAT_DEVIATION_FLAG_PCT`` — counted and named as
+    ``job_name/trial_name``. The flags are advisory pointers for human
+    review: no other table excludes a flagged grading.
+    """
+    valid = trials[_valid_grading_mask(trials)]
+    rows: list[dict[str, object]] = []
+    for key, group in valid.groupby(_CONSISTENCY_KEYS, dropna=False, sort=True):
+        if len(group) < 2:
+            continue
+        base = group["base_pct"].astype(float)
+        median = float(base.median())
+        spread = float(base.max() - base.min())
+        deviant = sorted(
+            f"{job_name}/{trial_name}"
+            for job_name, trial_name, value in zip(
+                group["job_name"], group["trial_name"], base, strict=True
+            )
+            if abs(value - median) > REPEAT_DEVIATION_FLAG_PCT
+        )
+        first = group.iloc[0]
+        row: dict[str, object] = dict(zip(_CONSISTENCY_KEYS, key, strict=True))
+        row.update(
+            {
+                "student_id": first["student_id"],
+                "submission_source": first["submission_source"],
+                "rubric_sha256": first["rubric_sha256"],
+                "n_gradings": len(group),
+                "base_pct_values": "; ".join(f"{value:g}" for value in sorted(base)),
+                "median_base_pct": median,
+                "range_base_pct": spread,
+                "range_flagged": spread > REPEAT_RANGE_FLAG_PCT,
+                "n_deviant_gradings": len(deviant),
+                "deviant_trials": "; ".join(deviant) if deviant else None,
+            }
+        )
+        rows.append(row)
+    return _table(rows, _CONSISTENCY_DTYPES, _CONSISTENCY_KEYS)
+
+
+def near_timeouts(trials: pd.DataFrame) -> pd.DataFrame:
+    """Agent-execution durations against the agent timeout, one row per job.
+
+    A trial is *measured* when both its agent-execution duration and its
+    agent timeout loaded; a measured trial counts as near-timeout when
+    its duration exceeds ``NEAR_TIMEOUT_FRACTION`` of its own timeout.
+    Trials missing either value are counted in ``n_unmeasured``, never
+    flagged. ``max_agent_execution_sec`` is over every trial with a
+    duration; ``agent_timeout_sec`` is the group's largest loaded
+    timeout (within a job they normally all agree).
+    """
+    rows: list[dict[str, object]] = []
+    for key, group in trials.groupby(_NEAR_TIMEOUT_KEYS, dropna=False, sort=True):
+        durations = group["agent_execution_sec"]
+        timeouts = group["agent_timeout_sec"]
+        measured = durations.notna() & timeouts.notna()
+        near = measured & (durations > NEAR_TIMEOUT_FRACTION * timeouts).fillna(False)
+        row: dict[str, object] = dict(zip(_NEAR_TIMEOUT_KEYS, key, strict=True))
+        row.update(
+            {
+                "n_trials": len(group),
+                "n_measured": int(measured.sum()),
+                "n_unmeasured": int((~measured).sum()),
+                "n_near_timeout": int(near.sum()),
+                "max_agent_execution_sec": (
+                    float(durations.max()) if durations.notna().any() else None
+                ),
+                "agent_timeout_sec": float(timeouts.max()) if timeouts.notna().any() else None,
+            }
+        )
+        rows.append(row)
+    return _table(rows, _NEAR_TIMEOUT_DTYPES, _NEAR_TIMEOUT_KEYS)
 
 
 def _pseudo_role(student_id: str) -> str:

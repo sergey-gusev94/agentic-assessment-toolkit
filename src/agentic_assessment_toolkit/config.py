@@ -154,6 +154,16 @@ def environment_path(flavor: str) -> Path:
     return _template_root() / "environments" / f"{flavor}.Dockerfile"
 
 
+def preflight_source_path() -> Path:
+    """The canonical PDF-preflight script.
+
+    grading.Dockerfile embeds a verbatim copy of it as a heredoc (the
+    image builds from an empty context, so nothing can be COPY'd in); a
+    repository test asserts the embedded copy matches this file.
+    """
+    return _template_root() / "environments" / "preflight.py"
+
+
 def verifier_path(stage: Stage) -> Path:
     filename = "solve_verifier.py" if stage == "solve" else "grading_verifier.py"
     return _template_root() / "verifiers" / filename

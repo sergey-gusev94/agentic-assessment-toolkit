@@ -95,11 +95,19 @@ def test_solve_verifier_rejects_bookkeeping(tmp_path: Path, assignment: Path) ->
     assert any("bookkeeping" in f for f in failures)
 
 
-def run_grading_verifier(tmp_path: Path, output_dir: Path) -> dict[str, Any]:
+def run_grading_verifier(
+    tmp_path: Path,
+    output_dir: Path,
+    expected_criteria: list[dict[str, object]] | None = None,
+) -> dict[str, Any]:
     tests_dir = tmp_path / "tests"
     tests_dir.mkdir(exist_ok=True)
     shutil.copy(verifier_path("grade"), tests_dir / "grading_verifier.py")
     shutil.copy(grading_schema_source_path(), tests_dir / "grading_schema.py")
+    if expected_criteria is not None:
+        (tests_dir / "expected_criteria.json").write_text(
+            json.dumps(expected_criteria), encoding="utf-8"
+        )
     reward_path = tmp_path / "reward.json"
     completed = subprocess.run(
         [sys.executable, str(tests_dir / "grading_verifier.py")],
@@ -127,6 +135,16 @@ def make_grading_output(tmp_path: Path, result: dict[str, object] | None) -> Pat
     return output_dir
 
 
+# The expected-criteria list matching valid_result(): what the
+# materializer would have written from the rubric that produced it.
+def matching_expected_criteria() -> list[dict[str, object]]:
+    return [
+        {"id": "p1", "max_points": 8, "bonus": False},
+        {"id": "p2", "max_points": 2, "bonus": False},
+        {"id": "extra", "max_points": 1, "bonus": True},
+    ]
+
+
 def test_grading_verifier_surfaces_derived_scores(tmp_path: Path) -> None:
     output_dir = make_grading_output(tmp_path, valid_result())
     result = run_grading_verifier(tmp_path, output_dir)
@@ -135,7 +153,98 @@ def test_grading_verifier_surfaces_derived_scores(tmp_path: Path) -> None:
     assert result["details"]["score_pct"] == 85.0
     assert result["details"]["base_pct"] == 80.0
     assert result["details"]["sums_consistent"] is True
+    # No expected-criteria file (a task materialized before the file
+    # existed): the rubric cross-check is skipped silently.
+    assert result["details"]["expected_criteria_checked"] is False
     assert result["rewards_file"] == {"reward": 85.0, "base_pct": 80.0}
+
+
+def test_grading_verifier_accepts_criteria_matching_the_rubric(tmp_path: Path) -> None:
+    output_dir = make_grading_output(tmp_path, valid_result())
+    result = run_grading_verifier(tmp_path, output_dir, matching_expected_criteria())
+    assert result["reward"] == 85.0
+    assert result["details"]["contract_valid"] is True
+    assert result["details"]["expected_criteria_checked"] is True
+    assert result["details"]["errors"] == []
+
+
+def run_rubric_mismatch(tmp_path: Path, graded: dict[str, object] | None = None) -> dict[str, Any]:
+    output_dir = make_grading_output(tmp_path, graded if graded is not None else valid_result())
+    result = run_grading_verifier(tmp_path, output_dir, matching_expected_criteria())
+    assert result["reward"] == 0.0
+    assert result["details"]["contract_valid"] is False
+    assert result["details"]["expected_criteria_checked"] is True
+    assert result["rewards_file"] == {"reward": 0.0}
+    return result
+
+
+def test_grading_verifier_rejects_dropped_criterion(tmp_path: Path) -> None:
+    graded = valid_result()
+    del graded["criteria"][1]  # drop p2
+    result = run_rubric_mismatch(tmp_path, graded)
+    assert result["details"]["errors"] == [
+        "rubric mismatch: criterion 'p2' from the rubric is missing from the grading result"
+    ]
+
+
+def test_grading_verifier_rejects_renamed_criterion(tmp_path: Path) -> None:
+    graded = valid_result()
+    graded["criteria"][1]["id"] = "p2-renamed"
+    result = run_rubric_mismatch(tmp_path, graded)
+    assert result["details"]["errors"] == [
+        "rubric mismatch: criterion 'p2' from the rubric is missing from the grading result",
+        "rubric mismatch: criterion 'p2-renamed' is not in the rubric",
+    ]
+
+
+def test_grading_verifier_rejects_changed_max_points(tmp_path: Path) -> None:
+    graded = valid_result()
+    graded["criteria"][0]["max_points"] = 5
+    graded["criteria"][0]["points"] = 4
+    result = run_rubric_mismatch(tmp_path, graded)
+    assert result["details"]["errors"] == [
+        "rubric mismatch: criterion 'p1': max_points 5 does not match the rubric's 8"
+    ]
+
+
+def test_grading_verifier_rejects_flipped_bonus_flag(tmp_path: Path) -> None:
+    graded = valid_result()
+    graded["criteria"][2]["bonus"] = False
+    result = run_rubric_mismatch(tmp_path, graded)
+    assert result["details"]["errors"] == [
+        "rubric mismatch: criterion 'extra': bonus false does not match the rubric's true"
+    ]
+
+
+def test_grading_verifier_short_circuits_rubric_check_on_structural_failure(
+    tmp_path: Path,
+) -> None:
+    """Structural validation fails first: the expected-criteria file exists,
+    but the rubric cross-check never runs, so the flag stays false."""
+    bad = valid_result()
+    bad["criteria"][0]["evidence"] = ""
+    output_dir = make_grading_output(tmp_path, bad)
+    result = run_grading_verifier(tmp_path, output_dir, matching_expected_criteria())
+    assert result["reward"] == 0.0
+    assert result["details"]["contract_valid"] is False
+    assert result["details"]["expected_criteria_checked"] is False
+    assert result["rewards_file"] == {"reward": 0.0}
+
+
+def test_grading_verifier_reports_malformed_expected_criteria(tmp_path: Path) -> None:
+    """A broken expected-criteria file is a contract error with a reward
+    file written — never an uncaught crash — and the check did not run."""
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    for content in ("not json", '[{"id": "p1"}]'):  # unparseable; missing keys
+        (tests_dir / "expected_criteria.json").write_text(content, encoding="utf-8")
+        output_dir = make_grading_output(tmp_path, valid_result())
+        result = run_grading_verifier(tmp_path, output_dir)
+        assert result["reward"] == 0.0
+        assert result["details"]["contract_valid"] is False
+        assert result["details"]["expected_criteria_checked"] is False
+        assert any("malformed expected_criteria.json" in e for e in result["details"]["errors"])
+        assert result["rewards_file"] == {"reward": 0.0}
 
 
 def test_grading_verifier_tolerates_scratch_files(tmp_path: Path) -> None:

@@ -37,8 +37,10 @@ REPORT_FILENAMES = (
     "grades_by_course.csv",
     "students.csv",
     "judge_quality.csv",
+    "repeat_consistency.csv",
     "grader_checks.csv",
     "failures.csv",
+    "near_timeouts.csv",
     "ungraded_solves.csv",
     "report.md",
     "provenance.json",
@@ -62,6 +64,37 @@ _ASSIGNMENT_TABLE_COLUMNS = (
     "mean_base_pct",
     "sd_base_pct",
     "mean_score_pct",
+)
+
+# The near-timeout table drops the config identity, whose full hash
+# lives in the CSV.
+_NEAR_TIMEOUT_TABLE_COLUMNS = (
+    "stage",
+    "job_name",
+    "config_name",
+    "n_trials",
+    "n_measured",
+    "n_unmeasured",
+    "n_near_timeout",
+    "max_agent_execution_sec",
+    "agent_timeout_sec",
+)
+
+# The flagged-repeats table keeps the identifying and score columns and
+# drops the config identity, whose full hash lives in the CSV.
+_CONSISTENCY_TABLE_COLUMNS = (
+    "config_name",
+    "course_id",
+    "assignment_id",
+    "student_id",
+    "item_id",
+    "rubric",
+    "n_gradings",
+    "base_pct_values",
+    "median_base_pct",
+    "range_base_pct",
+    "n_deviant_gradings",
+    "deviant_trials",
 )
 
 
@@ -96,8 +129,10 @@ def write_report(
         "grades_by_course": metrics.grades_by_course(trials, seed=seed),
         "students": metrics.student_grades(trials),
         "judge_quality": metrics.judge_quality(trials, criteria, data_root=data_root),
+        "repeat_consistency": metrics.repeat_consistency(trials),
         "grader_checks": metrics.grader_checks(trials),
         "failures": metrics.failure_accounting(trials),
+        "near_timeouts": metrics.near_timeouts(trials),
         "ungraded_solves": metrics.ungraded_solve_trials(trials),
     }
     created_utc = (now if now is not None else datetime.now(UTC)).isoformat()
@@ -202,6 +237,11 @@ def _provenance(
             "confidence": metrics.BOOTSTRAP_CONFIDENCE,
             "min_clusters": metrics.MIN_BOOTSTRAP_CLUSTERS,
         },
+        "flag_thresholds": {
+            "repeat_range_pct": metrics.REPEAT_RANGE_FLAG_PCT,
+            "repeat_deviation_pct": metrics.REPEAT_DEVIATION_FLAG_PCT,
+            "near_timeout_fraction": metrics.NEAR_TIMEOUT_FRACTION,
+        },
         "configs": [
             {"name": name, "identity": identity, "stage": stage}
             for name, identity, stage in sorted(
@@ -249,9 +289,11 @@ def _report_markdown(
     ]
     parts.extend(_benchmark_section(tables["grades_by_assignment"], tables["grades_by_course"]))
     parts.extend(_judge_section(tables["judge_quality"]))
+    parts.extend(_consistency_section(tables["repeat_consistency"]))
     parts.extend(_checks_section(tables["grader_checks"]))
     parts.extend(_assistant_section(metrics.class_distribution(tables["students"])))
     parts.extend(_failures_section(tables["failures"]))
+    parts.extend(_near_timeout_section(tables["near_timeouts"]))
     parts.extend(_ungraded_section(tables["ungraded_solves"]))
     return "\n\n".join(parts) + "\n"
 
@@ -365,6 +407,38 @@ def _judge_section(judge: pd.DataFrame) -> list[str]:
     return parts
 
 
+def _consistency_section(consistency: pd.DataFrame) -> list[str]:
+    parts = ["## Cross-run consistency"]
+    if consistency.empty:
+        parts.append("No item in this report was graded more than once under one config.")
+        return parts
+    parts.append(
+        "One row per repeated item: the same submission graded more than "
+        "once under one grading config and rubric version. A group is "
+        f"flagged when its `base_pct` range exceeds "
+        f"{metrics.REPEAT_RANGE_FLAG_PCT:g} percentage points; a single "
+        "grading is flagged when it deviates more than "
+        f"{metrics.REPEAT_DEVIATION_FLAG_PCT:g} points from its group "
+        "median. Flagged items deserve human review — a wide range means "
+        "at least one of the gradings is wrong. The flags exclude "
+        "nothing: every grading here still enters every aggregate above. "
+        "The full table, unflagged groups included, is "
+        "repeat_consistency.csv."
+    )
+    n_flagged = int((consistency["range_flagged"] | (consistency["n_deviant_gradings"] > 0)).sum())
+    parts.append(
+        f"{n_flagged} of {len(consistency)} repeated item(s) flagged; "
+        f"{int(consistency['n_deviant_gradings'].sum())} grading(s) deviate more than "
+        f"{metrics.REPEAT_DEVIATION_FLAG_PCT:g} points from their group median."
+    )
+    flagged = consistency[consistency["range_flagged"] | (consistency["n_deviant_gradings"] > 0)]
+    if flagged.empty:
+        parts.append("No repeated item exceeds either threshold.")
+    else:
+        parts.append(_markdown_table(flagged, columns=_CONSISTENCY_TABLE_COLUMNS))
+    return parts
+
+
 def _checks_section(checks: pd.DataFrame) -> list[str]:
     parts = ["## Grader checks"]
     if checks.empty:
@@ -409,6 +483,29 @@ def _failures_section(failures: pd.DataFrame) -> list[str]:
         "failures are never silently dropped."
     )
     parts.append(_markdown_table(failures))
+    return parts
+
+
+def _near_timeout_section(near: pd.DataFrame) -> list[str]:
+    parts = ["## Near-timeout trials"]
+    if near.empty:
+        parts.append("No trials in this report.")
+        return parts
+    parts.append(
+        "Agent-execution durations against each trial's agent timeout, "
+        "one row per job. The timeout is read from the job's materialized "
+        "task.toml (times Harbor's timeout multiplier when set), so an "
+        "old job keeps the timeout it ran under. A trial above "
+        f"{round(metrics.NEAR_TIMEOUT_FRACTION * 100)}% of its timeout counts in "
+        "`n_near_timeout` — rising counts here show duration creep before "
+        "it becomes timeout failures. A trial whose duration or timeout "
+        "is unavailable is counted in `n_unmeasured`, never flagged."
+    )
+    parts.append(
+        f"{int(near['n_near_timeout'].sum())} of {int(near['n_measured'].sum())} measured "
+        f"trial(s) near timeout; {int(near['n_unmeasured'].sum())} trial(s) not measurable."
+    )
+    parts.append(_markdown_table(near, columns=_NEAR_TIMEOUT_TABLE_COLUMNS))
     return parts
 
 

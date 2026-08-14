@@ -95,11 +95,11 @@ mypy_path = "src"
 files = ["src", "tests"]
 warn_return_any = true
 warn_unused_ignores = true
-# Verifier templates are standalone stdlib-only scripts that run inside
-# task containers, outside this package; they are exercised by tests as
-# subprocesses instead of being type-checked as package modules. Golden
-# fixtures contain byte-exact copies of them.
+# Template scripts (the verifiers and the PDF preflight) are standalone
+# scripts that run inside task containers, outside this package; they
+# are exercised by tests as subprocesses instead of being type-checked
+# as package modules. Golden fixtures contain byte-exact copies of them.
 exclude = [
-  "src/agentic_assessment_toolkit/templates/verifiers/",
+  "src/agentic_assessment_toolkit/templates/",
   "tests/fixtures/",
 ]

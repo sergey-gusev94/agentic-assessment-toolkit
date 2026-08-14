@@ -137,6 +137,38 @@ CHECK_COLUMNS = [
 
 FAILURE_COLUMNS = ["stage", "config_name", "config_identity", "outcome", "n_trials", "share"]
 
+CONSISTENCY_COLUMNS = [
+    "config_name",
+    "config_identity",
+    "course_id",
+    "assignment_id",
+    "item_id",
+    "item_identity",
+    "student_id",
+    "submission_source",
+    "rubric_sha256",
+    "n_gradings",
+    "base_pct_values",
+    "median_base_pct",
+    "range_base_pct",
+    "range_flagged",
+    "n_deviant_gradings",
+    "deviant_trials",
+]
+
+NEAR_TIMEOUT_COLUMNS = [
+    "stage",
+    "job_name",
+    "config_name",
+    "config_identity",
+    "n_trials",
+    "n_measured",
+    "n_unmeasured",
+    "n_near_timeout",
+    "max_agent_execution_sec",
+    "agent_timeout_sec",
+]
+
 UNGRADED_COLUMNS = [
     "config_name",
     "config_identity",
@@ -271,6 +303,9 @@ def test_module_constants_match_the_contract() -> None:
     assert metrics.BOOTSTRAP_RESAMPLES == 10_000
     assert metrics.BOOTSTRAP_CONFIDENCE == 0.95
     assert metrics.MIN_BOOTSTRAP_CLUSTERS == 5
+    assert metrics.REPEAT_RANGE_FLAG_PCT == 20.0
+    assert metrics.REPEAT_DEVIATION_FLAG_PCT == 10.0
+    assert metrics.NEAR_TIMEOUT_FRACTION == 0.6
     # One source for the taxonomy: metrics shares results.py's tuple.
     assert metrics.OUTCOME_CATEGORIES is OUTCOME_CATEGORIES
 
@@ -709,6 +744,126 @@ def test_grader_checks_roles_and_raw_numbers() -> None:
     assert float(irrelevant["mean_base_pct"]) == 3.0
 
 
+def repeated(value: float, name: str, item: str = "X", **over: object) -> dict[str, object]:
+    """One valid grading of a repeated item, pooled by (item_id, item_identity)."""
+    return graded(value, value, trial_name=name, item_id=item, item_identity=f"{item}-id", **over)
+
+
+def test_repeat_consistency_flags_ranges_and_deviant_runs() -> None:
+    trials = trials_frame(
+        [
+            # Item X: five repeats with one wild outlier — the motivating
+            # case of a schema-valid but wrong grade.
+            repeated(90.0, "x1"),
+            repeated(8.0, "x2"),
+            repeated(95.0, "x3"),
+            repeated(92.0, "x4"),
+            repeated(97.0, "x5"),
+            # Item Y: an agreeing pair — a row, but nothing flagged.
+            repeated(80.0, "y1", item="Y", student_id="stu1", rubric_sha256="ab" * 32),
+            repeated(85.0, "y2", item="Y", student_id="stu1", rubric_sha256="ab" * 32),
+            # Item V: range under 20, but one run beyond 10 from the
+            # median — the two flags are independent.
+            repeated(50.0, "v1", item="V"),
+            repeated(50.0, "v2", item="V"),
+            repeated(65.0, "v3", item="V"),
+            repeated(70.0, "z1", item="Z"),  # single grading: no row
+            # Same item under another config: never pooled with X's group.
+            repeated(99.0, "x9", config_name="grader2", config_identity="G2"),
+            # A failed grading is not a repeat: W has one valid grading.
+            failed_grading(trial_name="w1", item_id="W", item_identity="W-id"),
+            repeated(60.0, "w2", item="W"),
+        ]
+    )
+    table = metrics.repeat_consistency(trials)
+    assert list(table.columns) == CONSISTENCY_COLUMNS
+    assert list(table["item_id"]) == ["V", "X", "Y"]
+
+    x = row_where(table, "item_id", "X")
+    assert x["config_name"] == "grader"
+    assert x["n_gradings"] == 5
+    assert x["base_pct_values"] == "8; 90; 92; 95; 97"
+    assert float(x["median_base_pct"]) == 92.0
+    assert float(x["range_base_pct"]) == 89.0
+    assert bool(x["range_flagged"]) is True
+    assert x["n_deviant_gradings"] == 1
+    assert x["deviant_trials"] == "J/x2"
+
+    v = row_where(table, "item_id", "V")
+    assert float(v["range_base_pct"]) == 15.0
+    assert bool(v["range_flagged"]) is False
+    assert v["n_deviant_gradings"] == 1
+    assert v["deviant_trials"] == "J/v3"
+
+    y = row_where(table, "item_id", "Y")
+    assert y["student_id"] == "stu1"
+    assert y["rubric_sha256"] == "ab" * 32
+    assert y["base_pct_values"] == "80; 85"
+    assert float(y["median_base_pct"]) == 82.5
+    assert float(y["range_base_pct"]) == 5.0
+    assert bool(y["range_flagged"]) is False
+    assert y["n_deviant_gradings"] == 0
+    assert pd.isna(y["deviant_trials"])
+
+
+def test_repeat_consistency_thresholds_are_strict() -> None:
+    # Exactly at the thresholds — range 20, deviations 10 — nothing flags.
+    trials = trials_frame([repeated(60.0, "b1", item="B"), repeated(80.0, "b2", item="B")])
+    row = metrics.repeat_consistency(trials).iloc[0]
+    assert float(row["range_base_pct"]) == 20.0
+    assert bool(row["range_flagged"]) is False
+    assert row["n_deviant_gradings"] == 0
+
+
+def test_near_timeouts_counts_per_job_and_config() -> None:
+    trials = trials_frame(
+        [
+            solved(
+                "completed", trial_name="a", agent_execution_sec=2200.0, agent_timeout_sec=3600.0
+            ),
+            # Exactly 60% of the timeout is not near: the flag is strict.
+            solved(
+                "completed", trial_name="b", agent_execution_sec=2160.0, agent_timeout_sec=3600.0
+            ),
+            solved("timeout", trial_name="c", agent_timeout_sec=3600.0),  # no duration
+            solved("completed", trial_name="d", agent_execution_sec=2500.0),  # no timeout
+            graded(
+                80.0, 80.0, trial_name="e", agent_execution_sec=1900.0, agent_timeout_sec=1800.0
+            ),
+        ]
+    )
+    table = metrics.near_timeouts(trials)
+    assert list(table.columns) == NEAR_TIMEOUT_COLUMNS
+    assert len(table) == 2
+
+    solve_row = row_where(table, "stage", "solve")
+    assert solve_row["job_name"] == "J"
+    assert solve_row["config_name"] == "solver"
+    assert solve_row["n_trials"] == 4
+    assert solve_row["n_measured"] == 2
+    assert solve_row["n_unmeasured"] == 2
+    assert solve_row["n_near_timeout"] == 1
+    # The maximum duration covers every trial with one, measured or not.
+    assert float(solve_row["max_agent_execution_sec"]) == 2500.0
+    assert float(solve_row["agent_timeout_sec"]) == 3600.0
+
+    grade_row = row_where(table, "stage", "grade")
+    assert grade_row["n_trials"] == 1
+    assert grade_row["n_measured"] == 1
+    assert grade_row["n_near_timeout"] == 1  # each trial checks its own timeout
+    assert float(grade_row["agent_timeout_sec"]) == 1800.0
+
+
+def test_near_timeouts_without_any_timing_data() -> None:
+    row = metrics.near_timeouts(trials_frame([solved("completed")])).iloc[0]
+    assert row["n_trials"] == 1
+    assert row["n_measured"] == 0
+    assert row["n_unmeasured"] == 1
+    assert row["n_near_timeout"] == 0
+    assert pd.isna(row["max_agent_execution_sec"])
+    assert pd.isna(row["agent_timeout_sec"])
+
+
 def test_failure_accounting_includes_zero_count_categories() -> None:
     trials = trials_frame(
         [
@@ -781,6 +936,8 @@ def test_empty_inputs_yield_full_columns(tmp_path: Path) -> None:
         ),
         "grader_checks": (metrics.grader_checks(empty), CHECK_COLUMNS),
         "failure_accounting": (metrics.failure_accounting(empty), FAILURE_COLUMNS),
+        "repeat_consistency": (metrics.repeat_consistency(empty), CONSISTENCY_COLUMNS),
+        "near_timeouts": (metrics.near_timeouts(empty), NEAR_TIMEOUT_COLUMNS),
         "ungraded_solve_trials": (metrics.ungraded_solve_trials(empty), UNGRADED_COLUMNS),
     }
     for name, (table, columns) in expected.items():
@@ -791,6 +948,8 @@ def test_empty_inputs_yield_full_columns(tmp_path: Path) -> None:
     assert str(expected["solve_summary"][0].dtypes["contract_pass_rate"]) == "Float64"
     assert str(expected["failure_accounting"][0].dtypes["share"]) == "Float64"
     assert str(expected["grader_checks"][0].dtypes["role"]) == "string"
+    assert str(expected["repeat_consistency"][0].dtypes["range_flagged"]) == "bool"
+    assert str(expected["near_timeouts"][0].dtypes["max_agent_execution_sec"]) == "Float64"
 
 
 def test_rubric_fidelity_resolves_a_superseded_version_from_the_archive(tmp_path: Path) -> None:

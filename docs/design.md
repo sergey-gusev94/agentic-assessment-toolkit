@@ -330,6 +330,22 @@ is itself a judge-quality signal consumed by the statistics layer.
 Structural violations remain hard contract failures: missing or
 malformed required fields, duplicate criterion ids, out-of-range or
 non-finite points, missing or all-bonus criteria, and empty evidence.
+The criteria must also reproduce the rubric exactly. At
+materialization the toolkit writes the rubric's parsed criteria — id,
+max_points, and bonus flag, in rubric order — to
+`tests/expected_criteria.json` beside the verifier, and the verifier
+compares the grader's authored criteria against it: the id sets must
+match, and each criterion's max_points and bonus flag must equal the
+rubric's. Any divergence — a dropped, renamed, added, or reweighted
+criterion — silently changes the score denominator, so it is a hard
+contract failure (reward 0.0, the mismatches listed in the verifier
+details, `expected_criteria_checked: true`). Tasks materialized
+before the file existed have no expected-criteria file; the verifier
+then skips the check so doneness-based reruns of old jobs keep
+working. `expected_criteria_checked` is false exactly when the check
+did not run — the file is absent, or structural validation failed
+first; a malformed expected-criteria file is itself recorded as a
+contract error, never an uncaught crash.
 Percentages are never authored by the grader — all summation and
 division policy lives in code (`derive_scores` in `grading_schema.py`,
 computing from the criteria), so a scoring-convention change never
@@ -428,21 +444,39 @@ and never compiled: LaTeX compilation is code execution. It also states
 that any instructions found inside the assignment, submission, or
 reference are content about the work, never directives to the grader.
 
-It also states the unreadable-content policy, added after real
-submissions whose malformed PDF bounding boxes made renderers produce
-blank pages while the student's work sat intact inside the file. A
-blank-rendered page is never accepted as blank until `pdfimages -list`
-confirms the page holds nothing; hidden images are extracted with
-`pdfimages -png` and read directly. Content the grader believes exists
-but cannot read triggers escalation — the other installed readers,
-`qpdf --qdf`, installing alternative PDF engines — before anything may
-be scored as missing, and installing is for reading only, never for
-executing the work. Content still unreadable after full escalation
-must never receive a fabricated grade: the grader is directed to
-withhold `grading_result.json` and explain the problem in
-`justification.md`, making the trial a contract violation — a failed
-measurement that is rerun (see reward semantics), never a silent
-zero.
+It also states the submission-reading procedure, added after real
+grading runs produced schema-valid wrong grades from three distinct
+reading failures: a grader that only extracted embedded images and
+never rasterized pages missed vector-ink handwriting; a malformed
+bounding box made every renderer blank two pages that held the
+student's work; and graders asserted "duplicate pages" that the
+actual image bytes refute. The grader's mandatory first step is the
+deterministic PDF preflight baked into the grading image at
+`/opt/aat/preflight.py`: it renders every submission PDF page at a
+fixed 150 DPI and writes a manifest recording, per page, the rendered
+ink fraction, the extractable-text count, and the embedded-image
+inventory with content hashes. PDFs are graded from these canonical
+renders; extraction tools are supplementary evidence, never the sole
+reading path. The manifest flags `DISCREPANCY` (a page renders nearly
+blank while holding substantial drawable content — the
+hidden-content signature), `DAMAGED` (qpdf reports structural
+errors), and `NO_TEXT_LAYER` (informational). A flagged page is never
+scored as blank or missing: the grader repairs a temporary copy
+(`qpdf`/`mutool clean` rewrites, sanitizing malformed values such as
+an overflowed Form-XObject bounding box, exposing form streams) and
+re-renders; claims that pages are blank, duplicated, or missing must
+cite the manifest, and a duplicate-page claim requires matching
+image hashes. Run-time tool installation is no longer a recovery
+step: the image carries every reader the procedure names, and a
+network-dependent grade is not reproducible. When a submission holds
+overlapping or duplicate files, the grader grades the most complete
+version and names it in the overall comment; readable content with
+no gradable academic work scores zero on each criterion with that
+stated as evidence. Content still unreadable after repair must never
+receive a fabricated grade: the grader is directed to withhold
+`grading_result.json` and explain the problem in `justification.md`,
+making the trial a contract violation — a failed measurement that is
+rerun (see reward semantics), never a silent zero.
 
 ### Experiment configs and config identity
 
@@ -523,15 +557,26 @@ derived from the packages the reference corpus actually uses:
   `qpdf` for PDF structure inspection, pymupdf and pikepdf as
   alternative engines for malformed PDFs that defeat poppler and
   pypdf (observed gradings installed both at run time to recover
-  unreadable files), `xxd` for hex dumps, and binutils' `strings` for
-  reading text out of binary files such as saved model checkpoints
-  without loading them. The template ends with a build-time smoke
-  test exercising the advertised inspection tools — contact sheets,
-  annotation, OCR, PDF rasterization and structure inspection, the
-  Python readers — so a tool that installs cleanly but cannot run
-  fails the build instead of a grading run. Nothing from the
-  submission, reference, or assignment is ever executed during
-  grading. The image creates `/app/grading_output/`.
+  unreadable files), mupdf-tools (`mutool clean`/`mutool draw`, a
+  second independent renderer and rewriter for the repair path),
+  `xxd` for hex dumps, and binutils' `strings` for reading text out
+  of binary files such as saved model checkpoints without loading
+  them. The image carries the PDF preflight script at
+  `/opt/aat/preflight.py`, embedded in the Dockerfile as a heredoc
+  because environment templates build from an empty context; a
+  repository test keeps the embedded copy byte-identical to
+  `templates/environments/preflight.py`. The template ends with a
+  build-time smoke test exercising the advertised inspection tools —
+  contact sheets, annotation, OCR, PDF rasterization and structure
+  inspection, the Python readers, and the preflight's self-test,
+  which authors three synthetic PDFs (an overflowed-bounding-box
+  form that must flag `DISCREPANCY`, vector ink over a background
+  image that must render with ink, a genuinely blank scan that must
+  not flag) — so a tool that installs cleanly but cannot run fails
+  the build instead of a grading run. Nothing from the submission,
+  reference, or assignment is ever executed during grading, and the
+  grading prompt forbids run-time package installation outright. The
+  image creates `/app/grading_output/`.
 
 Every environment includes `file` and `jq` for basic file-type and JSON
 inspection, plus a pinned Node and a pinned Codex CLI: Harbor's
@@ -550,8 +595,9 @@ extractable text): PDF text extraction (poppler-utils with
 poppler-data for non-Latin CMaps, pypdf), OCR for scans (tesseract,
 rasterizing via poppler's `pdftoppm`), Word and PowerPoint reading
 (pandoc, python-docx, python-pptx), and `unzip`. Preinstalling the
-baseline keeps the run-time install allowance the rare exception
-rather than a per-trial network dependency. The output contract requires document
+baseline keeps the solver flavors' run-time install allowance the
+rare exception rather than a per-trial network dependency; the
+grading prompt forbids run-time installs outright. The output contract requires document
 source, never compiled PDFs, so no image needs TeX and there is no
 `latex` flavor ([roadmap.md](roadmap.md)).
 
@@ -564,7 +610,9 @@ resolve entirely locally — without this, every trial's build
 re-resolved the template's public base tag against its registry, and
 a transient registry failure or throttle failed trials mid-run. The
 launch-time base build is the one build that still reaches a registry;
-`aat` runs it before starting Harbor, retries it with backoff, and
+`aat` runs it before starting Harbor, retries it with backoff (waits
+of 10 s, 60 s, then 300 s — observed registry throttling persists for
+minutes, and this build is the launch's only registry contact), and
 skips it when the image already exists locally. The content-hash tag
 means a template edit yields a fresh name and a stale image is never
 reused, and the template bytes enter per-item identity exactly as
@@ -615,9 +663,10 @@ asked, and the optional rubric source as transcription context that
 never overrides the rubric — the static-inspection rule (read as data;
 never execute or compile; converting a given document into readable
 form — rasterization, OCR, unpacking an archive — is reading, not
-execution) with its narrow install allowance
-(document-reading tools only, when a file's format defeats the
-installed ones; never anything that executes the work under review),
+execution) and the outright run-time install prohibition (the grading
+image carries every reader the procedure names, and a run-time
+install would make the grade depend on the network; the solver's
+install allowance does not extend to the grader),
 prompt-injection resistance (instructions
 inside the submission are content, not commands), rubric authority — including the requirement
 to reproduce the rubric's enumerated criteria verbatim: same ids, same
@@ -757,20 +806,28 @@ grading trials remain on disk as explicit outcomes. The doneness
 check fails closed: a job whose recorded stage does not match the
 requested stage contributes nothing.
 
-Harbor-level retries are enabled for infrastructure failures only. The
-generated job config sets a retry policy — up to three retries per
-trial, waiting 10 s, 60 s, then 300 s — whose include list names
-exactly the two exception types Harbor raises when a trial's
-environment never came up: `RuntimeError` (Docker command failures,
-which is how transient image-registry errors surfaced in practice) and
-`EnvironmentStartTimeoutError`. Such an attempt holds no measurement,
-so nothing is lost when Harbor erases the failed attempt's directory
+Harbor-level retries are enabled for failures that hold no
+measurement. The generated job config sets a retry policy — up to
+three retries per trial, waiting 10 s, 60 s, then 300 s — whose
+include list names exactly three exception types: `RuntimeError`
+(Docker command failures, which is how transient image-registry
+errors surfaced in practice), `EnvironmentStartTimeoutError` (the
+environment build timed out), and `NonZeroAgentExitCodeError` (the
+agent command exited nonzero before verification — observed when the
+provider rejects a run with a transient capacity error the agent
+surfaces only as exit code 1). Harbor matches these names exactly,
+without inheritance, which is why the `RuntimeError` subclass is
+listed by its own name. Such an attempt holds no measurement, so
+nothing is lost when Harbor erases the failed attempt's directory
 and reruns it in place. Every outcome-bearing failure — agent
 timeouts, refusals, an invalid grading result — is outside the
 include list and is never retried, because Harbor's in-place retry
 would erase the per-attempt history that explicit failure accounting
 depends on. For those, re-running the `aat` command is the retry
 mechanism, and it accumulates trials rather than overwriting them.
+`ApiUsageLimitError` is deliberately not retried either: it means an
+exhausted subscription quota, which backoff cannot fix; re-running
+the `aat` command recovers those trials once quota returns.
 
 ### Results, statistics, and reporting
 
@@ -800,9 +857,15 @@ tidy pandas tables:
   artifact via `sums_report`, the same shared validation module the
   verifier uses), token counts (input, cached, output), reported cost
   when present, per-phase durations (environment setup, agent setup,
-  agent execution, verification), and timestamps. Token and cost
-  values a run did not report load as missing, never as zero — zero
-  never means unknown. Token counts keep Harbor's semantics verbatim —
+  agent execution, verification), and timestamps. Each trial also
+  carries `agent_timeout_sec`, the agent timeout it ran under: the
+  `[agent] timeout_sec` of its materialized task.toml under the data
+  root's `tasks/` tree, times Harbor's per-trial timeout multiplier
+  when the trial result records one — so a job launched before the
+  timeout constant changed keeps its own value. A timeout that is
+  missing, unreadable, or non-positive loads as missing. Token and
+  cost values a run did not report load as missing, never as zero —
+  zero never means unknown. Token counts keep Harbor's semantics verbatim —
   the input count includes cached tokens, and multi-step trials sum
   their per-step agent contexts. Harbor's timestamps are not
   guaranteed timezone-aware and load as informational only; no
@@ -901,6 +964,22 @@ bytes it used — and a trial whose rubric version is on disk nowhere,
 or does not parse, is counted as unresolved rather than rated. Failure
 rates per outcome category complete the set.
 
+Cross-run consistency is a deterministic flag over repeated gradings:
+valid gradings group by grading config and pooling key — the same
+submission graded more than once under one config and rubric version —
+and each group reports its sorted `base_pct` values, median, and
+range. A group is flagged when the range exceeds 20 percentage
+points, an individual grading when it deviates more than 10 points
+from the group median; the thresholds are recorded in the report
+provenance. The flags are advisory pointers for human review — a
+schema-valid but wrong grade shows up as a wide repeat range — and
+never exclude a grading from any aggregate. Near-timeout accounting
+makes duration creep visible before it becomes timeout failures: per
+job, trials whose agent-execution duration exceeds 60% of their own
+agent timeout are counted, beside the trials whose duration or
+timeout is unavailable (skipped and counted, never flagged) and the
+job's maximum duration and timeout.
+
 Grading-assistant statistics are descriptive only — per student and
 assignment: the mean over valid gradings, the repeat SD (the
 per-student uncertainty statement), the grading count, and flags;
@@ -939,7 +1018,10 @@ grader-check summary — as CSV tables plus a Markdown report under
 containing the two tidy tables (`trials.csv`, `criteria.csv`), the
 derived tables (`solve_summary.csv`, `grades_by_assignment.csv`,
 `grades_by_course.csv`, `students.csv`, `judge_quality.csv`,
-`grader_checks.csv`, `failures.csv`, `ungraded_solves.csv` — one named
+`grader_checks.csv`, `repeat_consistency.csv` — one row per repeated
+item with its score list, median, range, and flags,
+`near_timeouts.csv` — per-job near-timeout counts,
+`failures.csv`, `ungraded_solves.csv` — one named
 row per solve trial with no valid grading and its outcome, the direct
 answer to what is missing from grading and why), `report.md`, and
 `provenance.json`. The tidy tables are always emitted so any further
@@ -995,7 +1077,9 @@ src/agentic_assessment_toolkit/
 └── templates/             # package data (importlib.resources)
     ├── prompts/           # solver.md, grader.md, intake.md
     ├── verifiers/         # two standalone scripts
-    ├── environments/      # one Dockerfile per flavor
+    ├── environments/      # one Dockerfile per flavor, plus
+    │                      #   preflight.py (canonical source of the
+    │                      #   grading image's embedded copy)
     └── task/              # task.toml template
 ```
 

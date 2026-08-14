@@ -60,6 +60,7 @@ TRIALS_COLUMNS = [
     "agent_setup_sec",
     "agent_execution_sec",
     "verifier_sec",
+    "agent_timeout_sec",
     "started_at",
     "finished_at",
     "submission_source",
@@ -193,6 +194,21 @@ def write_trial(
     return trial_dir
 
 
+def write_task_toml(
+    root: Path,
+    job_name: str,
+    task: str,
+    *,
+    timeout_sec: float = 3600.0,
+    text: str | None = None,
+) -> None:
+    """The materialized task.toml a job's task ran under, minimal form."""
+    task_dir = root / "tasks" / job_name / task
+    task_dir.mkdir(parents=True)
+    content = text if text is not None else f"[agent]\ntimeout_sec = {timeout_sec}\n"
+    (task_dir / "task.toml").write_text(content, encoding="utf-8")
+
+
 def criterion(
     cid: str, points: float, max_points: float, *, bonus: bool = False
 ) -> dict[str, object]:
@@ -276,6 +292,7 @@ def test_full_shape_fixture_pins_every_consumed_field(tmp_path: Path) -> None:
     )
     trial_dir = job_dir / "SYN_C1__stu1__HW1__full1aa"
     trial_dir.mkdir()
+    write_task_toml(root, GRADE_JOB, "SYN_C1__stu1__HW1", timeout_sec=3600.0)
     shutil.copyfile(RESULT_FULL, trial_dir / "result.json")
     output_dir = trial_dir / "artifacts" / "app" / "grading_output"
     output_dir.mkdir(parents=True)
@@ -315,6 +332,8 @@ def test_full_shape_fixture_pins_every_consumed_field(tmp_path: Path) -> None:
     assert row["agent_setup_sec"] == 5.0
     assert row["agent_execution_sec"] == 600.0
     assert row["verifier_sec"] == 15.0
+    # 3600 from the task.toml times the fixture's timeout_multiplier 1.0.
+    assert row["agent_timeout_sec"] == 3600.0
     assert row["started_at"] == "2026-07-31T10:00:00"
     assert row["finished_at"] == "2026-07-31T10:10:50.500000"
     assert row["submission_source"] == "student"
@@ -684,6 +703,47 @@ def test_phase_durations(tmp_path: Path) -> None:
     assert pd.isna(row_for(trials, "open__a")["agent_setup_sec"])
     assert pd.isna(row_for(trials, "mixed__a")["environment_setup_sec"])
     assert pd.isna(row_for(trials, "garbled__a")["environment_setup_sec"])
+
+
+def test_agent_timeout_from_the_materialized_task_toml(tmp_path: Path) -> None:
+    """The timeout each trial ran under; anything unrecoverable loads as NA."""
+    root = tmp_path / "root"
+    tasks = ["plain", "scaled", "absent", "broken", "agentless", "nonpositive", "zeromult"]
+    job_dir = make_job(
+        root,
+        tmp_path,
+        stage="solve",
+        job_name=SOLVE_JOB,
+        items=[solve_item(task) for task in tasks],
+    )
+    write_task_toml(root, SOLVE_JOB, "plain", timeout_sec=1800.0)
+    write_task_toml(root, SOLVE_JOB, "scaled", timeout_sec=1800.0)
+    write_task_toml(root, SOLVE_JOB, "broken", text="not = [valid")
+    write_task_toml(root, SOLVE_JOB, "agentless", text="[verifier]\ntimeout_sec = 600.0\n")
+    write_task_toml(root, SOLVE_JOB, "nonpositive", timeout_sec=0.0)
+    write_task_toml(root, SOLVE_JOB, "zeromult", timeout_sec=1800.0)
+    write_trial(job_dir, "plain__a", trial_result("plain", rewards={"reward": 1.0}))
+    # Harbor's timeout multiplier scales the task's timeouts at run time.
+    write_trial(
+        job_dir,
+        "scaled__a",
+        trial_result("scaled", rewards={"reward": 1.0}, config={"timeout_multiplier": 2.0}),
+    )
+    # A recorded non-positive multiplier is unusable: the effective
+    # timeout loads as missing, like a non-positive task.toml timeout.
+    write_trial(
+        job_dir,
+        "zeromult__a",
+        trial_result("zeromult", rewards={"reward": 1.0}, config={"timeout_multiplier": 0.0}),
+    )
+    for task in ("absent", "broken", "agentless", "nonpositive"):
+        write_trial(job_dir, f"{task}__a", trial_result(task, rewards={"reward": 1.0}))
+
+    trials = load_results(root).trials
+    assert row_for(trials, "plain__a")["agent_timeout_sec"] == 1800.0
+    assert row_for(trials, "scaled__a")["agent_timeout_sec"] == 3600.0
+    for name in ("absent__a", "broken__a", "agentless__a", "nonpositive__a", "zeromult__a"):
+        assert pd.isna(row_for(trials, name)["agent_timeout_sec"]), name
 
 
 def test_solver_join(tmp_path: Path) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
@@ -148,9 +149,32 @@ def test_grading_task_structure(tmp_path: Path) -> None:
         "grading_schema",
     }
     assert (task_dir / "tests" / "grading_schema.py").read_bytes()
+    assert (task_dir / "tests" / "expected_criteria.json").is_file()
     assert os.access(task_dir / "tests" / "test.sh", os.X_OK)
     task_toml = (task_dir / "task.toml").read_text(encoding="utf-8")
     assert 'artifacts = ["/app/grading_output"]' in task_toml
+
+
+def test_grading_task_expected_criteria_match_the_rubric(tmp_path: Path) -> None:
+    """The expected-criteria file is the parsed rubric, in rubric order."""
+    task = materialize_grading_task(
+        assignment_dir=COURSE_DIR / "assignments" / "HW1",
+        submission_dir=FIXTURES_DIR / "submission",
+        reference_solution_dir=COURSE_DIR / "reference_solutions" / "HW1",
+        rubric_path=COURSE_DIR / "rubrics" / "HW1" / "default.md",
+        item_id=f"{COURSE_ID}/stu1/HW1",
+        name_parts=(COURSE_ID, "stu1", "HW1"),
+        prompt_name="grader",
+        tasks_dir=tmp_path,
+    )
+    expected = json.loads(
+        (task.task_dir / "tests" / "expected_criteria.json").read_text(encoding="utf-8")
+    )
+    assert expected == [
+        {"id": "slope", "max_points": 8.0, "bonus": False},
+        {"id": "method", "max_points": 2.0, "bonus": False},
+        {"id": "plot", "max_points": 1.0, "bonus": True},
+    ]
 
 
 def test_grading_task_missing_rubric_is_an_error(tmp_path: Path) -> None:

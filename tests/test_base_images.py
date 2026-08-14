@@ -71,10 +71,17 @@ def test_missing_image_is_built_with_retry(
 
 
 def test_build_failure_after_retries_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(subprocess, "run", _fake_run([1, 1, 1, 1], []))
-    monkeypatch.setattr(time, "sleep", lambda _delay: None)
-    with pytest.raises(base_images.BaseImageError, match="after 3 attempts"):
+    # inspect: missing; every build attempt fails.
+    return_codes = [1] + [1] * (len(base_images.BUILD_RETRY_DELAYS_SEC) + 1)
+    sleeps: list[float] = []
+    monkeypatch.setattr(subprocess, "run", _fake_run(return_codes, []))
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    with pytest.raises(base_images.BaseImageError, match="after 4 attempts"):
         base_images.ensure_base_images(["grading"])
+    # The full backoff ladder is waited out before giving up: the base
+    # build is the launch's only registry contact, and observed registry
+    # throttling persists for minutes.
+    assert sleeps == [10.0, 60.0, 300.0]
 
 
 def test_missing_docker_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
