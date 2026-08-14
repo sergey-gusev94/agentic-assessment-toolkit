@@ -32,8 +32,8 @@ GRADING_FLAVOR = "grading"
 # These render into every materialized task and are part of the config
 # identity via rendered_task_toml().
 STAGE_TASK_SETTINGS: dict[Stage, tuple[str, float]] = {
-    "solve": ("/app/submission", 3600.0),
-    "grade": ("/app/grading_output", 3600.0),
+    "solve": ("/app/submission", 7200.0),
+    "grade": ("/app/grading_output", 7200.0),
 }
 
 # Keeps importlib.resources-provided paths alive for the process lifetime

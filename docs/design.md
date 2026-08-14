@@ -486,7 +486,7 @@ course content: agent, model, reasoning effort, solver or grader prompt
 template name, rubric name, and agent-argument passthrough. Selection
 and mechanics never appear in configs (see CLI design).
 
-Materialized solve and grading tasks each give the agent 3,600 seconds.
+Materialized solve and grading tasks each give the agent 7,200 seconds.
 They give environment startup 1,800 seconds and verification 600
 seconds. Harbor applies these as separate phase limits, not as one
 whole-trial deadline.
