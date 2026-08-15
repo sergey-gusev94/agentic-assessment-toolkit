@@ -1,12 +1,17 @@
 """Materialize a submission into a Harbor grading task.
 
 One code path for both submission sources — a Harbor solve artifact or a
-real student folder (design decision 5). The task presents the
+real student folder (design decision 5) — and for both grader roles:
+an initial grading task, or a final-judge task that additionally
+presents prior gradings of the same submission as numbered rounds and
+declares the student-facing feedback document as a third required
+deliverable. The task presents the
 assignment handout, submission, reference solution, and rubric under
 /app as data; the grader writes into /app/grading_output; the generic
 grading verifier validates the output schema, cross-checks the
 grader's criteria against the expected-criteria file written here from
-the parsed rubric, and derives score_pct as the reward. Grading never
+the parsed rubric, checks any declared extra deliverables, and derives
+score_pct as the reward. Grading never
 starts without a rubric (decision 5): a
 missing or unparseable rubric fails materialization before anything is
 written.
@@ -20,8 +25,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .. import config
-from ..grading_schema import EXPECTED_CRITERIA_FILENAME
-from ..hashing import sha256_dir, sha256_file
+from ..grading_schema import (
+    EXPECTED_CRITERIA_FILENAME,
+    FEEDBACK_FILENAME,
+    JUSTIFICATION_FILENAME,
+    REQUIRED_FILES_FILENAME,
+    RESULT_FILENAME,
+)
+from ..hashing import sha256_dir, sha256_file, sha256_parts
 from ..rubric import RubricError, parse_rubric_file
 from . import _common
 
@@ -36,6 +47,21 @@ class MaterializedGradingTask:
     input_hashes: dict[str, str]
 
 
+def prior_gradings_hash(prior_gradings: Sequence[tuple[Path, Path]]) -> str:
+    """The hash folded into a final-judge item's identity.
+
+    Covers the exact bytes of every prior grading presented in the task,
+    in presentation order — so adding, removing, or revising any prior
+    grading changes the judge item's identity (docs/design.md,
+    "Experiment configs and config identity").
+    """
+    parts = []
+    for index, (result_path, justification_path) in enumerate(prior_gradings):
+        parts.append((f"prior-result-{index}", result_path.read_bytes()))
+        parts.append((f"prior-justification-{index}", justification_path.read_bytes()))
+    return sha256_parts(parts)
+
+
 def materialize_grading_task(
     *,
     assignment_dir: Path,
@@ -47,7 +73,18 @@ def materialize_grading_task(
     name_parts: Sequence[str],
     prompt_name: str,
     tasks_dir: Path,
+    prior_gradings: Sequence[tuple[Path, Path]] | None = None,
 ) -> MaterializedGradingTask:
+    """Write one grading task; see the module docstring.
+
+    ``prior_gradings`` — (grading_result.json path, justification.md
+    path) pairs in presentation order — makes this a final-judge task:
+    the pairs are presented under ``/app/prior_gradings/`` as numbered
+    rounds, and the required-files declaration makes the student-facing
+    feedback document a third required deliverable. Round numbering is
+    positional, so callers pass a deterministically ordered sequence;
+    no job or trial name enters the task (byte-determinism).
+    """
     try:
         criteria = parse_rubric_file(rubric_path)
     except RubricError as error:
@@ -70,6 +107,8 @@ def materialize_grading_task(
     ]
     if rubric_source_dir is not None:
         copy_lines.append("COPY rubric_source /app/rubric_source")
+    if prior_gradings:
+        copy_lines.append("COPY prior_gradings /app/prior_gradings")
     _common.write_dockerfile(task_dir, config.GRADING_FLAVOR, copy_lines)
 
     environment_dir = task_dir / "environment"
@@ -79,6 +118,12 @@ def materialize_grading_task(
     (environment_dir / "rubric.md").write_bytes(rubric_path.read_bytes())
     if rubric_source_dir is not None:
         _common.copy_tree(rubric_source_dir, environment_dir / "rubric_source")
+    if prior_gradings:
+        for index, (result_path, justification_path) in enumerate(prior_gradings, start=1):
+            round_dir = environment_dir / "prior_gradings" / f"{index:02d}"
+            round_dir.mkdir(parents=True)
+            (round_dir / RESULT_FILENAME).write_bytes(result_path.read_bytes())
+            (round_dir / JUSTIFICATION_FILENAME).write_bytes(justification_path.read_bytes())
 
     _common.write_test_runner(task_dir, "grading_verifier.py")
     verifier_path = config.verifier_path("grade")
@@ -95,6 +140,14 @@ def materialize_grading_task(
     (task_dir / "tests" / EXPECTED_CRITERIA_FILENAME).write_text(
         json.dumps(expected_criteria, indent=2) + "\n", encoding="utf-8"
     )
+    if prior_gradings:
+        # A final-judge task owes the student-facing feedback document
+        # beside the two standard deliverables; the declaration makes
+        # the generic verifier require it (docs/design.md, "Grading
+        # output schema").
+        (task_dir / "tests" / REQUIRED_FILES_FILENAME).write_text(
+            json.dumps([FEEDBACK_FILENAME]) + "\n", encoding="utf-8"
+        )
 
     input_hashes = {
         "assignment": sha256_dir(assignment_dir),
@@ -108,6 +161,8 @@ def materialize_grading_task(
     }
     if rubric_source_dir is not None:
         input_hashes["rubric_source"] = sha256_dir(rubric_source_dir)
+    if prior_gradings:
+        input_hashes["prior_gradings"] = prior_gradings_hash(prior_gradings)
 
     return MaterializedGradingTask(
         item_id=item_id,

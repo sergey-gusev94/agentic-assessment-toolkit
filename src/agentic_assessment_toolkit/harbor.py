@@ -19,10 +19,15 @@ from pathlib import Path
 
 from . import __version__
 from .config import ExperimentConfig, Stage
+from .grading_schema import JUSTIFICATION_FILENAME, RESULT_FILENAME
 from .hashing import sha256_bytes
 
 RUN_RECORD_FILENAME = "aat-run.json"
-RUN_RECORD_SCHEMA_VERSION = 2
+# Version 3 adds the selection sample, the target-repeats accounting
+# (`repeats` is what the job's Harbor config ran; `repeats_target` is
+# the target count the invocation ensured), and the final-judge lineage
+# on items (context config, prior grading trials).
+RUN_RECORD_SCHEMA_VERSION = 3
 
 CODEX_AUTH_JSON_PATH_ENV = "CODEX_AUTH_JSON_PATH"
 CODEX_FORCE_AUTH_JSON_ENV = "CODEX_FORCE_AUTH_JSON"
@@ -263,8 +268,9 @@ def create_unique_dir(parent: Path, base_name: str) -> Path:
 
     Job and report directory names are timestamped to the second, and
     their identity lives in their records (``aat-run.json``,
-    ``provenance.json``), not in the name — so a rare ``-N`` suffix is
-    harmless.
+    ``provenance.json``), not in the name — so a ``-N`` suffix is
+    harmless. Multi-deficit-group invocations create several jobs in
+    one second, so the suffix is routine there, not rare.
     """
     for attempt in range(1, 100):
         name = base_name if attempt == 1 else f"{base_name}-{attempt}"
@@ -275,6 +281,14 @@ def create_unique_dir(parent: Path, base_name: str) -> Path:
             continue
         return target
     raise OSError(f"cannot create a fresh directory under {parent}")
+
+
+@dataclass(frozen=True)
+class PriorTrialRef:
+    """A grading trial named as a final-judge input (run-record lineage)."""
+
+    job_name: str
+    trial_name: str
 
 
 @dataclass(frozen=True)
@@ -298,6 +312,11 @@ class RunRecordItem:
     student_id: str | None = None  # student grading items only
     solve_job_name: str | None = None  # solve-derived grading items only
     solve_trial_name: str | None = None
+    # Final-judge lineage: the initial grading config whose gradings the
+    # judge task presents, and exactly which trials they came from.
+    context_config_name: str | None = None
+    context_config_identity: str | None = None
+    prior_trials: tuple[PriorTrialRef, ...] | None = None
 
 
 def write_run_record(
@@ -313,6 +332,8 @@ def write_run_record(
     items: list[RunRecordItem],
     cli_version: str | None = None,
     authentication: HarborAuthentication | None = None,
+    repeats_target: int | None = None,
+    sample: int | None = None,
 ) -> Path:
     record = {
         "schema_version": RUN_RECORD_SCHEMA_VERSION,
@@ -330,9 +351,18 @@ def write_run_record(
             "prompt": config.prompt_name,
             "rubric": config.rubric_name,
             "agent_args": list(config.agent_args),
+            "judge": config.judge,
         },
         "config_identity": config_identity,
+        # `repeats` is what this job's Harbor config ran (its n_attempts);
+        # `repeats_target` is the target count the invocation ensured,
+        # from which this job's deficit was derived. They differ exactly
+        # when existing valid trials already covered part of the target.
         "repeats": repeats,
+        "repeats_target": repeats_target if repeats_target is not None else repeats,
+        # The requested selection sample (--sample), or None when the
+        # whole selection ran; the items list is the frame that resulted.
+        "sample": sample,
         "max_concurrent_trials": max_concurrent_trials,
         "command": command,
         "executed": executed,
@@ -463,32 +493,41 @@ def items_by_task_dir(record: dict[str, object]) -> dict[str, dict[str, object]]
     return index
 
 
-def done_items(jobs_root: Path, stage: Stage) -> set[tuple[str, str]]:
-    """(item_id, item_identity) pairs with at least one done trial.
+def done_trial_totals(jobs_root: Path, stage: Stage) -> dict[tuple[str, str], int]:
+    """Done-trial counts per (item_id, item_identity), pooled across jobs.
 
-    Doneness is keyed on the pair, per docs/design.md: the identity alone
-    is not item-specific (it hashes config + environment + rubric bytes),
-    so distinct items routinely share one identity. The per-trial check
-    is stage-specific: solve failures (reward 0) are countable outcomes
-    and stay done; grading requires a valid grading result. Fails
+    The key is the doneness and pooling key of docs/design.md: the
+    identity alone is not item-specific (it hashes config + environment
+    + rubric bytes), so distinct items routinely share one identity. The
+    per-trial check is stage-specific: solve failures (reward 0) are
+    countable outcomes and count; grading requires a valid grading
+    result. The counts are what target-count ``--repeats`` subtracts
+    from: an item's deficit is the target minus its pooled total. Fails
     closed: a job whose recorded stage does not match contributes
-    nothing to doneness.
+    nothing.
     """
     check = is_graded_trial if stage == "grade" else is_verified_trial
-    done = set()
+    totals: dict[tuple[str, str], int] = {}
     for job_dir in job_dirs(jobs_root):
         record = read_run_record(job_dir)
         if record is None or record.get("stage") != stage:
             continue
-        verified = verified_task_names(job_dir, check)
+        counts = done_trial_counts(job_dir, check)
         for task_dir_name, item in items_by_task_dir(record).items():
-            if task_dir_name not in verified:
+            count = counts.get(task_dir_name, 0)
+            if not count:
                 continue
             item_id = item.get("item_id")
             item_identity = item.get("item_identity")
             if isinstance(item_id, str) and isinstance(item_identity, str):
-                done.add((item_id, item_identity))
-    return done
+                key = (item_id, item_identity)
+                totals[key] = totals.get(key, 0) + count
+    return totals
+
+
+def done_items(jobs_root: Path, stage: Stage) -> set[tuple[str, str]]:
+    """(item_id, item_identity) pairs with at least one done trial."""
+    return set(done_trial_totals(jobs_root, stage))
 
 
 @dataclass(frozen=True)
@@ -603,3 +642,78 @@ def verified_solve_submissions(
                 )
             )
     return SolveSubmissionSelection(submissions=submissions, skipped=skipped)
+
+
+@dataclass(frozen=True)
+class PriorGrading:
+    """One stored valid grading, usable as final-judge input.
+
+    ``result_path`` and ``justification_path`` point at the trial's
+    mirrored grading artifacts; both exist — a valid trial whose
+    artifacts have since gone missing is excluded (and counted) by
+    ``prior_gradings_by_key``, because a judge task cannot present bytes
+    that are not on disk.
+    """
+
+    job_name: str
+    trial_name: str
+    result_path: Path
+    justification_path: Path
+
+
+@dataclass(frozen=True)
+class PriorGradingPool:
+    """Stored valid gradings by pooling key, plus missing-artifact counts."""
+
+    by_key: dict[tuple[str, str], list[PriorGrading]]
+    # (item_id, item_identity) -> valid trials whose artifact files are
+    # missing on disk; reported so an unusable grading is never silent.
+    missing_artifacts: dict[tuple[str, str], int]
+
+
+def prior_gradings_by_key(grading_root: Path) -> PriorGradingPool:
+    """Every stored valid grading, keyed by (item_id, item_identity).
+
+    The key is the pooling key, so a judge item's prior gradings are
+    looked up with the *context* config's per-item identity — exactly
+    the gradings that pool together under the frozen initial config.
+    Lists are sorted by (job_name, trial_name) for deterministic round
+    numbering. Fails closed like doneness: a job whose recorded stage is
+    not ``grade`` contributes nothing.
+    """
+    by_key: dict[tuple[str, str], list[PriorGrading]] = {}
+    missing: dict[tuple[str, str], int] = {}
+    for job_dir in job_dirs(grading_root):
+        record = read_run_record(job_dir)
+        if record is None or record.get("stage") != "grade":
+            continue
+        record_items = items_by_task_dir(record)
+        for trial_dir, result in trial_results(job_dir):
+            if not is_graded_trial(result):
+                continue
+            task_name = result.get("task_name")
+            item = record_items.get(task_name) if isinstance(task_name, str) else None
+            if item is None:
+                continue
+            item_id = item.get("item_id")
+            item_identity = item.get("item_identity")
+            if not isinstance(item_id, str) or not isinstance(item_identity, str):
+                continue
+            key = (item_id, item_identity)
+            output_dir = trial_dir / "artifacts" / "app" / "grading_output"
+            result_path = output_dir / RESULT_FILENAME
+            justification_path = output_dir / JUSTIFICATION_FILENAME
+            if not result_path.is_file() or not justification_path.is_file():
+                missing[key] = missing.get(key, 0) + 1
+                continue
+            by_key.setdefault(key, []).append(
+                PriorGrading(
+                    job_name=job_dir.name,
+                    trial_name=trial_dir.name,
+                    result_path=result_path,
+                    justification_path=justification_path,
+                )
+            )
+    for gradings in by_key.values():
+        gradings.sort(key=lambda grading: (grading.job_name, grading.trial_name))
+    return PriorGradingPool(by_key=by_key, missing_artifacts=missing)

@@ -99,6 +99,7 @@ def run_grading_verifier(
     tmp_path: Path,
     output_dir: Path,
     expected_criteria: list[dict[str, object]] | None = None,
+    required_files: object | None = None,
 ) -> dict[str, Any]:
     tests_dir = tmp_path / "tests"
     tests_dir.mkdir(exist_ok=True)
@@ -108,6 +109,8 @@ def run_grading_verifier(
         (tests_dir / "expected_criteria.json").write_text(
             json.dumps(expected_criteria), encoding="utf-8"
         )
+    if required_files is not None:
+        (tests_dir / "required_files.json").write_text(json.dumps(required_files), encoding="utf-8")
     reward_path = tmp_path / "reward.json"
     completed = subprocess.run(
         [sys.executable, str(tests_dir / "grading_verifier.py")],
@@ -143,6 +146,62 @@ def matching_expected_criteria() -> list[dict[str, object]]:
         {"id": "p2", "max_points": 2, "bonus": False},
         {"id": "extra", "max_points": 1, "bonus": True},
     ]
+
+
+def test_grading_verifier_requires_declared_extra_files(tmp_path: Path) -> None:
+    """A declared deliverable (the judge's feedback.md) is required like
+    justification.md: missing or empty fails the contract."""
+    output_dir = make_grading_output(tmp_path, valid_result())
+    result = run_grading_verifier(tmp_path, output_dir, required_files=["feedback.md"])
+    assert result["reward"] == 0.0
+    assert result["details"]["contract_valid"] is False
+    assert "missing required file feedback.md" in result["details"]["errors"]
+    assert result["details"]["required_files"] == ["feedback.md"]
+
+    (output_dir / "feedback.md").write_text("   \n", encoding="utf-8")
+    result = run_grading_verifier(tmp_path, output_dir, required_files=["feedback.md"])
+    assert result["reward"] == 0.0
+    assert "feedback.md is empty" in result["details"]["errors"]
+
+
+def test_grading_verifier_accepts_declared_extra_files(tmp_path: Path) -> None:
+    output_dir = make_grading_output(tmp_path, valid_result())
+    (output_dir / "feedback.md").write_text("You did well on p1.", encoding="utf-8")
+    result = run_grading_verifier(tmp_path, output_dir, required_files=["feedback.md"])
+    assert result["reward"] == 85.0
+    assert result["details"]["contract_valid"] is True
+    assert result["details"]["required_files"] == ["feedback.md"]
+
+
+def test_grading_verifier_without_declaration_skips_the_check(tmp_path: Path) -> None:
+    # Tasks that declare no extra deliverables (every non-judge task,
+    # and every task materialized before the file existed) are checked
+    # for the two standard files only.
+    output_dir = make_grading_output(tmp_path, valid_result())
+    result = run_grading_verifier(tmp_path, output_dir)
+    assert result["reward"] == 85.0
+    assert result["details"]["required_files"] == []
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        "feedback.md",  # not a list
+        [1],  # not a string
+        ["../escape.md"],  # path separator
+        ["a\\b.md"],  # backslash separator
+        [""],  # empty name
+    ],
+)
+def test_grading_verifier_rejects_malformed_required_files(
+    tmp_path: Path, declared: object
+) -> None:
+    """The declaration is materializer-written, so a malformed one is a
+    contract error, never an uncaught crash."""
+    output_dir = make_grading_output(tmp_path, valid_result())
+    result = run_grading_verifier(tmp_path, output_dir, required_files=declared)
+    assert result["reward"] == 0.0
+    assert any("malformed required_files.json" in error for error in result["details"]["errors"])
 
 
 def test_grading_verifier_surfaces_derived_scores(tmp_path: Path) -> None:

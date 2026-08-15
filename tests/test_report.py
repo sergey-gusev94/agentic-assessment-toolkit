@@ -19,6 +19,7 @@ from tests.test_metrics import (
     FAILURE_COLUMNS,
     JUDGE_COLUMNS,
     NEAR_TIMEOUT_COLUMNS,
+    REVIEW_QUEUE_COLUMNS,
     SOLVE_SUMMARY_COLUMNS,
     STUDENT_COLUMNS,
     UNGRADED_COLUMNS,
@@ -53,6 +54,7 @@ CSV_HEADERS = {
     "students.csv": STUDENT_COLUMNS,
     "judge_quality.csv": JUDGE_COLUMNS,
     "repeat_consistency.csv": CONSISTENCY_COLUMNS,
+    "review_queue.csv": REVIEW_QUEUE_COLUMNS,
     "grader_checks.csv": CHECK_COLUMNS,
     "failures.csv": FAILURE_COLUMNS,
     "near_timeouts.csv": NEAR_TIMEOUT_COLUMNS,
@@ -136,6 +138,7 @@ def test_write_report_writes_exactly_the_contracted_files(tmp_path: Path) -> Non
         "students.csv",
         "judge_quality.csv",
         "repeat_consistency.csv",
+        "review_queue.csv",
         "grader_checks.csv",
         "failures.csv",
         "near_timeouts.csv",
@@ -174,6 +177,11 @@ def test_report_md_sections_and_benchmark_prose(tmp_path: Path) -> None:
     assert "## Cross-run consistency" in report
     # No item is graded twice in this root, so the section is prose only.
     assert "No item in this report was graded more than once under one config." in report
+    assert "## Review queue" in report
+    # Three single gradings, none repeated or judged: rows exist (unlike
+    # repeat consistency), but none is flagged.
+    assert "3 row(s); 0 with a final-judge grading" in report
+    assert "No row is flagged; the full queue is in review_queue.csv." in report
     assert "## Grader checks" in report
     assert "_reference" in report
     assert "at or above 95" in report and "at or below 5" in report
@@ -182,6 +190,30 @@ def test_report_md_sections_and_benchmark_prose(tmp_path: Path) -> None:
     assert "## Near-timeout trials" in report
     # No trial in this root has a duration or a materialized task.toml.
     assert "0 of 0 measured trial(s) near timeout; 4 trial(s) not measurable." in report
+
+
+def test_review_queue_section_renders_flagged_rows() -> None:
+    """The flagged-table branch must render every display column: a
+    column dropped from the metrics frame would otherwise raise only in
+    production, on precisely the roots with disagreements."""
+    from agentic_assessment_toolkit.report import _REVIEW_TABLE_COLUMNS, _review_queue_section
+    from tests.test_metrics import judged, repeated, trials_frame
+
+    queue = metrics.review_queue(
+        trials_frame(
+            [
+                # Wide initial range (60) plus a final outside it.
+                repeated(90.0, "x1"),
+                repeated(30.0, "x2"),
+                judged(95.0, "jx"),
+            ]
+        )
+    )
+    section = "\n\n".join(_review_queue_section(queue))
+    assert "1 with a final-judge grading, 1 of those outside the initial range" in section
+    assert "1 row(s) with an initial score range above 20" in section
+    for column in _REVIEW_TABLE_COLUMNS:
+        assert f" {column} " in section
 
 
 def test_empty_data_root_report_is_header_only(tmp_path: Path) -> None:
@@ -195,6 +227,7 @@ def test_empty_data_root_report_is_header_only(tmp_path: Path) -> None:
         "No solve-derived gradings in this report.",
         "No grading trials in this report.",
         "No item in this report was graded more than once under one config.",
+        "No valid gradings in this report.",
         "No grader-check pseudo-students in this report.",
         "No student submissions in this report.",
         "No trials in this report.",

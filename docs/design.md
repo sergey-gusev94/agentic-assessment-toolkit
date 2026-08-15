@@ -172,6 +172,26 @@ analysis are in research.md.
     by a grading run record is frozen and never rewritten. The full
     contract is in [data-conventions.md](data-conventions.md),
     "Submission ingest".
+16. **Final grades come from a final-judge grading round.** The
+    deliverable grade and the student-facing feedback document for a
+    submission are produced by a *final judge*: a grading config
+    (`judge = true`) whose tasks additionally present the stored
+    initial gradings of the same submission as context. The judge is
+    prompted as a reconciler, not an averager — every prior-grading
+    claim is verified against the submission before it influences a
+    score or the feedback — and its output is the same grading result
+    schema plus a third required file, the feedback document, so every
+    downstream layer (verifier, results, statistics, report) consumes
+    judge gradings unchanged. The prior gradings are judge inputs, so
+    their bytes fold into the judge item's per-item identity, and the
+    run record carries explicit lineage to the trials they came from.
+    By default the judge skips — loudly, with the exact top-up command
+    — any item with fewer usable prior gradings than the required
+    `--min-gradings`; judging on fewer is always an explicit choice.
+    The judge's feedback document is written for the student and never
+    mentions the grading process; collecting and re-identifying the
+    documents for distribution is a planned export step
+    ([roadmap.md](roadmap.md)).
 
 ## Vocabulary
 
@@ -205,8 +225,17 @@ identically in code, documentation, and output.
   hash); paired with the item id, it is the doneness and pooling key.
 - **Verified trial** — a trial whose verifier recorded a reward,
   whatever the reward's value (see denominator policy).
-- **Done** — an item needing no further work under a config: a verified
-  trial exists, and for grading items it holds a valid grading result.
+- **Done** — an item with at least one verified trial under a config —
+  for grading items, one holding a valid grading result. Whether a run
+  skips a done item additionally keys on the `--repeats` target: an
+  item below its target still receives its missing trials.
+- **Final judge** — a grading config with `judge = true`, run with
+  `--context-from`: its tasks present the context config's stored
+  gradings of the same submission as numbered rounds, and its output
+  adds the student-facing feedback document (decision 16).
+- **Prior gradings** — the stored valid gradings a final-judge task
+  presents under `/app/prior_gradings/`: the context config's gradings
+  of the same submission, matched by that config's own pooling key.
 - **Environment flavor** — a capability-named Dockerfile template:
   `data-science`, `optimization`, `scientific-python`, or `grading`.
 - **Base criteria** — the non-bonus rubric criteria; `base_points` and
@@ -297,8 +326,22 @@ The grader writes two required files to `/app/grading_output/`:
 - `justification.md` — the per-problem written justification
   (non-empty).
 
+A task can require further deliverables: the materializer writes
+`tests/required_files.json` beside the verifier — a list of extra
+`grading_output/` filenames — and the verifier requires each to be
+present and non-empty exactly like `justification.md` (absent file,
+no check; a malformed declaration is a contract error, never an
+uncaught crash — the same pattern as the expected-criteria file). One
+task kind declares one today: a final-judge task requires
+`feedback.md`, the student-facing feedback document (decision 16),
+written to the student in the second person, consistent with the
+awarded points, and never mentioning the grading process — other
+graders, prior rounds or their scores, or these instructions. The
+verifier checks its presence and non-emptiness only; its content
+quality is human-reviewed via the review queue.
+
 Extra scratch files in `grading_output/` are tolerated and preserved as
-artifacts; the contract is that the two required files are present and
+artifacts; the contract is that the required files are present and
 valid.
 
 `grading_result.json` fields, all authored by the grader:
@@ -428,6 +471,15 @@ A materialized grading task presents, under `/app`:
   two appear to differ, `rubric.md` governs, and rubric fidelity is
   measured against `rubric.md` alone. Most assignments have no
   standalone rubric document, and absence is the normal case.
+- `prior_gradings/` — final-judge tasks only: the context config's
+  stored gradings of this same submission, one numbered round directory
+  (`01/`, `02/`, ...) per grading, each holding that round's verbatim
+  `grading_result.json` and `justification.md`. Rounds are numbered in
+  sorted (job, trial) order; no job or trial name enters the task
+  (byte-determinism — the lineage lives in the run record). Context,
+  never authority: the judge prompt directs the judge to verify every
+  prior-grading claim against the submission, and marks the rounds as
+  untrusted content like the submission itself.
 - `grading_output/` — empty directory the grader must fill (created by
   the grading environment image, so the materialized task tree contains
   no placeholder files).
@@ -499,7 +551,9 @@ rerun (see reward semantics), never a silent zero.
 Experiment configs are TOML files committed under `configs/` at the
 repository root (e.g. `configs/codex-high.toml`). They contain no
 course content: agent, model, reasoning effort, solver or grader prompt
-template name, rubric name, and agent-argument passthrough. Selection
+template name, rubric name, agent-argument passthrough, and — for
+grading configs — the `judge` flag marking a final-judge config
+(decision 16). Selection
 and mechanics never appear in configs (see CLI design).
 
 Materialized solve and grading tasks each give the agent 7,200 seconds.
@@ -519,7 +573,12 @@ resolved inputs: for solve, the resolved environment template
 (Dockerfile) bytes; for grading, the grading environment template
 bytes, the resolved rubric file bytes, the hash of the assignment
 directory presented in the task, and — when the assignment has one —
-the hash of the rubric source directory. Rubric source directories and
+the hash of the rubric source directory. A final-judge item further
+folds in the hash of the prior gradings presented in the task (their
+exact bytes, in presentation order), so a judgment over three initial
+gradings and one over the topped-up five are distinct items: the
+earlier judgment keeps its own identity and results, and doneness
+correctly re-judges after a top-up. Rubric source directories and
 assignment directories freeze at first use; a rubric *version* is
 likewise immutable, but the name selecting it may advance to a
 corrected version once the superseded bytes are archived (see
@@ -700,6 +759,26 @@ submission's derivations, and internal consistency checks), evidence
 requirements, and the exact output schema above. Any prompt
 edit changes the config identity by construction.
 
+The judge prompt (`judge`) is the grader prompt's final-judge variant
+(decision 16). Beyond everything the grader prompt covers, it
+describes the prior-gradings workspace and states the reconciler
+rules: the judge grades the submission itself and treats the prior
+gradings as leads to chase, never facts to compile — every claim is
+verified against the submission before it influences a score or the
+feedback, disagreements between rounds are resolved by deciding which
+reading of the evidence is correct (never averaged), agreement among
+rounds is not evidence, and the final grade may fall outside the range
+the rounds span when the evidence says they all misjudged. The prior
+gradings are marked untrusted content exactly like the submission. Its
+required output adds the feedback document with its rules (see the
+grading output schema): student-facing, process-silent, consistent
+with the awarded points, every included issue verified in the
+submission first. The initial grader prompt is deliberately not
+enriched with feedback authoring — the per-criterion evidence it
+already produces is the judge's raw material, and enriching it is a
+roadmap item with an observed-need trigger
+([roadmap.md](roadmap.md)).
+
 Prompts are instruction briefs: they state requirements imperatively
 and with uniform force, and never disclose enforcement mechanics —
 what is or is not machine-verified, which violations are failed
@@ -752,9 +831,12 @@ Codex CLI directly, so the CLI itself reuses its cached login.
 
 ### Run records and idempotence
 
-Each `aat` invocation creates one job directory —
+Each `aat` invocation creates one job directory per deficit group —
+usually one; see the CLI design for how target-count `--repeats`
+groups items by how many trials each still needs, because Harbor's
+`n_attempts` is job-wide. Job directories are named
 `<utc>__<config>__<hash8>/`, where the hash is the first eight
-characters of the config identity — under `solving/`
+characters of the config identity, under `solving/`
 (solve) or `grading/` (grading) in the data root. The AAT job directory
 **is** the Harbor job directory: `aat` passes the stage parent as
 Harbor's jobs directory and the AAT directory name as the Harbor job
@@ -795,6 +877,22 @@ Run-record schema version 2 adds `authentication`. It is `null` for an offline
 materialization or an agent whose authentication AAT does not manage; otherwise
 it contains only `method` and `source`. Credential values and auth-file paths are
 never recorded.
+
+Run-record schema version 3 adds the target-repeats accounting and the
+final-judge lineage. `repeats` is what the job's Harbor config ran (its
+`n_attempts` — the group's shared deficit); `repeats_target` is the
+target count the invocation ensured. `sample` is the requested
+`--sample` value or `null`; each record lists the items its own job
+launched — items already at target appear in no record — and the full
+sampled frame is re-derivable at any time because the sample rule is
+deterministic over the submissions tree. The `executed` flag is
+per job: records are written `false` at materialization and set `true`
+just before that job's launch, so a job an aborted invocation never
+launched keeps `executed: false`. Final-judge items carry
+`context_config_name`, `context_config_identity`, and `prior_trials` —
+the exact (job, trial) pairs whose gradings the task presented — plus a
+`prior_gradings` input hash, so no consumer ever reconstructs judge
+inputs from task bytes.
 
 Because the layout is flat, Harbor's viewer works at both levels:
 `harbor view` on the shared `solving/` or `grading/` parent browses all
@@ -894,7 +992,19 @@ tidy pandas tables:
   identity, and model, joined from the originating solve job's run
   record via the recorded solve job name — benchmark statistics group
   by the solver config identity, judge-quality statistics by the
-  grading config identity. A graded trial whose stored
+  grading config identity. Final-judge rows carry the context config
+  name and identity, the prior-grading count, and the prior trial
+  names ("job/trial; ..."), read from the run record's judge lineage —
+  a non-missing context config identity is what marks a grading row as
+  a final judgment. The loader also computes the `superseded` flag:
+  within one (grading config identity, item id, context config
+  identity), a valid judgment whose prior-trial set is a strict subset
+  of another valid judgment's was replaced by a re-judge over more
+  evidence — the designed outcome of topping up initial gradings and
+  re-judging. Superseded judgments are excluded from every score
+  aggregate (a current and an outdated final grade must never average)
+  and counted per student as `n_superseded`, never silently dropped;
+  judgments with equal or non-comparable prior sets all stay current. A graded trial whose stored
   `grading_result.json` is missing or unreadable at load time stays
   `completed` (and done) but gains a load-error flag and contributes
   no criteria rows; flagged counts appear in the failure accounting.
@@ -990,7 +1100,27 @@ points, an individual grading when it deviates more than 10 points
 from the group median; the thresholds are recorded in the report
 provenance. The flags are advisory pointers for human review — a
 schema-valid but wrong grade shows up as a wide repeat range — and
-never exclude a grading from any aggregate. Near-timeout accounting
+never exclude a grading from any aggregate.
+
+The review queue is the navigation companion to those flags: one row
+per graded submission under one initial grading config and pooling key
+— single gradings included — sorted by score disagreement, biggest
+first, with the exact trial names and per-trial justification paths so
+a row opens in one step. Current (non-superseded) final-judge gradings
+are matched to their
+initial group through the recorded prior-trial lineage and appear on
+the same row: the final score (the median when the judge graded the
+item more than once), the prior-grading count, and
+`final_outside_range` — true when the final score falls outside the
+span of the initial scores the judge actually saw (its recorded prior
+trials, so a later top-up never widens the span and hides an outlier).
+The flag is not evidence the judge is wrong but
+exactly the row a human should read before releasing feedback. A judge
+grading whose initial group is not among the loaded trials appears as
+its own row rather than being dropped, and two judge configs over one
+submission yield one row each. Repeat consistency diagnoses
+the judge configuration; the review queue prioritizes the human pass —
+both advisory, excluding nothing. Near-timeout accounting
 makes duration creep visible before it becomes timeout failures: per
 job, trials whose agent-execution duration exceeds 60% of their own
 agent timeout are counted, beside the trials whose duration or
@@ -1002,7 +1132,11 @@ assignment: the mean over valid gradings, the repeat SD (the
 per-student uncertainty statement), the grading count, and flags;
 per assignment: the class distribution over the per-student mean
 grades — one value per student — as count, mean, median, SD, and
-quartiles. The bootstrap belongs to benchmark aggregation, never to
+quartiles. Final grades are simply these tables filtered to the
+final-judge config: judge gradings are ordinary grading trials under
+their own config identity, so no separate aggregation exists for them —
+with one refinement, the superseded flag (see the trials table), which
+keeps a re-judged submission's final grade current-only. The bootstrap belongs to benchmark aggregation, never to
 individual grades. Harbor's built-in aggregation (means, binary-reward
 pass@k) is not used: it counts errored trials in score means and
 cannot express graded rewards. Pass@k is not computed: no pass
@@ -1037,6 +1171,8 @@ derived tables (`solve_summary.csv`, `grades_by_assignment.csv`,
 `grades_by_course.csv`, `students.csv`, `judge_quality.csv`,
 `grader_checks.csv`, `repeat_consistency.csv` — one row per repeated
 item with its score list, median, range, and flags,
+`review_queue.csv` — the disagreement-sorted review table with
+final-judge joins,
 `near_timeouts.csv` — per-job near-timeout counts,
 `failures.csv`, `ungraded_solves.csv` — one named
 row per solve trial with no valid grading and its outcome, the direct
@@ -1159,7 +1295,12 @@ Every command-line option belongs to one of three axes, and the axes are
 handled differently:
 
 1. **Selection — what to run on** (CLI flags): `--course`, `--assignment`,
-   `--submissions PATH`, `--from-solve NAME`, `--all`. Selection is not
+   `--submissions PATH`, `--from-solve NAME`, `--all`, and — student
+   grading selection only — `--sample N`, which keeps, per assignment,
+   the first N submitted students in a deterministic hash order (see
+   below). For a final-judge run, `--context-from NAME` and
+   `--min-gradings N` select which stored gradings each judge task
+   presents (decision 16). Selection is not
    an experimental variable, so convenience wins.
 2. **Experiment configuration — how to run** (named config files, never
    flags): agent, model, reasoning effort, solver/grader prompt version,
@@ -1170,8 +1311,9 @@ handled differently:
    record. Comparing models or efforts means separate invocations with
    different named configs, so results are segregated and labeled by
    construction.
-3. **Mechanics** (CLI flags): `--repeats N` (Harbor's `n_attempts`;
-   sampling depth, default 1, see below), `--max-concurrent-trials N`
+3. **Mechanics** (CLI flags): `--repeats N` (the target trial count
+   per item — ensure N valid trials exist, launching only each item's
+   deficit; default 1, see below), `--max-concurrent-trials N`
    (Harbor's job-wide `n_concurrent_trials`, default 8), `--force`,
    `--dry-run` (list what would run, then exit), `--materialize-only`,
    and solve-only `--gurobi-license-file PATH` (falling back to
@@ -1191,16 +1333,45 @@ moves the config identity, and a rubric edit moves the per-item
 identity of exactly the assignments it applies to, so trials measured
 against different bytes never pool.
 
+`--repeats N` is a target, not a per-job draw: for each selected item
+the command counts the valid trials already pooled for its (item id,
+per-item identity) and launches only the deficit, so re-running the
+same command after any partial failure — an expired token, exhausted
+quota, lost trials — finishes exactly what is missing, and running at
+full count does nothing. Harbor's `n_attempts` is job-wide, so items
+with different deficits cannot share a job: the invocation groups
+items by deficit and launches one Harbor job per group (usually one),
+each with its own directory and run record. `--sample N` keeps, per
+assignment, the first N submitted students ordered by
+`sha256(course_id + "/" + student_id)` — deterministic across configs,
+machines, and time with no seed or stored state, uncorrelated with the
+enrollment order the sequential ingest ids carry, and nested (the
+first N are a prefix of the first N+K, so raising the sample later
+grades only the new students). Pseudo-students are excluded from the
+frame and the selection; grader checks are run deliberately via
+`--submissions`. The panel is a function of the current submissions
+tree: ingesting a new student whose hash sorts inside the first N
+displaces the previous Nth, so new submissions are ingested between
+sampled experiments, never during one. `--sample` composes with a
+course-level `--submissions` path and is rejected below course level
+(a frame narrowed to one student is not a panel) and with
+`--from-solve`. The plan output states each assignment's sample
+("30 of 817 submitted students"), and the run record stores the
+requested sample beside the launched items.
+
 Idempotence: an item is **done** under a config when at least one
 verified trial exists for (item id, per-item identity) — for grading
 items, one that produced a valid grading result; a failed grading is a
 failed measurement and is regraded by the next incremental run —
-derived from the data root layout with no separate bookkeeping state. Done items are skipped by
+derived from the data root layout with no separate bookkeeping state.
+Items at or above the `--repeats` target are skipped by
 default, so re-running a bulk command is naturally incremental ("grade
-what was not yet graded"). `--force` never overwrites: it launches
+what was not yet graded", "top up what is short"). `--force` never
+overwrites: it launches
 another job whose trials accumulate alongside the existing ones.
-Consequently, `--force --repeats N` adds N trials rather than bringing
-the historical total to N. A later `grade --from-solve` selects newly
+`--force --repeats N` adds N trials to every item in scope — deliberate
+sample-deepening — rather than ensuring a total. A later `grade
+--from-solve` selects newly
 verified solver trials that are not yet graded; `--force`
 on `grade` adds independent grader trials for already-graded submissions.
 Regrading under a revised rubric needs no dedicated command: a new rubric
@@ -1212,19 +1383,24 @@ different identity, the plan output says so — a configuration change
 (config, prompt, environment, rubric, or task inputs) makes a full
 re-run look like data loss unless the command explains that prior
 results are kept under their old identity. After Harbor finishes,
-`solve` and `grade` print a run summary — items requested, items
+`solve` and `grade` print a run summary over the invocation's jobs —
+items requested, items
 verified (solve) or graded (grade), items failed — naming each failed
 item with the exact scoped rerun command; because failed items are
 exactly the not-done ones, the rerun is incremental and needs no
 `--force`. The command exits nonzero when any requested item failed,
-even though Harbor exits zero whenever the job itself finishes: a
-partially failed run must fail loudly in scripts. With `--repeats N`
-an item can succeed while losing trials — graded, but on fewer
-samples than requested — so the summary also names each such
-incomplete item with its trial count, and the command exits nonzero
-for it too. Incomplete items are done, so a plain rerun skips them;
-the summary says that topping up takes `--force`, which adds trials
-to every item in scope. `grade --from-solve`
+even though Harbor exits zero whenever a job itself finishes: a
+partially failed run must fail loudly in scripts. An item can also
+succeed while ending below its target — graded, but on fewer pooled
+valid trials than `--repeats` asked for — so the summary names each
+such incomplete item with its pooled count against the target, and the
+command exits nonzero for it too. Because `--repeats` is a target, a
+plain re-run of the same command launches exactly the missing trials
+(after a `--force` run, which adds rather than ensures, the summary
+says to re-run with `--force` and the missing count). A final-judge
+run additionally reports, at plan time, every item skipped for having
+fewer usable prior gradings than `--min-gradings`, each with the exact
+initial-grading top-up command. `grade --from-solve`
 reports every in-scope solve trial it skips (a failed solve, or a
 verified trial with an empty submission artifact) and warns, with the
 scoped `aat solve` rerun command, for each assignment left with no
@@ -1248,6 +1424,8 @@ aat grade  (--from-solve NAME [--course ID] [--assignment ID]
             | --submissions PATH
             | --course ID [--assignment ID] | --all)
            --config NAME [--data-root PATH] [--repeats N]
+           [--sample N]
+           [--context-from NAME --min-gradings N]
            [--max-concurrent-trials N] [--force]
            [--dry-run] [--materialize-only]
 
@@ -1324,3 +1502,33 @@ empty are skipped and stay visible as explicit outcomes in the solve
 job — and the skip is reported at selection time ("Run outcomes are
 loud", above). One grading materializer underneath, two source resolvers on top,
 per decision 5.
+
+A final-judge run is `aat grade` with a `judge = true` config plus
+`--context-from NAME --min-gradings N`; all three legs are required
+together — a judge config without context would grade blind, and
+context supplied to an ordinary grader config would change the
+experiment without changing its identity. The `judge` key and the
+judge prompt template also travel together, enforced at config load: a
+mismatch would materialize tasks whose instruction and verifier
+disagree about the deliverables, failing every trial after full agent
+cost. The context config must be a
+non-judge grading config (a judge of judges is rejected) naming the
+same rubric as the judge config — prior gradings measured against a
+different point split could not be reconciled criterion by criterion.
+Item
+selection is unchanged — any submission source, `--sample` included —
+and for each selected item the prior gradings are looked up by the
+*context* config's own per-item identity (its config identity plus the
+item's resolved inputs, including the context config's rubric), so the
+judge consumes exactly the gradings that pool together under the
+frozen initial config; a context rubric that has since advanced
+matches nothing, which is correct — the initial rounds under the new
+rubric do not exist yet. A valid grading whose stored artifacts are
+missing on disk is unusable and counted in the skip report. Items
+short of `--min-gradings` are skipped loudly with the exact top-up
+command — when unusable gradings exist the command uses `--force` with
+the usable shortfall, because the plain target already counts the
+artifact-less trials as done — and a run that skipped any item exits
+nonzero (except `--dry-run`): a judge run that judged less than it was
+asked must fail loudly in scripts. The judge's own doneness behaves
+like any grading item under the judge config's identities.

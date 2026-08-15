@@ -26,6 +26,14 @@ JUSTIFICATION_FILENAME = "justification.md"
 # objects. The verifier compares the grader's authored criteria against
 # it; see expected_criteria_errors.
 EXPECTED_CRITERIA_FILENAME = "expected_criteria.json"
+# Also materializer-written beside the verifier, only for tasks that owe
+# deliverables beyond the two standard files: a JSON list of extra
+# grading_output filenames the verifier requires to be present and
+# non-empty. Final-judge tasks declare the student-facing feedback
+# document this way; see required_files_errors.
+REQUIRED_FILES_FILENAME = "required_files.json"
+# The student-facing feedback document a final-judge task requires.
+FEEDBACK_FILENAME = "feedback.md"
 
 _REQUIRED_FIELDS = (
     "schema_version",
@@ -209,6 +217,43 @@ def _as_number(value: object) -> float:
     if not isinstance(value, int | float) or isinstance(value, bool):
         raise ValueError(f"expected a number, got {value!r}")
     return float(value)
+
+
+def text_file_errors(path: Path) -> list[str]:
+    """Contract errors for a required text deliverable; empty means valid.
+
+    Required text files must exist, decode as UTF-8, and be non-blank —
+    the same rule for ``justification.md`` and any declared extra
+    deliverable such as the final judge's feedback document.
+    """
+    if not path.is_file():
+        return [f"missing required file {path.name}"]
+    try:
+        if not path.read_text(encoding="utf-8").strip():
+            return [f"{path.name} is empty"]
+    except UnicodeDecodeError:
+        return [f"{path.name} is not UTF-8 text"]
+    except OSError as error:
+        return [f"cannot read {path.name}: {error}"]
+    return []
+
+
+def required_files_errors(declared: object, output_dir: Path) -> list[str]:
+    """Check a task's declared extra deliverables; empty means satisfied.
+
+    ``declared`` is the parsed content of ``REQUIRED_FILES_FILENAME``:
+    a list of plain filenames inside the grading output directory. The
+    file is materializer-written, so a malformed declaration is a
+    contract error in its own right, never an uncaught crash.
+    """
+    if not isinstance(declared, list) or not all(
+        isinstance(name, str) and name and "/" not in name and "\\" not in name for name in declared
+    ):
+        return [f"malformed {REQUIRED_FILES_FILENAME}: expected a list of plain filenames"]
+    errors = []
+    for name in declared:
+        errors.extend(text_file_errors(output_dir / name))
+    return errors
 
 
 def computed_sums(data: dict[str, object]) -> dict[str, float]:

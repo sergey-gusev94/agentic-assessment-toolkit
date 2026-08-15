@@ -16,6 +16,7 @@ regraded automatically.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import shlex
 import sys
@@ -40,7 +41,7 @@ from .config import ConfigError, ExperimentConfig, Stage
 from .course import CourseError
 from .data_root import DataRootError
 from .materialize._common import MaterializeError
-from .materialize.grading import materialize_grading_task
+from .materialize.grading import materialize_grading_task, prior_gradings_hash
 from .materialize.solve import materialize_solve_task
 
 SOLVE_JOBS_DIRNAME = "solving"
@@ -57,9 +58,15 @@ class CliError(Exception):
 class _PlannedItem:
     item_id: str
     item_identity: str
-    done: bool
+    # Valid trials already pooled for (item_id, item_identity) across
+    # jobs — what target-count --repeats subtracts from.
+    existing: int
     environment_flavor: str
     materialize: Callable[[Path], harbor_mod.RunRecordItem]
+
+    @property
+    def done(self) -> bool:
+        return self.existing > 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -93,7 +100,11 @@ def _build_parser() -> argparse.ArgumentParser:
         type=_positive_int,
         default=1,
         metavar="N",
-        help="Harbor attempts per item (sampling depth, not identity)",
+        help=(
+            "target trial count per item: ensure N valid trials exist, launching "
+            "only each item's deficit (sampling depth, not identity); with "
+            "--force, add N more instead"
+        ),
     )
     common.add_argument(
         "--max-concurrent-trials",
@@ -157,6 +168,33 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         dest="all_items",
         help="every student submission of every course",
+    )
+    grade.add_argument(
+        "--sample",
+        type=_positive_int,
+        metavar="N",
+        help=(
+            "per assignment, grade only the first N submitted students in the "
+            "deterministic hash order (student selection only; excludes "
+            "pseudo-students)"
+        ),
+    )
+    grade.add_argument(
+        "--context-from",
+        metavar="NAME",
+        help=(
+            "final-judge runs only: the initial grading config whose stored "
+            "gradings each judge task presents as context"
+        ),
+    )
+    grade.add_argument(
+        "--min-gradings",
+        type=_positive_int,
+        metavar="N",
+        help=(
+            "final-judge runs only: skip (loudly) items with fewer than N "
+            "usable prior gradings under the --context-from config"
+        ),
     )
 
     intake = subparsers.add_parser(
@@ -292,22 +330,28 @@ def _run(args: argparse.Namespace) -> int:
         f"config: {config.name}@{config_identity[:8]} ({config.agent} {config.model}{rubric_note})"
     )
     jobs_root = root / (SOLVE_JOBS_DIRNAME if stage == "solve" else GRADING_JOBS_DIRNAME)
-    done = harbor_mod.done_items(jobs_root, stage)
+    totals = harbor_mod.done_trial_totals(jobs_root, stage)
     if stage == "solve":
         gurobi_license_file = _resolve_gurobi_license_file(args.gurobi_license_file)
+        n_judge_skipped = 0
         planned = _plan_solve(
             root,
             config,
             config_identity,
-            done,
+            totals,
             args,
             gurobi_license_file=gurobi_license_file,
         )
     else:
         gurobi_license_file = None
-        planned = _plan_grade(root, config, config_identity, done, args)
-    _report_configuration_changes(planned, done)
-    return _execute(
+        planned, n_judge_skipped = _plan_grade(root, config, config_identity, totals, args)
+    if stage == "solve" or not args.context_from:
+        # Judge items share their item_id with the initial gradings of
+        # the same submission, which a judge run requires to exist — so
+        # the configuration-change note would fire on every fresh judge
+        # run, implying a drift that never happened.
+        _report_configuration_changes(planned, set(totals))
+    status = _execute(
         stage,
         root,
         jobs_root,
@@ -317,6 +361,16 @@ def _run(args: argparse.Namespace) -> int:
         args,
         gurobi_license_file=gurobi_license_file,
     )
+    if n_judge_skipped and not args.dry_run:
+        # "Run outcomes are loud": a judge run that skipped items did
+        # not deliver what was asked, even when everything it launched
+        # succeeded — top up the initial gradings and re-run.
+        print(
+            f"judge: {n_judge_skipped} item(s) skipped with fewer than "
+            f"{args.min_gradings} usable prior grading(s); top up (commands above), then re-run"
+        )
+        return status or 1
+    return status
 
 
 def _report_configuration_changes(planned: list[_PlannedItem], done: set[tuple[str, str]]) -> None:
@@ -550,7 +604,7 @@ def _plan_solve(
     root: Path,
     config: ExperimentConfig,
     config_identity: str,
-    done: set[tuple[str, str]],
+    totals: dict[tuple[str, str], int],
     args: argparse.Namespace,
     *,
     gurobi_license_file: Path | None,
@@ -594,7 +648,7 @@ def _plan_solve(
                 _PlannedItem(
                     item_id=assignment.item_id,
                     item_identity=identity,
-                    done=(assignment.item_id, identity) in done,
+                    existing=totals.get((assignment.item_id, identity), 0),
                     environment_flavor=assignment.environment_flavor,
                     materialize=_solve_materializer(assignment, config, identity),
                 )
@@ -646,15 +700,22 @@ def _plan_grade(
     root: Path,
     config: ExperimentConfig,
     config_identity: str,
-    done: set[tuple[str, str]],
+    totals: dict[tuple[str, str], int],
     args: argparse.Namespace,
-) -> list[_PlannedItem]:
+) -> tuple[list[_PlannedItem], int]:
+    """Plan the grading items; returns (items, judge items skipped).
+
+    The skip count covers final-judge items short of ``--min-gradings``;
+    it is zero for ordinary grading runs.
+    """
+    judge = _judge_context(root, config, args)
     sources = _grade_sources(root, args)
     template_bytes = config_mod.environment_path(config_mod.GRADING_FLAVOR).read_bytes()
     rubric_name = config.rubric_name
     if rubric_name is None:  # load_config defaults grading configs to "default"
         raise CliError(f"config {config.name!r} names no rubric")
 
+    n_skipped = 0
     planned = []
     # Many submissions share one assignment; hash each handout once.
     assignment_hashes: dict[Path, str] = {}
@@ -685,26 +746,208 @@ def _plan_grade(
         rubric_source = data_root_mod.find_rubric_source(
             root, source.course_id, source.assignment_id
         )
+        rubric_source_hash = (
+            hashing.sha256_dir(rubric_source) if rubric_source is not None else None
+        )
+        prior = None
+        if judge is not None:
+            prior = _prior_gradings_for(
+                judge,
+                root,
+                source,
+                template_bytes,
+                assignment_hashes[assignment],
+                rubric_source_hash,
+                args,
+            )
+            if prior is None:
+                # Short of --min-gradings; reported per item by
+                # _prior_gradings_for, summarized (with a nonzero exit)
+                # by _run.
+                n_skipped += 1
+                continue
         identity = config_mod.item_identity(
             config_identity,
             template_bytes,
             rubric.read_bytes(),
             assignment_hashes[assignment],
-            hashing.sha256_dir(rubric_source) if rubric_source is not None else None,
+            rubric_source_hash,
+            prior_gradings_hash(
+                [(grading.result_path, grading.justification_path) for grading in prior]
+            )
+            if prior is not None
+            else None,
         )
         planned.append(
             _PlannedItem(
                 item_id=source.item_id,
                 item_identity=identity,
-                done=(source.item_id, identity) in done,
+                existing=totals.get((source.item_id, identity), 0),
                 environment_flavor=config_mod.GRADING_FLAVOR,
                 materialize=_grade_materializer(
-                    source, assignment, reference, rubric, rubric_source, config, identity
+                    source,
+                    assignment,
+                    reference,
+                    rubric,
+                    rubric_source,
+                    config,
+                    identity,
+                    judge=judge,
+                    prior=prior,
                 ),
             )
         )
     _require_resolvable_rubric_history(root, sources)
-    return planned
+    return planned, n_skipped
+
+
+@dataclass(frozen=True)
+class _JudgeContext:
+    """Resolved final-judge inputs: the initial config and its stored gradings."""
+
+    config: ExperimentConfig
+    config_identity: str
+    min_gradings: int
+    pool: harbor_mod.PriorGradingPool
+
+
+def _judge_context(
+    root: Path, config: ExperimentConfig, args: argparse.Namespace
+) -> _JudgeContext | None:
+    """Validate the judge flags and gather the context config's gradings.
+
+    A final-judge run needs all three legs — a ``judge = true`` config,
+    ``--context-from``, and ``--min-gradings`` — and any partial
+    combination is a usage error: a judge config without context would
+    grade blind, and context supplied to an ordinary grader config
+    would change the experiment without changing its identity.
+    """
+    if config.judge and not args.context_from:
+        raise CliError(
+            f"config {config.name!r} is a final-judge config (judge = true); select "
+            "the initial gradings with --context-from NAME --min-gradings N"
+        )
+    if args.context_from and not config.judge:
+        raise CliError(
+            f"--context-from needs a final-judge config; {config.name!r} does not set judge = true"
+        )
+    if args.context_from and args.min_gradings is None:
+        raise CliError(
+            "--context-from requires --min-gradings N: the number of prior "
+            "gradings each judged item must have (judging on fewer is a "
+            "deliberate choice, so it is never a default)"
+        )
+    if args.min_gradings is not None and not args.context_from:
+        raise CliError("--min-gradings is only valid with --context-from")
+    if not args.context_from:
+        return None
+
+    context_config = config_mod.load_config(_config_path(args.context_from))
+    if context_config.stage != "grade":
+        raise CliError(
+            f"--context-from config {context_config.name!r} has stage "
+            f"{context_config.stage!r}; the judge's context must be a grading config"
+        )
+    if context_config.judge:
+        raise CliError(
+            f"--context-from config {context_config.name!r} is itself a final-judge "
+            "config; the judge's context must be the initial grading config"
+        )
+    if context_config.rubric_name != config.rubric_name:
+        # A judge shown prior gradings measured against a different
+        # rubric than the one its own criteria are enforced against
+        # cannot reconcile them criterion by criterion, and the review
+        # queue would compare scores across point splits.
+        raise CliError(
+            f"config {config.name!r} names rubric {config.rubric_name!r} but "
+            f"--context-from config {context_config.name!r} names rubric "
+            f"{context_config.rubric_name!r}; the judge and its context must "
+            "grade against the same rubric"
+        )
+    return _JudgeContext(
+        config=context_config,
+        config_identity=config_mod.config_identity(context_config),
+        min_gradings=args.min_gradings,
+        pool=harbor_mod.prior_gradings_by_key(root / GRADING_JOBS_DIRNAME),
+    )
+
+
+def _prior_gradings_for(
+    judge: _JudgeContext,
+    root: Path,
+    source: _GradeSource,
+    template_bytes: bytes,
+    assignment_hash: str,
+    rubric_source_hash: str | None,
+    args: argparse.Namespace,
+) -> list[harbor_mod.PriorGrading] | None:
+    """The item's usable prior gradings, or None (reported) when too few.
+
+    Prior gradings are looked up by the *context* config's per-item
+    identity — the same pooling key its own doneness uses — so the judge
+    consumes exactly the gradings that pool together under the frozen
+    initial config, and a context rubric that has since advanced
+    correctly matches nothing (the initial rounds under the new rubric
+    do not exist yet).
+    """
+    context_rubric = data_root_mod.find_rubric(
+        root, source.course_id, source.assignment_id, judge.config.rubric_name or "default"
+    )
+    key = None
+    if context_rubric is not None:
+        context_identity = config_mod.item_identity(
+            judge.config_identity,
+            template_bytes,
+            context_rubric.read_bytes(),
+            assignment_hash,
+            rubric_source_hash,
+        )
+        key = (source.item_id, context_identity)
+    prior = judge.pool.by_key.get(key, []) if key is not None else []
+    missing = judge.pool.missing_artifacts.get(key, 0) if key is not None else 0
+    if len(prior) >= judge.min_gradings:
+        return prior
+    detail = f"{len(prior)} of {judge.min_gradings} required prior grading(s)"
+    if missing:
+        detail += f" ({missing} more unusable: grading artifacts missing on disk)"
+    command = _top_up_command(judge, root, source, args, usable=len(prior), missing=missing)
+    print(
+        f"skipping {source.item_id}: {detail} under config "
+        f"{judge.config.name!r}; top up: {shlex.join(command)}"
+    )
+    return None
+
+
+def _top_up_command(
+    judge: _JudgeContext,
+    root: Path,
+    source: _GradeSource,
+    args: argparse.Namespace,
+    *,
+    usable: int,
+    missing: int,
+) -> list[str]:
+    """The exact initial-grading command that completes a skipped judge item.
+
+    Doneness counts valid trials whether or not their artifacts survive,
+    while the judge can only use gradings whose artifacts are on disk —
+    so when unusable gradings exist, a plain target of ``min_gradings``
+    would launch nothing. ``--force`` then adds exactly the usable
+    shortfall instead.
+    """
+    command = ["aat", "grade", "--config", args.context_from]
+    if source.submission_source == "student" and source.student_id is not None:
+        submission = root / "submissions" / source.course_id / source.student_id
+        command += ["--submissions", str(submission / source.assignment_id)]
+    else:
+        if args.from_solve:
+            command += ["--from-solve", args.from_solve]
+        command += ["--course", source.course_id, "--assignment", source.assignment_id]
+    if missing:
+        command += ["--force", "--repeats", str(judge.min_gradings - usable)]
+    else:
+        command += ["--repeats", str(judge.min_gradings)]
+    return command
 
 
 def _require_resolvable_rubric_history(root: Path, sources: list[_GradeSource]) -> None:
@@ -736,6 +979,9 @@ def _grade_materializer(
     rubric_source: Path | None,
     config: ExperimentConfig,
     identity: str,
+    *,
+    judge: _JudgeContext | None = None,
+    prior: list[harbor_mod.PriorGrading] | None = None,
 ) -> Callable[[Path], harbor_mod.RunRecordItem]:
     def materialize(tasks_dir: Path) -> harbor_mod.RunRecordItem:
         task = materialize_grading_task(
@@ -748,6 +994,11 @@ def _grade_materializer(
             name_parts=source.name_parts,
             prompt_name=config.prompt_name,
             tasks_dir=tasks_dir,
+            prior_gradings=(
+                [(grading.result_path, grading.justification_path) for grading in prior]
+                if prior is not None
+                else None
+            ),
         )
         return harbor_mod.RunRecordItem(
             item_id=task.item_id,
@@ -760,6 +1011,18 @@ def _grade_materializer(
             student_id=source.student_id,
             solve_job_name=source.solve_job_name,
             solve_trial_name=source.solve_trial_name,
+            context_config_name=judge.config.name if judge is not None else None,
+            context_config_identity=judge.config_identity if judge is not None else None,
+            prior_trials=(
+                tuple(
+                    harbor_mod.PriorTrialRef(
+                        job_name=grading.job_name, trial_name=grading.trial_name
+                    )
+                    for grading in prior
+                )
+                if prior is not None
+                else None
+            ),
         )
 
     return materialize
@@ -787,6 +1050,11 @@ def _grade_sources(root: Path, args: argparse.Namespace) -> list[_GradeSource]:
         raise CliError("--assignment requires --course or --from-solve")
 
     if args.from_solve:
+        if args.sample is not None:
+            raise CliError(
+                "--sample selects students, so it applies to student-submission "
+                "selection only, never to --from-solve"
+            )
         selection = harbor_mod.verified_solve_submissions(
             root / SOLVE_JOBS_DIRNAME,
             args.from_solve,
@@ -809,10 +1077,87 @@ def _grade_sources(root: Path, args: argparse.Namespace) -> list[_GradeSource]:
         ]
 
     if args.submissions:
-        return _student_sources_from_path(root, args.submissions)
+        if args.sample is not None and _submissions_path_depth(root, args.submissions) > 1:
+            # A sample over a frame narrowed to one student (or one
+            # student's assignment) is not a class panel; the recorded
+            # sample would silently mean "of whatever the path kept".
+            raise CliError(
+                "--sample needs a course-wide frame; --submissions points below "
+                "the course level, so select with --course (or a course-level "
+                "path) instead"
+            )
+        sources = _student_sources_from_path(root, args.submissions)
+    else:
+        course_ids = [args.course] if args.course else _submission_courses(root)
+        sources = _student_sources(root, course_ids, assignment_id=args.assignment, student_id=None)
+    if args.sample is not None:
+        sources = _sampled_sources(sources, args.sample)
+    return sources
 
-    course_ids = [args.course] if args.course else _submission_courses(root)
-    return _student_sources(root, course_ids, assignment_id=args.assignment, student_id=None)
+
+def _submissions_path_depth(root: Path, raw_path: str) -> int:
+    """How many levels below submissions/ the path points (course = 1)."""
+    submissions_root = (root / "submissions").resolve()
+    path = Path(raw_path).expanduser().resolve()
+    try:
+        return len(path.relative_to(submissions_root).parts)
+    except ValueError:
+        return 0  # outside the tree; _student_sources_from_path rejects it
+
+
+def _sample_order_key(course_id: str, student_id: str) -> tuple[str, str]:
+    """The deterministic sample order: students sorted by id hash.
+
+    Hashing the (course-scoped) student id gives an order that is fixed
+    across configs, machines, and time — so every run samples the same
+    students — while destroying any correlation with enrollment order,
+    which the sequential ingest-assigned ids carry. No seed and no
+    stored state: the panel is derivable from the data root alone, and
+    the first N students are a prefix of the first N+K, so raising the
+    sample later grades only the new students.
+    """
+    digest = hashlib.sha256(f"{course_id}/{student_id}".encode()).hexdigest()
+    return (digest, student_id)
+
+
+def _sampled_sources(sources: list[_GradeSource], sample: int) -> list[_GradeSource]:
+    """Per assignment, the first ``sample`` submitted students in hash order.
+
+    Pseudo-students (underscore-prefixed ids) are excluded from both the
+    frame and the selection: sampling is about real class coverage, and
+    grader-check submissions are selected deliberately via
+    ``--submissions``. Taking the first N *submitted* students per
+    assignment (a deterministic top-up past students who did not submit
+    it) keeps the per-assignment count at N while the panel's core stays
+    the same students on every assignment.
+    """
+    by_assignment: dict[tuple[str, str], list[_GradeSource]] = {}
+    n_pseudo = 0
+    for source in sources:
+        if source.student_id is None:
+            continue
+        if source.student_id.startswith("_"):
+            n_pseudo += 1
+            continue
+        by_assignment.setdefault((source.course_id, source.assignment_id), []).append(source)
+
+    sampled: list[_GradeSource] = []
+    for (course_id, assignment_id), group in sorted(by_assignment.items()):
+        ordered = sorted(
+            group, key=lambda source: _sample_order_key(course_id, str(source.student_id))
+        )
+        chosen = ordered[:sample]
+        sampled.extend(chosen)
+        print(
+            f"sample: {course_id}/{assignment_id}: {len(chosen)} of {len(group)} "
+            "submitted student(s) (deterministic hash-order prefix)"
+        )
+    if n_pseudo:
+        print(
+            f"sample: excluded {n_pseudo} pseudo-student submission(s); grade them "
+            "deliberately with --submissions and no --sample"
+        )
+    return sampled
 
 
 _SKIP_DESCRIPTIONS = {
@@ -927,6 +1272,65 @@ def _student_sources(
     return sources
 
 
+@dataclass(frozen=True)
+class _LaunchedJob:
+    """One Harbor job of this invocation: a deficit group's directory and items."""
+
+    job_dir: Path
+    record_items: list[harbor_mod.RunRecordItem]
+    repeats: int  # this job's n_attempts: the group's deficit (or --force's N)
+    command: list[str]
+
+
+def _write_job_record(
+    job: _LaunchedJob,
+    *,
+    executed: bool,
+    stage: Stage,
+    config: ExperimentConfig,
+    config_identity: str,
+    args: argparse.Namespace,
+    cli_version: str | None,
+    authentication: harbor_mod.HarborAuthentication | None,
+) -> None:
+    harbor_mod.write_run_record(
+        job.job_dir,
+        stage=stage,
+        config=config,
+        config_identity=config_identity,
+        command=job.command,
+        executed=executed,
+        repeats=job.repeats,
+        max_concurrent_trials=args.max_concurrent_trials,
+        items=job.record_items,
+        cli_version=cli_version,
+        authentication=authentication,
+        repeats_target=args.repeats,
+        sample=getattr(args, "sample", None),
+    )
+
+
+def _deficit_groups(
+    planned: list[_PlannedItem], args: argparse.Namespace
+) -> dict[int, list[_PlannedItem]]:
+    """Items to run, grouped by how many trials each still needs.
+
+    Harbor's ``n_attempts`` is job-wide, so items with different
+    deficits cannot share one job; each deficit becomes one job. Without
+    ``--force`` an item's deficit is the target minus its pooled valid
+    trials; ``--force`` adds ``--repeats`` more to every planned item,
+    which is a single group.
+    """
+    if args.force:
+        return {args.repeats: list(planned)} if planned else {}
+    groups: dict[int, list[_PlannedItem]] = {}
+    for item in planned:
+        deficit = args.repeats - item.existing
+        if deficit > 0:
+            groups.setdefault(deficit, []).append(item)
+    return groups
+
+
 def _execute(
     stage: Stage,
     root: Path,
@@ -938,15 +1342,30 @@ def _execute(
     *,
     gurobi_license_file: Path | None,
 ) -> int:
-    to_run = planned if args.force else [item for item in planned if not item.done]
+    groups = _deficit_groups(planned, args)
+    to_run = [item for group in groups.values() for item in group]
 
     if args.dry_run:
         for item in planned:
-            status = "done" if item.done else "pending"
-            marker = "run " if (args.force or not item.done) else "skip"
-            print(f"{marker} [{status:7}] {item.item_id}")
+            deficit = args.repeats if args.force else max(args.repeats - item.existing, 0)
+            marker = "run " if deficit > 0 else "skip"
+            if args.force:
+                # Additive semantics: the target is existing + N, so a
+                # "3 of 2" reading must never appear.
+                status = "forced"
+                counts = f"({item.existing} valid trial(s), adding {args.repeats})"
+            else:
+                if item.existing == 0:
+                    status = "pending"
+                elif deficit > 0:
+                    status = "partial"
+                else:
+                    status = "complete"
+                counts = f"({item.existing} of {args.repeats} valid trial(s))"
+            print(f"{marker} [{status:8}] {item.item_id} {counts}")
+        job_note = f" across {len(groups)} job(s) (one per deficit)" if len(groups) > 1 else ""
         print(
-            f"would run {len(to_run)} of {len(planned)} item(s); "
+            f"would run {len(to_run)} of {len(planned)} item(s){job_note}; "
             f"max concurrent trials: {args.max_concurrent_trials}"
         )
         if gurobi_license_file is not None:
@@ -954,54 +1373,65 @@ def _execute(
         return 0
 
     if not to_run:
-        print(f"nothing to do: {len(planned)} item(s) already done under config {config.name!r}")
+        print(
+            f"nothing to do: {len(planned)} item(s) already at the target of "
+            f"{args.repeats} valid trial(s) under config {config.name!r}"
+        )
         return 0
 
     authentication = (
         None if args.materialize_only else harbor_mod.resolve_harbor_authentication(config.agent)
     )
-
-    job_dir = harbor_mod.create_unique_dir(
-        jobs_root, harbor_mod.job_dir_name(config.name, config_identity)
-    )
-    # Tasks live outside the Harbor job directory: on resume, Harbor
-    # deletes any job-dir subdirectory without a per-trial result.json
-    # as a stale trial, which would destroy the task inputs
-    # (docs/data-conventions.md, "Job directories and run records").
-    tasks_dir = root / "tasks" / job_dir.name
-    tasks_dir.mkdir(parents=True)
-
-    record_items = [item.materialize(tasks_dir) for item in to_run]
-    job_config = jobs_mod.build_harbor_job_config(
-        config=config,
-        task_dirs=[tasks_dir / item.task_dir_name for item in record_items],
-        job_dir=job_dir,
-        repeats=args.repeats,
-        max_concurrent_trials=args.max_concurrent_trials,
-        gurobi_license_file=gurobi_license_file,
-    )
-    job_config_path = jobs_mod.write_harbor_job_config(job_dir, job_config)
-    command = harbor_mod.build_harbor_command(job_config_path)
     # Executing runs record the version of the harbor binary that will
     # actually be invoked; materialize-only stays offline and records the
     # package metadata version instead.
     cli_version = None if args.materialize_only else harbor_mod.cli_harbor_version()
-    harbor_mod.write_run_record(
-        job_dir,
-        stage=stage,
-        config=config,
-        config_identity=config_identity,
-        command=command,
-        executed=not args.materialize_only,
-        repeats=args.repeats,
-        max_concurrent_trials=args.max_concurrent_trials,
-        items=record_items,
-        cli_version=cli_version,
-        authentication=authentication,
-    )
 
-    print(f"job directory: {job_dir}")
-    print(f"materialized {len(record_items)} task(s)")
+    launched: list[_LaunchedJob] = []
+    # Largest deficits first, so the thinnest items start soonest.
+    for deficit in sorted(groups, reverse=True):
+        items = groups[deficit]
+        job_dir = harbor_mod.create_unique_dir(
+            jobs_root, harbor_mod.job_dir_name(config.name, config_identity)
+        )
+        # Tasks live outside the Harbor job directory: on resume, Harbor
+        # deletes any job-dir subdirectory without a per-trial result.json
+        # as a stale trial, which would destroy the task inputs
+        # (docs/data-conventions.md, "Job directories and run records").
+        tasks_dir = root / "tasks" / job_dir.name
+        tasks_dir.mkdir(parents=True)
+
+        record_items = [item.materialize(tasks_dir) for item in items]
+        job_config = jobs_mod.build_harbor_job_config(
+            config=config,
+            task_dirs=[tasks_dir / item.task_dir_name for item in record_items],
+            job_dir=job_dir,
+            repeats=deficit,
+            max_concurrent_trials=args.max_concurrent_trials,
+            gurobi_license_file=gurobi_license_file,
+        )
+        job_config_path = jobs_mod.write_harbor_job_config(job_dir, job_config)
+        command = harbor_mod.build_harbor_command(job_config_path)
+        job = _LaunchedJob(
+            job_dir=job_dir, record_items=record_items, repeats=deficit, command=command
+        )
+        # Written as executed: false and flipped just before this job's
+        # launch: in a multi-job invocation an abort can leave later
+        # jobs unlaunched, and their records must not claim otherwise.
+        _write_job_record(
+            job,
+            executed=False,
+            stage=stage,
+            config=config,
+            config_identity=config_identity,
+            args=args,
+            cli_version=cli_version,
+            authentication=authentication,
+        )
+        launched.append(job)
+        print(f"job directory: {job_dir}")
+        print(f"materialized {len(record_items)} task(s), {deficit} trial(s) per item")
+
     print(f"max concurrent trials: {args.max_concurrent_trials}")
     if gurobi_license_file is not None:
         print(f"Gurobi license: read-only mount from {gurobi_license_file}")
@@ -1013,14 +1443,36 @@ def _execute(
                 "when aat launches harbor; a manual run must build it first from any "
                 "task's environment/base.Dockerfile"
             )
-        print(f"materialize-only; harbor not invoked. command: {shlex.join(command)}")
+        for job in launched:
+            print(f"materialize-only; harbor not invoked. command: {shlex.join(job.command)}")
         return 0
     if authentication is not None:
         print(f"authentication: {authentication.description}")
     base_images_mod.ensure_base_images(flavors)
-    print(f"launching: {shlex.join(command)}")
-    harbor_status = harbor_mod.invoke_harbor(command, authentication)
-    failed = _report_run_summary(stage, job_dir, record_items, args)
+    harbor_status = 0
+    for index, job in enumerate(launched):
+        _write_job_record(
+            job,
+            executed=True,
+            stage=stage,
+            config=config,
+            config_identity=config_identity,
+            args=args,
+            cli_version=cli_version,
+            authentication=authentication,
+        )
+        print(f"launching: {shlex.join(job.command)}")
+        harbor_status = harbor_mod.invoke_harbor(job.command, authentication)
+        if harbor_status != 0:
+            remaining = len(launched) - index - 1
+            if remaining:
+                print(
+                    f"harbor exited {harbor_status}; not launching the remaining "
+                    f"{remaining} job(s) — re-run the same command to continue"
+                )
+            break
+    existing_by_key = {(item.item_id, item.item_identity): item.existing for item in planned}
+    failed = _report_run_summary(stage, launched, existing_by_key, args)
     if harbor_status != 0:
         return harbor_status
     return 1 if failed else 0
@@ -1028,45 +1480,59 @@ def _execute(
 
 def _report_run_summary(
     stage: Stage,
-    job_dir: Path,
-    record_items: list[harbor_mod.RunRecordItem],
+    launched: list[_LaunchedJob],
+    existing_by_key: dict[tuple[str, str], int],
     args: argparse.Namespace,
 ) -> int:
     """Print the requested/succeeded/failed accounting; return the failure count.
 
-    Harbor exits zero when the *job* finishes, even if trials inside it
+    Harbor exits zero when a *job* finishes, even if trials inside it
     failed — which is how a single lost assignment stays invisible. This
-    summary names every requested item that did not succeed, with the
-    exact scoped rerun command, and the caller turns a nonzero failure
-    count into a nonzero exit status. An item succeeds when at least one
-    of its trials passes the stage's doneness check (verified for solve,
-    a valid grading for grade), so failed items are exactly the not-done
-    ones and rerunning is incremental — no ``--force`` needed.
+    summary counts every requested item across the invocation's jobs
+    (one per deficit group), names each item that did not succeed with
+    the exact scoped rerun command, and the caller turns a nonzero
+    failure count into a nonzero exit status. An item succeeds when at
+    least one valid trial exists for it — pooled prior trials included —
+    so failed items are exactly the not-done ones.
 
-    Succeeding is not the whole request: with ``--repeats N`` an item
-    can succeed on fewer than N trials, silently thinning its
-    statistics. Such items are named with their trial count and counted
-    into the returned failure total — the run did not deliver what was
-    asked — but they are done, so a plain rerun skips them; topping up
-    takes ``--force``, which adds trials to every item in scope.
+    Succeeding is not the whole request: an item can end below its
+    target trial count. Such items are named with their pooled count and
+    counted into the returned failure total — the run did not deliver
+    what was asked. Because ``--repeats`` is a target, a plain re-run of
+    the same command launches exactly the missing trials; only
+    ``--force`` runs (which add rather than ensure) top up differently.
     """
     check = harbor_mod.is_graded_trial if stage == "grade" else harbor_mod.is_verified_trial
-    counts = harbor_mod.done_trial_counts(job_dir, check)
-    failed = [item for item in record_items if item.task_dir_name not in counts]
-    incomplete = [
-        (item, counts[item.task_dir_name])
-        for item in record_items
-        if 0 < counts.get(item.task_dir_name, 0) < args.repeats
-    ]
+    failed: list[harbor_mod.RunRecordItem] = []
+    incomplete: list[tuple[harbor_mod.RunRecordItem, int, int]] = []
+    n_requested = 0
+    for job in launched:
+        counts = harbor_mod.done_trial_counts(job.job_dir, check)
+        for item in job.record_items:
+            n_requested += 1
+            new_valid = counts.get(item.task_dir_name, 0)
+            existing = existing_by_key.get((item.item_id, item.item_identity), 0)
+            total = existing + new_valid
+            target = existing + job.repeats if args.force else args.repeats
+            if total == 0:
+                failed.append(item)
+            elif total < target:
+                incomplete.append((item, total, target))
     succeeded_label = "graded" if stage == "grade" else "verified"
     print(
-        f"run summary: {len(record_items)} item(s) requested, "
-        f"{len(record_items) - len(failed)} {succeeded_label}, {len(failed)} failed"
+        f"run summary: {n_requested} item(s) requested, "
+        f"{n_requested - len(failed)} {succeeded_label}, {len(failed)} failed"
     )
     for item in failed:
         print(f"  failed: {item.course_id}/{item.assignment_id} ({item.item_id})")
     if failed:
+        # The rerun must reproduce the invocation's selection and judge
+        # flags: without --context-from/--min-gradings a judge config
+        # refuses to run at all, and without --sample a target-count
+        # rerun would launch the deficit for every unsampled student.
         from_solve = getattr(args, "from_solve", None)
+        sample = getattr(args, "sample", None)
+        context_from = getattr(args, "context_from", None)
         for course_id, assignment_id in sorted(
             {(item.course_id, item.assignment_id) for item in failed}
         ):
@@ -1074,17 +1540,34 @@ def _report_run_summary(
             if from_solve:
                 command += ["--from-solve", from_solve]
             command += ["--course", course_id, "--assignment", assignment_id]
+            if sample is not None:
+                command += ["--sample", str(sample)]
+            if context_from:
+                command += [
+                    "--context-from",
+                    context_from,
+                    "--min-gradings",
+                    str(args.min_gradings),
+                ]
+            if args.repeats != 1:
+                command += ["--repeats", str(args.repeats)]
             print(f"  rerun: {shlex.join(command)}")
-    for item, count in incomplete:
+    for item, total, target in incomplete:
         print(
             f"  incomplete: {item.course_id}/{item.assignment_id} ({item.item_id}): "
-            f"{count} of {args.repeats} trial(s) {succeeded_label}"
+            f"{total} of {target} valid trial(s)"
         )
     if incomplete:
-        print(
-            "  note: incomplete items are done, so a plain rerun skips them; "
-            "--force --repeats N adds N trials to every item in scope"
-        )
+        if args.force:
+            print(
+                "  note: --force adds trials rather than ensuring a target; "
+                "re-run with --force --repeats <missing> to add the rest"
+            )
+        else:
+            print(
+                "  note: --repeats is a target, so re-running the same command "
+                "launches exactly the missing trials"
+            )
     return len(failed) + len(incomplete)
 
 

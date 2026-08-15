@@ -152,6 +152,19 @@ _TRIALS_DTYPES: dict[str, str] = {
     "solver_config_name": "string",
     "solver_config_identity": "string",
     "solver_model": "string",
+    # Final-judge lineage (grading rows of judge configs only): the
+    # initial config whose gradings the task presented, how many, and
+    # exactly which trials ("job/trial; ..."; the run record holds the
+    # structured list).
+    "context_config_name": "string",
+    "context_config_identity": "string",
+    "n_prior_gradings": "Int64",
+    "prior_trials": "string",
+    # True for a valid final judgment that a later judgment of the same
+    # submission, made over a strict superset of its prior gradings,
+    # has replaced (the top-up-then-re-judge flow of docs/design.md,
+    # decision 16). Always computed, so plain bool.
+    "superseded": "bool",
 }
 
 _CRITERIA_DTYPES: dict[str, str] = {
@@ -206,6 +219,7 @@ def load_results(data_root: Path) -> ResultTables:
             if stage == "solve":
                 solver_configs[job_dir.name] = _solver_config(record)
             _load_job(stage, data_root, job_dir, record, solver_configs, trial_rows, criteria_rows)
+    _mark_superseded(trial_rows)
     trials = _frame(trial_rows, _TRIALS_DTYPES).sort_values(
         ["stage", "job_name", "trial_name"], kind="stable", ignore_index=True
     )
@@ -332,6 +346,8 @@ def _trial_row(
     submission_source = student_id = rubric_name = rubric_sha256 = None
     solve_job_name = solve_trial_name = None
     solver_config_name = solver_config_identity = solver_model = None
+    context_config_name = context_config_identity = prior_trials = None
+    n_prior_gradings: int | None = None
     if stage == "grade":
         submission_source = _opt_str(item.get("submission_source"))
         student_id = _opt_str(item.get("student_id"))
@@ -345,6 +361,12 @@ def _trial_row(
             solver_config_name, solver_config_identity, solver_model = solver_configs.get(
                 solve_job_name, (None, None, None)
             )
+        context_config_name = _opt_str(item.get("context_config_name"))
+        context_config_identity = _opt_str(item.get("context_config_identity"))
+        prior_refs = _prior_trial_refs(item.get("prior_trials"))
+        if prior_refs is not None:
+            n_prior_gradings = len(prior_refs)
+            prior_trials = "; ".join(f"{job}/{trial}" for job, trial in prior_refs)
 
     row: dict[str, object] = {
         "stage": stage,
@@ -388,8 +410,65 @@ def _trial_row(
         "solver_config_name": solver_config_name,
         "solver_config_identity": solver_config_identity,
         "solver_model": solver_model,
+        "context_config_name": context_config_name,
+        "context_config_identity": context_config_identity,
+        "n_prior_gradings": n_prior_gradings,
+        "prior_trials": prior_trials,
+        "superseded": False,  # computed over all rows by _mark_superseded
     }
     return row, criteria
+
+
+def _mark_superseded(trial_rows: list[dict[str, object]]) -> None:
+    """Mark final judgments replaced by a re-judge over more prior gradings.
+
+    A top-up of the initial gradings makes the re-judge a new item
+    identity, so the earlier judgment survives on disk by design — but
+    it was made over strictly less evidence, and pooling it into
+    final-grade statistics would silently average a current and an
+    outdated judgment. Within (grading config identity, item id, context
+    config identity), a valid judgment whose prior-trial set is a strict
+    subset of another valid judgment's is marked superseded. Judgments
+    with equal or non-comparable prior sets all stay current (repeats of
+    one judge item share one set; a genuine conflict stays visible in
+    the review queue). The statistics layer excludes superseded rows
+    from score aggregates and counts them explicitly.
+    """
+    groups: dict[tuple[object, object, object], list[tuple[frozenset[str], dict[str, object]]]] = {}
+    for row in trial_rows:
+        if (
+            row["stage"] == "grade"
+            and row["context_config_identity"] is not None
+            and isinstance(row["prior_trials"], str)
+            and row["base_pct"] is not None
+        ):
+            key = (row["config_identity"], row["item_id"], row["context_config_identity"])
+            prior_set = frozenset(str(row["prior_trials"]).split("; "))
+            groups.setdefault(key, []).append((prior_set, row))
+    for entries in groups.values():
+        for prior_set, row in entries:
+            row["superseded"] = any(prior_set < other_set for other_set, _ in entries)
+
+
+def _prior_trial_refs(value: object) -> list[tuple[str, str]] | None:
+    """The recorded prior-trial lineage as (job, trial) pairs; None when absent.
+
+    A malformed entry drops the whole list rather than yielding a
+    partial one — a truncated lineage would silently understate
+    ``n_prior_gradings``.
+    """
+    if not isinstance(value, list):
+        return None
+    refs: list[tuple[str, str]] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            return None
+        job_name = entry.get("job_name")
+        trial_name = entry.get("trial_name")
+        if not isinstance(job_name, str) or not isinstance(trial_name, str):
+            return None
+        refs.append((job_name, trial_name))
+    return refs
 
 
 def _criteria_rows(

@@ -10,7 +10,10 @@ import pytest
 from agentic_assessment_toolkit.base_images import base_image_reference
 from agentic_assessment_toolkit.config import environment_path
 from agentic_assessment_toolkit.materialize._common import MaterializeError, slugify, task_dir_name
-from agentic_assessment_toolkit.materialize.grading import materialize_grading_task
+from agentic_assessment_toolkit.materialize.grading import (
+    MaterializedGradingTask,
+    materialize_grading_task,
+)
 from agentic_assessment_toolkit.materialize.solve import materialize_solve_task
 from tests.conftest import COURSE_ID, FIXTURES_DIR, GOLDEN_DIR, assert_trees_equal
 
@@ -86,6 +89,80 @@ def test_grading_task_matches_golden(tmp_path: Path) -> None:
         tasks_dir=tmp_path,
     )
     assert_trees_equal(tmp_path, GOLDEN_DIR / "grading_tasks")
+
+
+PRIOR_GRADINGS = [
+    (
+        FIXTURES_DIR / "prior_gradings" / round_name / "grading_result.json",
+        FIXTURES_DIR / "prior_gradings" / round_name / "justification.md",
+    )
+    for round_name in ("01", "02")
+]
+
+
+def materialize_judge_task(
+    tasks_dir: Path, prior: list[tuple[Path, Path]] | None = None
+) -> MaterializedGradingTask:
+    return materialize_grading_task(
+        assignment_dir=COURSE_DIR / "assignments" / "HW1",
+        submission_dir=FIXTURES_DIR / "submission",
+        reference_solution_dir=COURSE_DIR / "reference_solutions" / "HW1",
+        rubric_path=COURSE_DIR / "rubrics" / "HW1" / "default.md",
+        item_id=f"{COURSE_ID}/stu1/HW1",
+        name_parts=(COURSE_ID, "stu1", "HW1"),
+        prompt_name="judge",
+        tasks_dir=tasks_dir,
+        prior_gradings=prior if prior is not None else PRIOR_GRADINGS,
+    )
+
+
+def test_judge_task_matches_golden(tmp_path: Path) -> None:
+    materialize_judge_task(tmp_path)
+    assert_trees_equal(tmp_path, GOLDEN_DIR / "judge_tasks")
+
+
+def test_judge_task_structure(tmp_path: Path) -> None:
+    task = materialize_judge_task(tmp_path)
+    task_dir = task.task_dir
+    # Prior gradings are numbered rounds in presentation order, verbatim.
+    for index, (result_path, justification_path) in enumerate(PRIOR_GRADINGS, start=1):
+        round_dir = task_dir / "environment" / "prior_gradings" / f"{index:02d}"
+        assert (round_dir / "grading_result.json").read_bytes() == result_path.read_bytes()
+        assert (round_dir / "justification.md").read_bytes() == justification_path.read_bytes()
+    dockerfile = (task_dir / "environment" / "Dockerfile").read_text(encoding="utf-8")
+    assert "COPY prior_gradings /app/prior_gradings" in dockerfile
+    # The required-files declaration makes feedback.md a third required
+    # deliverable for the generic verifier.
+    declared = json.loads((task_dir / "tests" / "required_files.json").read_text(encoding="utf-8"))
+    assert declared == ["feedback.md"]
+    assert "prior_gradings" in task.input_hashes
+
+
+def test_prior_gradings_hash_tracks_bytes_and_order(tmp_path: Path) -> None:
+    with_both = materialize_judge_task(tmp_path / "a").input_hashes["prior_gradings"]
+    reversed_rounds = materialize_judge_task(
+        tmp_path / "b", prior=list(reversed(PRIOR_GRADINGS))
+    ).input_hashes["prior_gradings"]
+    only_first = materialize_judge_task(tmp_path / "c", prior=PRIOR_GRADINGS[:1]).input_hashes[
+        "prior_gradings"
+    ]
+    assert len({with_both, reversed_rounds, only_first}) == 3
+
+
+def test_plain_grading_task_declares_no_required_files(tmp_path: Path) -> None:
+    task = materialize_grading_task(
+        assignment_dir=COURSE_DIR / "assignments" / "HW1",
+        submission_dir=FIXTURES_DIR / "submission",
+        reference_solution_dir=COURSE_DIR / "reference_solutions" / "HW1",
+        rubric_path=COURSE_DIR / "rubrics" / "HW1" / "default.md",
+        item_id=f"{COURSE_ID}/stu1/HW1",
+        name_parts=(COURSE_ID, "stu1", "HW1"),
+        prompt_name="grader",
+        tasks_dir=tmp_path,
+    )
+    assert not (task.task_dir / "tests" / "required_files.json").exists()
+    assert not (task.task_dir / "environment" / "prior_gradings").exists()
+    assert "prior_gradings" not in task.input_hashes
 
 
 def test_solve_task_structure(tmp_path: Path) -> None:

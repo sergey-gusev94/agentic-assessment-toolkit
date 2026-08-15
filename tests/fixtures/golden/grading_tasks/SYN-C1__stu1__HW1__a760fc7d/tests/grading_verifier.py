@@ -4,7 +4,9 @@
 Standalone by design: runs inside the grading task container beside a
 verbatim copy of the toolkit's grading_schema.py — one source of truth
 for validation (docs/design.md, "Grading output schema"). Validates the
-two required grading deliverables, cross-checks the grader's authored
+two required grading deliverables plus any extra deliverables the task
+declared at materialization (the final judge's feedback document, via
+the required-files file), cross-checks the grader's authored
 criteria against the expected-criteria file the materializer wrote
 beside this script (any divergence — dropped, renamed, added, or
 reweighted criteria — is a contract failure; when the file is absent,
@@ -29,11 +31,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from grading_schema import (  # noqa: E402
     EXPECTED_CRITERIA_FILENAME,
     JUSTIFICATION_FILENAME,
+    REQUIRED_FILES_FILENAME,
     RESULT_FILENAME,
     derive_scores,
     expected_criteria_errors,
     load_grading_result,
+    required_files_errors,
     sums_report,
+    text_file_errors,
 )
 
 # The environment overrides exist so repository tests can exercise this
@@ -41,20 +46,26 @@ from grading_schema import (  # noqa: E402
 GRADING_OUTPUT_DIR = Path(os.environ.get("AAT_GRADING_OUTPUT_DIR", "/app/grading_output"))
 REWARD_PATH = Path(os.environ.get("AAT_REWARD_PATH", "/logs/verifier/reward.json"))
 EXPECTED_CRITERIA_PATH = Path(__file__).resolve().parent / EXPECTED_CRITERIA_FILENAME
+REQUIRED_FILES_PATH = Path(__file__).resolve().parent / REQUIRED_FILES_FILENAME
 
 
 def main():
     data, errors = load_grading_result(GRADING_OUTPUT_DIR / RESULT_FILENAME)
 
-    justification = GRADING_OUTPUT_DIR / JUSTIFICATION_FILENAME
-    if not justification.is_file():
-        errors.append(f"missing required file {JUSTIFICATION_FILENAME}")
-    else:
+    errors.extend(text_file_errors(GRADING_OUTPUT_DIR / JUSTIFICATION_FILENAME))
+
+    # Extra deliverables the task declared at materialization (the final
+    # judge's feedback document): required and non-empty exactly like
+    # justification.md. Most tasks declare none and have no file, and
+    # the check is skipped.
+    required_files = []
+    if REQUIRED_FILES_PATH.is_file():
         try:
-            if not justification.read_text(encoding="utf-8").strip():
-                errors.append(f"{JUSTIFICATION_FILENAME} is empty")
-        except UnicodeDecodeError:
-            errors.append(f"{JUSTIFICATION_FILENAME} is not UTF-8 text")
+            required_files = json.loads(REQUIRED_FILES_PATH.read_text(encoding="utf-8"))
+        except Exception as error:  # noqa: BLE001 - malformed required-files file
+            errors.append(f"malformed {REQUIRED_FILES_FILENAME}: {type(error).__name__}: {error}")
+        else:
+            errors.extend(required_files_errors(required_files, GRADING_OUTPUT_DIR))
 
     # Rubric cross-check: the authored criteria must reproduce the
     # rubric's expected criteria exactly, or the score denominator is
@@ -94,6 +105,10 @@ def main():
             "contract_valid": not errors,
             "errors": errors,
             "expected_criteria_checked": expected_criteria_checked,
+            # The declared extra deliverables this task was checked for
+            # ([] when the task declares none or the declaration is
+            # malformed).
+            "required_files": required_files if isinstance(required_files, list) else [],
             "score_pct": scores["score_pct"],
             "base_pct": scores["base_pct"],
             # Authored-sum self-check: recorded, never a failure.

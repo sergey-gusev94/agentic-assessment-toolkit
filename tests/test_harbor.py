@@ -310,20 +310,27 @@ def test_run_record_roundtrip(tmp_path: Path) -> None:
     record: dict[str, Any] | None = read_run_record(job_dir)
     assert record is not None
     assert record["stage"] == "solve"
-    assert record["schema_version"] == 2
+    assert record["schema_version"] == 3
     assert record["authentication"] is None
     assert record["max_concurrent_trials"] == 8
+    # Version 3: what this job ran, the target it served, and the sample.
+    assert record["repeats"] == 1
+    assert record["repeats_target"] == 1
+    assert record["sample"] is None
     assert record["toolkit_version"]
     assert record["harbor_version"].startswith("0.20.")
     assert record["items"][0]["item_id"] == "C1/HW1"
     assert record["items"][0]["course_id"] == "C1"
     assert record["items"][0]["assignment_id"] == "HW1"
-    # The lineage fields are always serialized: a solve item carries all
-    # four as null (KeyError here would mean a key went missing).
+    # The lineage fields are always serialized: a solve item carries
+    # them all as null (KeyError here would mean a key went missing).
     assert record["items"][0]["submission_source"] is None
     assert record["items"][0]["student_id"] is None
     assert record["items"][0]["solve_job_name"] is None
     assert record["items"][0]["solve_trial_name"] is None
+    assert record["items"][0]["context_config_name"] is None
+    assert record["items"][0]["context_config_identity"] is None
+    assert record["items"][0]["prior_trials"] is None
 
 
 def test_run_record_authentication_excludes_credentials_and_paths(tmp_path: Path) -> None:
@@ -413,6 +420,78 @@ def test_done_items(tmp_path: Path) -> None:
     assert done_items(tmp_path / "absent", "solve") == set()
     # Fails closed: a record whose stage does not match contributes nothing.
     assert done_items(jobs_root, "grade") == set()
+
+
+def test_done_trial_totals_pool_across_jobs(tmp_path: Path) -> None:
+    """Target-count --repeats subtracts from these pooled counts."""
+    config_path = write_config(tmp_path, SOLVE_TOML, "codex-high")
+    jobs_root = tmp_path / "solving"
+    first = write_job(
+        jobs_root,
+        "20260731T000000Z__codex-high__cccccccc",
+        stage="solve",
+        config_path=config_path,
+        items=[make_item("t1", "C1/HW1", "i1"), make_item("t2", "C1/HW2", "i2")],
+    )
+    write_trial(first, "t1__abc1234", task_name="t1")
+    write_trial(first, "t1__def5678", task_name="t1")
+    write_trial(first, "t2__abc1234", task_name="t2", verified=False)
+    second = write_job(
+        jobs_root,
+        "20260801T000000Z__codex-high__cccccccc",
+        stage="solve",
+        config_path=config_path,
+        items=[make_item("t1", "C1/HW1", "i1")],
+    )
+    write_trial(second, "t1__aaa1234", task_name="t1")
+    totals = harbor_mod.done_trial_totals(jobs_root, "solve")
+    # HW1 pools 2 + 1 across the two jobs; HW2's only trial failed.
+    assert totals == {("C1/HW1", "i1"): 3}
+
+
+def write_grading_artifacts(trial_dir: Path) -> None:
+    output_dir = trial_dir / "artifacts" / "app" / "grading_output"
+    output_dir.mkdir(parents=True)
+    (output_dir / "grading_result.json").write_text('{"schema_version": 1}', encoding="utf-8")
+    (output_dir / "justification.md").write_text("# J", encoding="utf-8")
+
+
+def test_prior_gradings_by_key_collects_valid_gradings(tmp_path: Path) -> None:
+    config_path = write_config(tmp_path, GRADE_TOML, "codex-grader-high")
+    grading_root = tmp_path / "grading"
+    first = write_job(
+        grading_root,
+        "20260731T000000Z__codex-grader-high__cccccccc",
+        stage="grade",
+        config_path=config_path,
+        items=[make_item("g1", "C1/stu1/HW1", "i1"), make_item("g2", "C1/stu2/HW1", "i1")],
+    )
+    # Two valid gradings of stu1 (one per job), plus one whose artifacts
+    # are gone, plus an invalid grading (no base_pct) that never counts.
+    write_grading_artifacts(write_trial(first, "g1__t2", task_name="g1", rewards=GRADED_REWARDS))
+    write_trial(first, "g1__gone", task_name="g1", rewards=GRADED_REWARDS)
+    write_trial(first, "g2__bad", task_name="g2", rewards={"reward": 0.0})
+    second = write_job(
+        grading_root,
+        "20260801T000000Z__codex-grader-high__cccccccc",
+        stage="grade",
+        config_path=config_path,
+        items=[make_item("g1", "C1/stu1/HW1", "i1")],
+    )
+    write_grading_artifacts(write_trial(second, "g1__t1", task_name="g1", rewards=GRADED_REWARDS))
+
+    pool = harbor_mod.prior_gradings_by_key(grading_root)
+    gradings = pool.by_key[("C1/stu1/HW1", "i1")]
+    # Sorted by (job, trial) for deterministic round numbering.
+    assert [(g.job_name[:8], g.trial_name) for g in gradings] == [
+        ("20260731", "g1__t2"),
+        ("20260801", "g1__t1"),
+    ]
+    for grading in gradings:
+        assert grading.result_path.is_file()
+        assert grading.justification_path.is_file()
+    assert pool.missing_artifacts == {("C1/stu1/HW1", "i1"): 1}
+    assert ("C1/stu2/HW1", "i1") not in pool.by_key
 
 
 def test_job_level_files_and_tasks_dir_are_not_trials(tmp_path: Path) -> None:

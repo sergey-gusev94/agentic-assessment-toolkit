@@ -101,6 +101,7 @@ STUDENT_COLUMNS = [
     "mean_base_pct",
     "sd_base_pct",
     "n_failed_gradings",
+    "n_superseded",
     "n_sums_inconsistent",
     "n_late_exception",
     "n_load_error",
@@ -154,6 +155,32 @@ CONSISTENCY_COLUMNS = [
     "range_flagged",
     "n_deviant_gradings",
     "deviant_trials",
+]
+
+REVIEW_QUEUE_COLUMNS = [
+    "config_name",
+    "config_identity",
+    "course_id",
+    "assignment_id",
+    "item_id",
+    "item_identity",
+    "student_id",
+    "submission_source",
+    "rubric_sha256",
+    "n_gradings",
+    "base_pct_values",
+    "median_base_pct",
+    "range_base_pct",
+    "trials",
+    "justification_paths",
+    "judge_config_name",
+    "judge_config_identity",
+    "n_final_gradings",
+    "final_base_pct",
+    "final_score_pct",
+    "n_prior_gradings",
+    "final_outside_range",
+    "final_trials",
 ]
 
 NEAR_TIMEOUT_COLUMNS = [
@@ -679,6 +706,7 @@ def test_student_grades_per_student_means_and_flags() -> None:
     assert float(stu1["mean_base_pct"]) == pytest.approx(80.0)  # mean of [80, 90, 70]
     assert float(stu1["sd_base_pct"]) == pytest.approx(10.0)
     assert stu1["n_failed_gradings"] == 1
+    assert stu1["n_superseded"] == 0
     assert stu1["n_sums_inconsistent"] == 1
     assert stu1["n_late_exception"] == 1
     assert stu1["n_load_error"] == 1
@@ -813,6 +841,178 @@ def test_repeat_consistency_thresholds_are_strict() -> None:
     assert float(row["range_base_pct"]) == 20.0
     assert bool(row["range_flagged"]) is False
     assert row["n_deviant_gradings"] == 0
+
+
+def judged(value: float, name: str, item: str = "X", **over: object) -> dict[str, object]:
+    """One valid final-judge grading: a graded row with judge lineage."""
+    row: dict[str, object] = {
+        "trial_name": name,
+        "item_id": item,
+        "item_identity": f"{item}-judge-id",
+        "config_name": "judge",
+        "config_identity": "JG",
+        "context_config_name": "grader",
+        "context_config_identity": "G",
+        "n_prior_gradings": 2,
+        "prior_trials": f"J/{item.lower()}1; J/{item.lower()}2",
+    }
+    row.update(over)
+    return graded(value, value, **row)
+
+
+def test_review_queue_sorts_by_disagreement_and_includes_singles() -> None:
+    trials = trials_frame(
+        [
+            repeated(90.0, "x1"),
+            repeated(60.0, "x2"),
+            repeated(80.0, "y1", item="Y"),
+            repeated(85.0, "y2", item="Y"),
+            graded(70.0, 70.0, trial_name="z1", item_id="Z", item_identity="Z-id"),
+            failed_grading(trial_name="w1", item_id="W", item_identity="W-id"),
+        ]
+    )
+    table = metrics.review_queue(trials)
+    assert list(table.columns) == REVIEW_QUEUE_COLUMNS
+    # Singles included (unlike repeat_consistency); failed gradings not.
+    assert list(table["item_id"]) == ["X", "Y", "Z"]  # range 30, 5, 0
+    x = table.iloc[0]
+    assert x["n_gradings"] == 2
+    assert x["base_pct_values"] == "60; 90"
+    assert float(x["range_base_pct"]) == 30.0
+    assert x["trials"] == "J/x1; J/x2"
+    assert x["justification_paths"] == (
+        "grading/J/x1/artifacts/app/grading_output/justification.md; "
+        "grading/J/x2/artifacts/app/grading_output/justification.md"
+    )
+    assert x["n_final_gradings"] == 0
+    assert pd.isna(x["final_base_pct"])
+    assert pd.isna(x["final_outside_range"])
+
+
+def test_review_queue_joins_final_judge_through_lineage() -> None:
+    trials = trials_frame(
+        [
+            # Item X: initial range 60-90; the final 75 is inside it.
+            repeated(90.0, "x1"),
+            repeated(60.0, "x2"),
+            judged(75.0, "jx"),
+            # Item Y: initial range 80-85; the final 95 falls outside.
+            repeated(80.0, "y1", item="Y"),
+            repeated(85.0, "y2", item="Y"),
+            judged(95.0, "jy", item="Y"),
+        ]
+    )
+    table = metrics.review_queue(trials)
+    assert len(table) == 2  # judge rows attach; they never stand alone
+    x = row_where(table, "item_id", "X")
+    assert x["judge_config_name"] == "judge"
+    assert x["n_final_gradings"] == 1
+    assert float(x["final_base_pct"]) == 75.0
+    assert x["n_prior_gradings"] == 2
+    assert bool(x["final_outside_range"]) is False
+    assert x["final_trials"] == "J/jx"
+    y = row_where(table, "item_id", "Y")
+    assert bool(y["final_outside_range"]) is True
+
+
+def test_review_queue_final_is_median_over_repeated_judgings() -> None:
+    trials = trials_frame(
+        [
+            repeated(80.0, "x1"),
+            repeated(90.0, "x2"),
+            judged(70.0, "j1"),
+            judged(74.0, "j2"),
+            judged(95.0, "j3"),
+        ]
+    )
+    row = metrics.review_queue(trials).iloc[0]
+    assert row["n_final_gradings"] == 3
+    assert float(row["final_base_pct"]) == 74.0
+    assert bool(row["final_outside_range"]) is True  # 74 < min(80, 90)
+
+
+def test_review_queue_outside_range_uses_the_judged_priors_span() -> None:
+    # The judge saw x1 (90) and x2 (60); x3 (95) was graded afterwards.
+    # The final 93 is inside the current group span but outside what the
+    # judge saw — the flag must still fire.
+    trials = trials_frame(
+        [
+            repeated(90.0, "x1"),
+            repeated(60.0, "x2"),
+            repeated(95.0, "x3"),
+            judged(93.0, "jx"),  # prior_trials: "J/x1; J/x2"
+        ]
+    )
+    row = metrics.review_queue(trials).iloc[0]
+    assert float(row["final_base_pct"]) == 93.0
+    assert bool(row["final_outside_range"]) is True
+
+
+def test_review_queue_ignores_superseded_judgments() -> None:
+    trials = trials_frame(
+        [
+            repeated(90.0, "x1"),
+            repeated(60.0, "x2"),
+            judged(85.0, "j_old", superseded=True),
+            judged(70.0, "j_new", item_identity="X-judge-id-2"),
+        ]
+    )
+    table = metrics.review_queue(trials)
+    assert len(table) == 1
+    row = table.iloc[0]
+    assert float(row["final_base_pct"]) == 70.0
+    assert row["final_trials"] == "J/j_new"
+
+
+def test_superseded_judgments_leave_student_grades() -> None:
+    trials = trials_frame(
+        [
+            graded(
+                85.0,
+                85.0,
+                trial_name="j_old",
+                item_id="X",
+                item_identity="X-judge-id",
+                submission_source="student",
+                student_id="stu1",
+                superseded=True,
+            ),
+            graded(
+                70.0,
+                70.0,
+                trial_name="j_new",
+                item_id="X",
+                item_identity="X-judge-id-2",
+                submission_source="student",
+                student_id="stu1",
+            ),
+        ]
+    )
+    table = metrics.student_grades(trials)
+    row = table.iloc[0]
+    # The superseded judgment neither averages into the final grade nor
+    # counts as failed; it has its own column.
+    assert row["n_valid_gradings"] == 1
+    assert float(row["mean_score_pct"]) == 70.0
+    assert row["n_failed_gradings"] == 0
+    assert row["n_superseded"] == 1
+
+
+def test_review_queue_unmatched_judge_is_a_standalone_row() -> None:
+    # The judge grading names prior trials that are not in the loaded
+    # trials (filtered out, or the initial job is unreadable): the final
+    # grade still appears, carrying the recorded context config.
+    trials = trials_frame([judged(75.0, "jx")])
+    table = metrics.review_queue(trials)
+    assert len(table) == 1
+    row = table.iloc[0]
+    assert row["config_name"] == "grader"
+    assert row["config_identity"] == "G"
+    assert row["n_gradings"] == 0
+    assert pd.isna(row["median_base_pct"])
+    assert row["judge_config_name"] == "judge"
+    assert float(row["final_base_pct"]) == 75.0
+    assert pd.isna(row["final_outside_range"])
 
 
 def test_near_timeouts_counts_per_job_and_config() -> None:

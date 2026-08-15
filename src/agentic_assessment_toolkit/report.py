@@ -38,6 +38,7 @@ REPORT_FILENAMES = (
     "students.csv",
     "judge_quality.csv",
     "repeat_consistency.csv",
+    "review_queue.csv",
     "grader_checks.csv",
     "failures.csv",
     "near_timeouts.csv",
@@ -130,6 +131,7 @@ def write_report(
         "students": metrics.student_grades(trials),
         "judge_quality": metrics.judge_quality(trials, criteria, data_root=data_root),
         "repeat_consistency": metrics.repeat_consistency(trials),
+        "review_queue": metrics.review_queue(trials),
         "grader_checks": metrics.grader_checks(trials),
         "failures": metrics.failure_accounting(trials),
         "near_timeouts": metrics.near_timeouts(trials),
@@ -290,6 +292,7 @@ def _report_markdown(
     parts.extend(_benchmark_section(tables["grades_by_assignment"], tables["grades_by_course"]))
     parts.extend(_judge_section(tables["judge_quality"]))
     parts.extend(_consistency_section(tables["repeat_consistency"]))
+    parts.extend(_review_queue_section(tables["review_queue"]))
     parts.extend(_checks_section(tables["grader_checks"]))
     parts.extend(_assistant_section(metrics.class_distribution(tables["students"])))
     parts.extend(_failures_section(tables["failures"]))
@@ -436,6 +439,63 @@ def _consistency_section(consistency: pd.DataFrame) -> list[str]:
         parts.append("No repeated item exceeds either threshold.")
     else:
         parts.append(_markdown_table(flagged, columns=_CONSISTENCY_TABLE_COLUMNS))
+    return parts
+
+
+# The review-queue display keeps the identifying and score columns; the
+# trial names, paths, and full hashes live in the CSV.
+_REVIEW_TABLE_COLUMNS = (
+    "config_name",
+    "course_id",
+    "assignment_id",
+    "student_id",
+    "rubric",
+    "n_gradings",
+    "base_pct_values",
+    "median_base_pct",
+    "range_base_pct",
+    "final_base_pct",
+    "n_prior_gradings",
+    "final_outside_range",
+)
+
+
+def _review_queue_section(queue: pd.DataFrame) -> list[str]:
+    parts = ["## Review queue"]
+    if queue.empty:
+        parts.append("No valid gradings in this report.")
+        return parts
+    parts.append(
+        "The human-review navigation table: one row per graded submission "
+        "under one initial grading config (single gradings included), "
+        "sorted by score disagreement, biggest first. Rows carry the exact "
+        "trial names and per-trial justification paths (relative to the "
+        "data root; a final-judge trial's feedback document sits beside "
+        "its justification as feedback.md), so a row opens in one step — "
+        "`harbor view <data-root>/grading/<job>` browses a named job. "
+        "Where a final-judge grading exists, `final_base_pct` is its "
+        "score (the median when the judge graded the item more than "
+        "once) and `final_outside_range` marks a final score outside the "
+        "initial scores' span — not evidence the judge is wrong, but "
+        "exactly what a human should read, since the judge did the most "
+        "interpretive work there. Advisory only: nothing here excludes "
+        "any grading from any aggregate. The full table is "
+        "review_queue.csv."
+    )
+    outside = queue["final_outside_range"].fillna(False).astype(bool)
+    wide = (queue["range_base_pct"] > metrics.REPEAT_RANGE_FLAG_PCT).fillna(False).astype(bool)
+    n_final = int(queue["n_final_gradings"].gt(0).sum())
+    parts.append(
+        f"{len(queue)} row(s); {n_final} with a final-judge grading, "
+        f"{int(outside.sum())} of those outside the initial range; "
+        f"{int(wide.sum())} row(s) with an initial score range above "
+        f"{metrics.REPEAT_RANGE_FLAG_PCT:g} points."
+    )
+    flagged = queue[outside | wide]
+    if flagged.empty:
+        parts.append("No row is flagged; the full queue is in review_queue.csv.")
+    else:
+        parts.append(_markdown_table(flagged, columns=_REVIEW_TABLE_COLUMNS))
     return parts
 
 

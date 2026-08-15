@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "criteria": [
+    {
+      "id": "slope",
+      "title": "Slope",
+      "max_points": 8,
+      "points": 4,
+      "evidence": "solution.md reports slope = 2 but shows no derivation."
+    },
+    {
+      "id": "method",
+      "title": "Method",
+      "max_points": 2,
+      "points": 2,
+      "evidence": "solution.md states least squares."
+    },
+    {
+      "id": "plot",
+      "title": "Plot",
+      "max_points": 1,
+      "points": 0,
+      "evidence": "No plot file is present in the submission.",
+      "bonus": true
+    }
+  ],
+  "base_points": 6,
+  "base_max": 10,
+  "bonus_points": 0,
+  "bonus_max": 1,
+  "overall_comment": "Slope value correct but underived; no plot."
+}

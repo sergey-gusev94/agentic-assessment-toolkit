@@ -51,6 +51,27 @@ def main() -> None:
         prompt_name="grader",
         tasks_dir=grading_dir,
     )
+
+    judge_dir = GOLDEN_DIR / "judge_tasks"
+    judge_dir.mkdir(parents=True)
+    prior_dir = FIXTURES_DIR / "prior_gradings"
+    materialize_grading_task(
+        assignment_dir=course_dir / "assignments" / "HW1",
+        submission_dir=FIXTURES_DIR / "submission",
+        reference_solution_dir=course_dir / "reference_solutions" / "HW1",
+        rubric_path=course_dir / "rubrics" / "HW1" / "default.md",
+        item_id=f"{COURSE_ID}/stu1/HW1",
+        name_parts=(COURSE_ID, "stu1", "HW1"),
+        prompt_name="judge",
+        tasks_dir=judge_dir,
+        prior_gradings=[
+            (
+                prior_dir / round_name / "grading_result.json",
+                prior_dir / round_name / "justification.md",
+            )
+            for round_name in ("01", "02")
+        ],
+    )
     print(f"regenerated goldens under {GOLDEN_DIR}")
 
 

@@ -653,14 +653,15 @@ def test_run_summary_reports_incomplete_repeats(
     exit_code = cli.main(
         solve_args(data_root, solve_config, "--course", COURSE_ID, "--repeats", "2")
     )
-    # HW2 verified — it is done and a plain rerun skips it — but it lost
-    # one of its two requested trials, so the run must not exit clean.
+    # HW2 verified — it is done — but it lost one of its two requested
+    # trials, so the run must not exit clean; a plain rerun of the same
+    # command launches exactly the missing trial (target semantics).
     assert exit_code == 1
     out = capsys.readouterr().out
     assert "run summary: 2 item(s) requested, 2 verified, 0 failed" in out
-    assert f"incomplete: {COURSE_ID}/HW2 ({COURSE_ID}/HW2): 1 of 2 trial(s) verified" in out
+    assert f"incomplete: {COURSE_ID}/HW2 ({COURSE_ID}/HW2): 1 of 2 valid trial(s)" in out
     assert f"incomplete: {COURSE_ID}/HW1" not in out
-    assert "--force --repeats N adds N trials" in out
+    assert "re-running the same command launches exactly the missing trials" in out
 
 
 def test_launch_prepares_base_images_before_harbor(
@@ -792,8 +793,8 @@ def test_doneness_is_per_item_not_per_identity_solve(
     capsys.readouterr()
     assert cli.main(solve_args(data_root, solve_config, "--course", COURSE_ID, "--dry-run")) == 0
     out = capsys.readouterr().out
-    assert f"[done   ] {COURSE_ID}/HW1" in out
-    assert f"[pending] {COURSE_ID}/HW2" in out
+    assert f"[complete] {COURSE_ID}/HW1" in out
+    assert f"[pending ] {COURSE_ID}/HW2" in out
     assert "would run 1 of 2 item(s)" in out
 
 
@@ -825,8 +826,8 @@ def test_doneness_is_per_item_not_per_identity_grading(
     capsys.readouterr()
     assert cli.main(grade_args(data_root, grade_config, "--course", COURSE_ID, "--dry-run")) == 0
     out = capsys.readouterr().out
-    assert f"[done   ] {COURSE_ID}/stu1/HW1" in out
-    assert f"[pending] {COURSE_ID}/stu2/HW1" in out
+    assert f"[complete] {COURSE_ID}/stu1/HW1" in out
+    assert f"[pending ] {COURSE_ID}/stu2/HW1" in out
 
 
 def test_missing_named_rubric_is_an_error(
@@ -904,7 +905,7 @@ def test_grade_invalid_result_is_regraded(
 
     capsys.readouterr()
     assert cli.main(grade_args(data_root, grade_config, "--course", COURSE_ID, "--dry-run")) == 0
-    assert f"[pending] {COURSE_ID}/stu1/HW1" in capsys.readouterr().out
+    assert f"[pending ] {COURSE_ID}/stu1/HW1" in capsys.readouterr().out
 
 
 def test_grade_from_solve_narrowed_by_course_is_accepted(
@@ -1047,6 +1048,881 @@ def test_report_out_elsewhere_is_honored_with_filters(data_root: Path, tmp_path:
         "assignments": ["HW1"],
         "configs": ["codex-high", "codex-grader-high"],
     }
+
+
+def add_student(data_root: Path, student_id: str, assignment_id: str = "HW1") -> None:
+    import shutil
+
+    shutil.copytree(
+        data_root / "submissions" / COURSE_ID / "stu1" / "HW1",
+        data_root / "submissions" / COURSE_ID / student_id / assignment_id,
+    )
+
+
+def sample_order(student_ids: list[str]) -> list[str]:
+    """The hash-prefix order the CLI must reproduce, computed independently."""
+    import hashlib
+
+    return sorted(
+        student_ids,
+        key=lambda sid: (hashlib.sha256(f"{COURSE_ID}/{sid}".encode()).hexdigest(), sid),
+    )
+
+
+def test_grade_sample_is_a_deterministic_hash_prefix(
+    data_root: Path, grade_config: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for student_id in ("stu2", "stu3", "stu4", "_reference"):
+        add_student(data_root, student_id)
+    expected = sample_order(["stu1", "stu2", "stu3", "stu4"])[:2]
+
+    assert (
+        cli.main(
+            grade_args(data_root, grade_config, "--course", COURSE_ID, "--sample", "2", "--dry-run")
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    for student_id in expected:
+        assert f"{COURSE_ID}/{student_id}/HW1" in out
+    for student_id in {"stu1", "stu2", "stu3", "stu4"} - set(expected):
+        assert f"{COURSE_ID}/{student_id}/HW1" not in out
+    # Pseudo-students are excluded from the frame and the selection.
+    assert f"{COURSE_ID}/_reference/HW1" not in out
+    assert f"sample: {COURSE_ID}/HW1: 2 of 4 submitted student(s)" in out
+    assert "excluded 1 pseudo-student submission(s)" in out
+
+    # The prefix property: sample 3 is sample 2 plus one more student.
+    capsys.readouterr()
+    assert (
+        cli.main(
+            grade_args(data_root, grade_config, "--course", COURSE_ID, "--sample", "3", "--dry-run")
+        )
+        == 0
+    )
+    wider = capsys.readouterr().out
+    for student_id in expected:
+        assert f"{COURSE_ID}/{student_id}/HW1" in wider
+
+
+def test_grade_sample_recorded_in_run_record(data_root: Path, grade_config: Path) -> None:
+    assert (
+        cli.main(
+            grade_args(
+                data_root,
+                grade_config,
+                "--course",
+                COURSE_ID,
+                "--sample",
+                "1",
+                "--materialize-only",
+            )
+        )
+        == 0
+    )
+    record = json.loads(
+        (job_dirs(data_root, "grading")[0] / "aat-run.json").read_text(encoding="utf-8")
+    )
+    assert record["sample"] == 1
+    assert len(record["items"]) == 1
+
+
+def test_grade_sample_rejected_with_from_solve(data_root: Path, grade_config: Path) -> None:
+    assert (
+        cli.main(grade_args(data_root, grade_config, "--from-solve", "codex-high", "--sample", "3"))
+        == 2
+    )
+
+
+def test_repeats_target_launches_only_the_deficit(
+    data_root: Path, grade_config: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    submission = str(data_root / "submissions" / COURSE_ID / "stu1" / "HW1")
+    assert (
+        cli.main(
+            grade_args(data_root, grade_config, "--submissions", submission, "--materialize-only")
+        )
+        == 0
+    )
+    first = job_dirs(data_root, "grading")[0]
+    record = json.loads((first / "aat-run.json").read_text(encoding="utf-8"))
+    write_trial(
+        first,
+        "graded__t1",
+        task_name=record["items"][0]["task_dir_name"],
+        rewards=GRADED_REWARDS,
+    )
+
+    capsys.readouterr()
+    assert (
+        cli.main(
+            grade_args(
+                data_root,
+                grade_config,
+                "--submissions",
+                submission,
+                "--repeats",
+                "3",
+                "--materialize-only",
+            )
+        )
+        == 0
+    )
+    second = [d for d in job_dirs(data_root, "grading") if d != first]
+    assert len(second) == 1
+    harbor_job = json.loads((second[0] / "harbor-job.json").read_text(encoding="utf-8"))
+    # One valid grading exists, so the target of 3 launches exactly 2.
+    assert harbor_job["n_attempts"] == 2
+    new_record = json.loads((second[0] / "aat-run.json").read_text(encoding="utf-8"))
+    assert new_record["repeats"] == 2
+    assert new_record["repeats_target"] == 3
+    assert "materialized 1 task(s), 2 trial(s) per item" in capsys.readouterr().out
+
+
+def test_repeats_target_at_or_above_target_does_nothing(
+    data_root: Path, grade_config: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    submission = str(data_root / "submissions" / COURSE_ID / "stu1" / "HW1")
+    assert (
+        cli.main(
+            grade_args(data_root, grade_config, "--submissions", submission, "--materialize-only")
+        )
+        == 0
+    )
+    job_dir = job_dirs(data_root, "grading")[0]
+    record = json.loads((job_dir / "aat-run.json").read_text(encoding="utf-8"))
+    task_name = record["items"][0]["task_dir_name"]
+    write_trial(job_dir, "graded__t1", task_name=task_name, rewards=GRADED_REWARDS)
+    write_trial(job_dir, "graded__t2", task_name=task_name, rewards=GRADED_REWARDS)
+
+    capsys.readouterr()
+    assert (
+        cli.main(grade_args(data_root, grade_config, "--submissions", submission, "--repeats", "2"))
+        == 0
+    )
+    assert "nothing to do: 1 item(s) already at the target of 2 valid trial(s)" in (
+        capsys.readouterr().out
+    )
+    assert len(job_dirs(data_root, "grading")) == 1  # no new job
+
+
+def test_repeats_deficits_group_into_one_job_each(
+    data_root: Path, grade_config: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    add_student(data_root, "stu2")
+    assert (
+        cli.main(grade_args(data_root, grade_config, "--course", COURSE_ID, "--materialize-only"))
+        == 0
+    )
+    first = job_dirs(data_root, "grading")[0]
+    record = json.loads((first / "aat-run.json").read_text(encoding="utf-8"))
+    stu1_item = next(i for i in record["items"] if "stu1" in i["item_id"])
+    write_trial(first, "graded__t1", task_name=stu1_item["task_dir_name"], rewards=GRADED_REWARDS)
+
+    capsys.readouterr()
+    assert (
+        cli.main(
+            grade_args(
+                data_root,
+                grade_config,
+                "--course",
+                COURSE_ID,
+                "--repeats",
+                "2",
+                "--dry-run",
+            )
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert f"run  [partial ] {COURSE_ID}/stu1/HW1 (1 of 2 valid trial(s))" in out
+    assert f"run  [pending ] {COURSE_ID}/stu2/HW1 (0 of 2 valid trial(s))" in out
+    assert "would run 2 of 2 item(s) across 2 job(s) (one per deficit)" in out
+
+    assert (
+        cli.main(
+            grade_args(
+                data_root,
+                grade_config,
+                "--course",
+                COURSE_ID,
+                "--repeats",
+                "2",
+                "--materialize-only",
+            )
+        )
+        == 0
+    )
+    new_jobs = [d for d in job_dirs(data_root, "grading") if d != first]
+    assert len(new_jobs) == 2
+    by_attempts = {}
+    for job_dir in new_jobs:
+        harbor_job = json.loads((job_dir / "harbor-job.json").read_text(encoding="utf-8"))
+        new_record = json.loads((job_dir / "aat-run.json").read_text(encoding="utf-8"))
+        assert new_record["repeats"] == harbor_job["n_attempts"]
+        assert new_record["repeats_target"] == 2
+        by_attempts[harbor_job["n_attempts"]] = [i["item_id"] for i in new_record["items"]]
+    # stu1 needs one more trial, stu2 needs two; each deficit is one job.
+    assert by_attempts == {
+        1: [f"{COURSE_ID}/stu1/HW1"],
+        2: [f"{COURSE_ID}/stu2/HW1"],
+    }
+
+
+def test_force_adds_repeats_in_a_single_job(data_root: Path, grade_config: Path) -> None:
+    add_student(data_root, "stu2")
+    assert (
+        cli.main(grade_args(data_root, grade_config, "--course", COURSE_ID, "--materialize-only"))
+        == 0
+    )
+    first = job_dirs(data_root, "grading")[0]
+    record = json.loads((first / "aat-run.json").read_text(encoding="utf-8"))
+    stu1_item = next(i for i in record["items"] if "stu1" in i["item_id"])
+    write_trial(first, "graded__t1", task_name=stu1_item["task_dir_name"], rewards=GRADED_REWARDS)
+
+    assert (
+        cli.main(
+            grade_args(
+                data_root,
+                grade_config,
+                "--course",
+                COURSE_ID,
+                "--repeats",
+                "2",
+                "--force",
+                "--materialize-only",
+            )
+        )
+        == 0
+    )
+    new_jobs = [d for d in job_dirs(data_root, "grading") if d != first]
+    assert len(new_jobs) == 1
+    harbor_job = json.loads((new_jobs[0] / "harbor-job.json").read_text(encoding="utf-8"))
+    new_record = json.loads((new_jobs[0] / "aat-run.json").read_text(encoding="utf-8"))
+    # --force adds 2 more to every item in scope, done or not.
+    assert harbor_job["n_attempts"] == 2
+    assert len(new_record["items"]) == 2
+
+
+def seed_valid_grading(data_root: Path, grade_config: Path, submission: str) -> Path:
+    """Materialize a grading job for one submission and store 1 valid trial."""
+    assert (
+        cli.main(
+            grade_args(data_root, grade_config, "--submissions", submission, "--materialize-only")
+        )
+        == 0
+    )
+    job_dir = job_dirs(data_root, "grading")[-1]
+    record = json.loads((job_dir / "aat-run.json").read_text(encoding="utf-8"))
+    write_trial(
+        job_dir,
+        "seeded__t1",
+        task_name=record["items"][0]["task_dir_name"],
+        rewards=GRADED_REWARDS,
+    )
+    return job_dir
+
+
+def test_run_summary_counts_pooled_trials(
+    data_root: Path,
+    grade_config: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The summary's totals include valid trials pooled from earlier jobs."""
+    submission = str(data_root / "submissions" / COURSE_ID / "stu1" / "HW1")
+    seed_valid_grading(data_root, grade_config, submission)
+
+    def fake_invoke(
+        _command: list[str], _authentication: harbor_mod.HarborAuthentication | None
+    ) -> int:
+        job_dir = job_dirs(data_root, "grading")[-1]
+        record = json.loads((job_dir / "aat-run.json").read_text(encoding="utf-8"))
+        # The deficit job asked for 2 trials; only one produces a grade.
+        write_trial(
+            job_dir,
+            "new__t1",
+            task_name=record["items"][0]["task_dir_name"],
+            rewards=GRADED_REWARDS,
+        )
+        return 0
+
+    monkeypatch.setattr(harbor_mod, "invoke_harbor", fake_invoke)
+    capsys.readouterr()
+    exit_code = cli.main(
+        grade_args(data_root, grade_config, "--submissions", submission, "--repeats", "3")
+    )
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    # 1 pooled + 1 new of a target of 3: graded but incomplete — never
+    # "failed", and never "1 of 3" (the pooled trial must count).
+    assert "run summary: 1 item(s) requested, 1 graded, 0 failed" in out
+    assert f"incomplete: {COURSE_ID}/HW1 ({COURSE_ID}/stu1/HW1): 2 of 3 valid trial(s)" in out
+    assert "re-running the same command launches exactly the missing trials" in out
+
+
+def test_force_run_summary_targets_existing_plus_added(
+    data_root: Path,
+    grade_config: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    submission = str(data_root / "submissions" / COURSE_ID / "stu1" / "HW1")
+    seed_valid_grading(data_root, grade_config, submission)
+
+    def fake_invoke(
+        _command: list[str], _authentication: harbor_mod.HarborAuthentication | None
+    ) -> int:
+        job_dir = job_dirs(data_root, "grading")[-1]
+        record = json.loads((job_dir / "aat-run.json").read_text(encoding="utf-8"))
+        write_trial(
+            job_dir,
+            "new__t1",
+            task_name=record["items"][0]["task_dir_name"],
+            rewards=GRADED_REWARDS,
+        )
+        return 0
+
+    monkeypatch.setattr(harbor_mod, "invoke_harbor", fake_invoke)
+    capsys.readouterr()
+    exit_code = cli.main(
+        grade_args(
+            data_root, grade_config, "--submissions", submission, "--force", "--repeats", "2"
+        )
+    )
+    # --force asked for 2 more on top of 1 existing; only 1 arrived.
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert f"incomplete: {COURSE_ID}/HW1 ({COURSE_ID}/stu1/HW1): 2 of 3 valid trial(s)" in out
+    assert "--force adds trials rather than ensuring a target" in out
+
+
+def test_multi_job_launch_aborts_on_nonzero_harbor_exit(
+    data_root: Path,
+    grade_config: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A harbor failure stops the remaining deficit jobs, loudly."""
+    add_student(data_root, "stu2")
+    submission = str(data_root / "submissions" / COURSE_ID / "stu1" / "HW1")
+    seed_valid_grading(data_root, grade_config, submission)
+
+    invocations: list[list[str]] = []
+
+    def failing_invoke(
+        command: list[str], _authentication: harbor_mod.HarborAuthentication | None
+    ) -> int:
+        invocations.append(command)
+        return 5
+
+    monkeypatch.setattr(harbor_mod, "invoke_harbor", failing_invoke)
+    capsys.readouterr()
+    exit_code = cli.main(
+        grade_args(data_root, grade_config, "--course", COURSE_ID, "--repeats", "2")
+    )
+    assert exit_code == 5
+    assert len(invocations) == 1
+    out = capsys.readouterr().out
+    assert "harbor exited 5; not launching the remaining 1 job(s)" in out
+    # Provenance never lies: the launched job's record says executed,
+    # the never-launched job's record says not.
+    new_jobs = job_dirs(data_root, "grading")[1:]
+    executed = {
+        json.loads((job / "aat-run.json").read_text(encoding="utf-8"))["executed"]
+        for job in new_jobs
+    }
+    assert executed == {True, False}
+
+
+def test_multi_job_launch_runs_every_deficit_group(
+    data_root: Path,
+    grade_config: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    add_student(data_root, "stu2")
+    submission = str(data_root / "submissions" / COURSE_ID / "stu1" / "HW1")
+    seed_valid_grading(data_root, grade_config, submission)
+
+    invocations: list[list[str]] = []
+
+    def fake_invoke(
+        command: list[str], _authentication: harbor_mod.HarborAuthentication | None
+    ) -> int:
+        invocations.append(command)
+        return 0
+
+    monkeypatch.setattr(harbor_mod, "invoke_harbor", fake_invoke)
+    capsys.readouterr()
+    exit_code = cli.main(
+        grade_args(data_root, grade_config, "--course", COURSE_ID, "--repeats", "2")
+    )
+    # Both jobs launch (largest deficit first); no trials appear, so
+    # stu2 is failed and stu1 (1 pooled trial) is incomplete.
+    assert len(invocations) == 2
+    attempts = [
+        json.loads(
+            Path(command[3]).read_text(encoding="utf-8")  # harbor run -c <path> --yes
+        )["n_attempts"]
+        for command in invocations
+    ]
+    assert attempts == [2, 1]
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert "run summary: 2 item(s) requested, 1 graded, 1 failed" in out
+    assert f"incomplete: {COURSE_ID}/HW1 ({COURSE_ID}/stu1/HW1)" in out
+
+
+JUDGE_TOML_CLI = """\
+stage = "grade"
+agent = "codex"
+model = "openai/gpt-5.6-sol"
+prompt = "judge"
+judge = true
+"""
+
+
+def write_grading_artifacts(trial_dir: Path) -> None:
+    output_dir = trial_dir / "artifacts" / "app" / "grading_output"
+    output_dir.mkdir(parents=True)
+    (output_dir / "grading_result.json").write_text(
+        '{"schema_version": 1, "criteria": []}', encoding="utf-8"
+    )
+    (output_dir / "justification.md").write_text("# Round justification", encoding="utf-8")
+
+
+def grade_one_initial(data_root: Path, grade_config: Path, trial_name: str) -> Path:
+    """One valid initial grading of stu1/HW1 with stored artifacts."""
+    submission = str(data_root / "submissions" / COURSE_ID / "stu1" / "HW1")
+    existing = set(job_dirs(data_root, "grading"))
+    assert (
+        cli.main(
+            grade_args(
+                data_root,
+                grade_config,
+                "--submissions",
+                submission,
+                "--force",
+                "--materialize-only",
+            )
+        )
+        == 0
+    )
+    job_dir = next(d for d in job_dirs(data_root, "grading") if d not in existing)
+    record = json.loads((job_dir / "aat-run.json").read_text(encoding="utf-8"))
+    trial_dir = write_trial(
+        job_dir,
+        trial_name,
+        task_name=record["items"][0]["task_dir_name"],
+        rewards=GRADED_REWARDS,
+    )
+    write_grading_artifacts(trial_dir)
+    return job_dir
+
+
+def test_judge_flow(
+    data_root: Path,
+    grade_config: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from tests.test_config import write_config
+
+    judge_config = write_config(tmp_path, JUDGE_TOML_CLI, "codex-judge")
+    submission = str(data_root / "submissions" / COURSE_ID / "stu1" / "HW1")
+    grade_one_initial(data_root, grade_config, "graded__t1")
+
+    # One prior grading is short of --min-gradings 2: skipped loudly
+    # with the exact top-up command, no judge job is created, and the
+    # run exits nonzero — it did not deliver what was asked.
+    capsys.readouterr()
+    assert (
+        cli.main(
+            grade_args(
+                data_root,
+                judge_config,
+                "--submissions",
+                submission,
+                "--context-from",
+                str(grade_config),
+                "--min-gradings",
+                "2",
+                "--materialize-only",
+            )
+        )
+        == 1
+    )
+    out = capsys.readouterr().out
+    assert (
+        f"skipping {COURSE_ID}/stu1/HW1: 1 of 2 required prior grading(s) "
+        f"under config 'codex-grader-high'" in out
+    )
+    assert f"--submissions {submission} --repeats 2" in out
+    assert "nothing to do: 0 item(s)" in out
+    assert "judge: 1 item(s) skipped with fewer than 2 usable prior grading(s)" in out
+
+    # With two prior gradings the judge task materializes: numbered
+    # rounds, the feedback declaration, identity and lineage recorded.
+    grade_one_initial(data_root, grade_config, "graded__t2")
+    n_before = len(job_dirs(data_root, "grading"))
+    assert (
+        cli.main(
+            grade_args(
+                data_root,
+                judge_config,
+                "--submissions",
+                submission,
+                "--context-from",
+                str(grade_config),
+                "--min-gradings",
+                "2",
+                "--materialize-only",
+            )
+        )
+        == 0
+    )
+    judge_jobs = job_dirs(data_root, "grading")[n_before:]
+    assert len(judge_jobs) == 1
+    record = json.loads((judge_jobs[0] / "aat-run.json").read_text(encoding="utf-8"))
+    item = record["items"][0]
+    assert record["config"]["judge"] is True
+    assert item["context_config_name"] == "codex-grader-high"
+    assert len(item["prior_trials"]) == 2
+    assert {ref["trial_name"] for ref in item["prior_trials"]} == {"graded__t1", "graded__t2"}
+    assert "prior_gradings" in item["input_hashes"]
+    task_dir = data_root / "tasks" / judge_jobs[0].name / item["task_dir_name"]
+    assert (task_dir / "environment" / "prior_gradings" / "01" / "grading_result.json").is_file()
+    assert (task_dir / "environment" / "prior_gradings" / "02" / "justification.md").is_file()
+    assert json.loads((task_dir / "tests" / "required_files.json").read_text(encoding="utf-8")) == [
+        "feedback.md"
+    ]
+
+    # A third initial grading changes the judge item's inputs, so the
+    # judged-over-two item stays its own identity and the item re-judges.
+    write_trial(
+        judge_jobs[0],
+        "judged__t1",
+        task_name=item["task_dir_name"],
+        rewards=GRADED_REWARDS,
+    )
+    capsys.readouterr()
+    assert (
+        cli.main(
+            grade_args(
+                data_root,
+                judge_config,
+                "--submissions",
+                submission,
+                "--context-from",
+                str(grade_config),
+                "--min-gradings",
+                "2",
+                "--dry-run",
+            )
+        )
+        == 0
+    )
+    assert "[complete]" in capsys.readouterr().out
+    grade_one_initial(data_root, grade_config, "graded__t3")
+    capsys.readouterr()
+    assert (
+        cli.main(
+            grade_args(
+                data_root,
+                judge_config,
+                "--submissions",
+                submission,
+                "--context-from",
+                str(grade_config),
+                "--min-gradings",
+                "2",
+                "--dry-run",
+            )
+        )
+        == 0
+    )
+    assert "[pending ]" in capsys.readouterr().out
+
+
+def test_judge_from_solve_flow(
+    data_root: Path,
+    solve_config: Path,
+    grade_config: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The judge composes with solve-derived submissions (any source)."""
+    from tests.test_config import write_config
+
+    judge_config = write_config(tmp_path, JUDGE_TOML_CLI, "codex-judge")
+    # A verified solve trial with a submission artifact...
+    assert (
+        cli.main(
+            solve_args(
+                data_root,
+                solve_config,
+                "--course",
+                COURSE_ID,
+                "--assignment",
+                "HW1",
+                "--materialize-only",
+            )
+        )
+        == 0
+    )
+    solve_job = job_dirs(data_root, "solving")[0]
+    solve_record = json.loads((solve_job / "aat-run.json").read_text(encoding="utf-8"))
+    write_trial(
+        solve_job,
+        "solved__t1",
+        task_name=solve_record["items"][0]["task_dir_name"],
+        submission_files={"answer.md": "slope = 2"},
+    )
+    # ...graded once by the initial config, with stored artifacts...
+    assert (
+        cli.main(
+            grade_args(data_root, grade_config, "--from-solve", "codex-high", "--materialize-only")
+        )
+        == 0
+    )
+    grading_job = job_dirs(data_root, "grading")[0]
+    grading_record = json.loads((grading_job / "aat-run.json").read_text(encoding="utf-8"))
+    trial_dir = write_trial(
+        grading_job,
+        "graded__t1",
+        task_name=grading_record["items"][0]["task_dir_name"],
+        rewards=GRADED_REWARDS,
+    )
+    write_grading_artifacts(trial_dir)
+
+    # ...is short of --min-gradings 2: the top-up command names the
+    # solve source, not a student folder.
+    capsys.readouterr()
+    assert (
+        cli.main(
+            grade_args(
+                data_root,
+                judge_config,
+                "--from-solve",
+                "codex-high",
+                "--context-from",
+                str(grade_config),
+                "--min-gradings",
+                "2",
+                "--materialize-only",
+            )
+        )
+        == 1
+    )
+    out = capsys.readouterr().out
+    assert "--from-solve codex-high" in out.split("top up:")[1]
+
+    # And judges cleanly at --min-gradings 1: the task presents the
+    # round, and the item keeps the solve-trial lineage.
+    assert (
+        cli.main(
+            grade_args(
+                data_root,
+                judge_config,
+                "--from-solve",
+                "codex-high",
+                "--context-from",
+                str(grade_config),
+                "--min-gradings",
+                "1",
+                "--materialize-only",
+            )
+        )
+        == 0
+    )
+    judge_job = job_dirs(data_root, "grading")[-1]
+    record = json.loads((judge_job / "aat-run.json").read_text(encoding="utf-8"))
+    item = record["items"][0]
+    assert item["item_id"] == f"{solve_job.name}/solved__t1"
+    assert item["submission_source"] == "solve-trial"
+    assert [ref["trial_name"] for ref in item["prior_trials"]] == ["graded__t1"]
+    task_dir = data_root / "tasks" / judge_job.name / item["task_dir_name"]
+    assert (task_dir / "environment" / "prior_gradings" / "01" / "grading_result.json").is_file()
+
+
+def test_top_up_command_uses_force_when_artifacts_are_missing(
+    data_root: Path,
+    grade_config: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Doneness counts artifact-less valid trials, so the plain target
+    would launch nothing; the hint must switch to --force."""
+    from tests.test_config import write_config
+
+    judge_config = write_config(tmp_path, JUDGE_TOML_CLI, "codex-judge")
+    submission = str(data_root / "submissions" / COURSE_ID / "stu1" / "HW1")
+    grade_one_initial(data_root, grade_config, "graded__t1")
+    # A second valid grading whose artifacts are gone: valid for
+    # doneness, unusable for the judge.
+    job_dir = job_dirs(data_root, "grading")[0]
+    record = json.loads((job_dir / "aat-run.json").read_text(encoding="utf-8"))
+    write_trial(
+        job_dir,
+        "graded__gone",
+        task_name=record["items"][0]["task_dir_name"],
+        rewards=GRADED_REWARDS,
+    )
+
+    capsys.readouterr()
+    assert (
+        cli.main(
+            grade_args(
+                data_root,
+                judge_config,
+                "--submissions",
+                submission,
+                "--context-from",
+                str(grade_config),
+                "--min-gradings",
+                "2",
+                "--materialize-only",
+            )
+        )
+        == 1
+    )
+    out = capsys.readouterr().out
+    assert "1 of 2 required prior grading(s) (1 more unusable" in out
+    assert f"--submissions {submission} --force --repeats 1" in out
+
+
+def test_judge_rubric_must_match_context_rubric(
+    data_root: Path, grade_config: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from tests.test_config import write_config
+
+    judge_config = write_config(
+        tmp_path, JUDGE_TOML_CLI + 'rubric = "strict"\n', "codex-judge-strict"
+    )
+    submission = str(data_root / "submissions" / COURSE_ID / "stu1" / "HW1")
+    assert (
+        cli.main(
+            grade_args(
+                data_root,
+                judge_config,
+                "--submissions",
+                submission,
+                "--context-from",
+                str(grade_config),
+                "--min-gradings",
+                "1",
+            )
+        )
+        == 2
+    )
+    assert "must grade against the same rubric" in capsys.readouterr().err
+
+
+def test_grade_sample_with_course_level_submissions_path(
+    data_root: Path, grade_config: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for student_id in ("stu2", "stu3"):
+        add_student(data_root, student_id)
+    expected = sample_order(["stu1", "stu2", "stu3"])[:1]
+    course_path = str(data_root / "submissions" / COURSE_ID)
+    assert (
+        cli.main(
+            grade_args(
+                data_root, grade_config, "--submissions", course_path, "--sample", "1", "--dry-run"
+            )
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert f"{COURSE_ID}/{expected[0]}/HW1" in out
+    assert "would run 1 of 1 item(s)" in out
+
+    # Below the course level the frame is one student, not a panel.
+    assert (
+        cli.main(
+            grade_args(
+                data_root,
+                grade_config,
+                "--submissions",
+                str(data_root / "submissions" / COURSE_ID / "stu1"),
+                "--sample",
+                "1",
+            )
+        )
+        == 2
+    )
+    assert "course-wide frame" in capsys.readouterr().err
+
+
+def test_judge_flag_validation(
+    data_root: Path, grade_config: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from tests.test_config import write_config
+
+    judge_config = write_config(tmp_path, JUDGE_TOML_CLI, "codex-judge")
+    submission = str(data_root / "submissions" / COURSE_ID / "stu1" / "HW1")
+
+    # A judge config needs --context-from and --min-gradings.
+    assert cli.main(grade_args(data_root, judge_config, "--submissions", submission)) == 2
+    assert "--context-from" in capsys.readouterr().err
+    assert (
+        cli.main(
+            grade_args(
+                data_root,
+                judge_config,
+                "--submissions",
+                submission,
+                "--context-from",
+                str(grade_config),
+            )
+        )
+        == 2
+    )
+    assert "--min-gradings" in capsys.readouterr().err
+
+    # --context-from needs a judge config; --min-gradings needs --context-from.
+    assert (
+        cli.main(
+            grade_args(
+                data_root,
+                grade_config,
+                "--submissions",
+                submission,
+                "--context-from",
+                str(grade_config),
+                "--min-gradings",
+                "2",
+            )
+        )
+        == 2
+    )
+    assert "does not set judge = true" in capsys.readouterr().err
+    assert (
+        cli.main(
+            grade_args(data_root, grade_config, "--submissions", submission, "--min-gradings", "2")
+        )
+        == 2
+    )
+    assert "only valid with --context-from" in capsys.readouterr().err
+
+    # The context must be the initial config, never another judge.
+    assert (
+        cli.main(
+            grade_args(
+                data_root,
+                judge_config,
+                "--submissions",
+                submission,
+                "--context-from",
+                str(judge_config),
+                "--min-gradings",
+                "2",
+            )
+        )
+        == 2
+    )
+    assert "itself a final-judge config" in capsys.readouterr().err
 
 
 def test_grade_submissions_three_level_path_and_depth_limit(

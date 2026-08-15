@@ -572,9 +572,13 @@ merge kept a stale version.
 
 ## Job directories and run records
 
-Each `aat solve` or `aat grade` invocation creates one job directory —
-`<utc>__<config>__<hash8>/` (with a rare `-N`
-suffix on same-second collisions) — under `solving/` (solve jobs) or
+Each `aat solve` or `aat grade` invocation creates one job directory
+per deficit group — usually one; `--repeats` is a target count, and
+items needing different numbers of additional trials go into separate
+Harbor jobs (docs/design.md, "CLI design"). Job directories are named
+`<utc>__<config>__<hash8>/` (with a `-N` suffix on same-second
+collisions — routine for a multi-group invocation, whose jobs share
+one second) and live under `solving/` (solve jobs) or
 `grading/` (grading jobs, whether the submissions are benchmark
 artifacts or real student folders). The AAT job directory is itself the
 Harbor job directory: Harbor's `config.json`, `lock.json`,
@@ -586,12 +590,16 @@ re-running the recorded command safely resumes an interrupted job. The
 run record holds the Harbor version (read from the binary for executed
 runs, from package metadata for materialize-only runs), the toolkit's
 own version, agent and model configuration, effective command line,
-repeats, maximum concurrent trials, executed flag, requested items with
+repeats (this job's trial count, with the invocation's target beside
+it), the requested selection sample, maximum concurrent trials,
+executed flag, requested items with
 their per-item identities, explicit course and assignment ids, explicit
 lineage (submission source, student id for student grading items, solve
-job and trial for solve-derived grading items), config identity, and
+job and trial for solve-derived grading items, context config and
+prior trials for final-judge items), config identity, and
 input hashes (assignment, prompt, environment template, verifier,
-rubric, rubric source, submission, reference solution, grading schema —
+rubric, rubric source, submission, reference solution, grading schema,
+prior gradings —
 as applicable), and the non-secret authentication method and selection
 source for a live AAT-managed login. Authentication is `null` for
 materialize-only runs or agents whose login AAT does not manage; credential

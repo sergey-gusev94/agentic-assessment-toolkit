@@ -16,6 +16,27 @@ and the condition that triggers building it. No dates, no history.
 
 ## Later, on demand
 
+- **Feedback export** — a deterministic command that collects each
+  student's final-judge `feedback.md` files, re-identifies them via
+  the identity tables under `tables/`, and writes a distributable tree
+  outside the LLM path (subject to the same refusal rule as reports:
+  never inside the toolkit repository); when final feedback is
+  actually handed to students. The pseudonymization boundary is
+  untouched: re-identification happens only in this export, after all
+  grading.
+- **Initial-grader feedback enrichment** — extending the initial
+  grader prompt to also author learning-opportunity notes; if
+  judge-produced feedback proves thin in practice because issues the
+  initial rounds noticed never reached their written justifications.
+  Not before: it multiplies every initial round's cost for material
+  the judge's synthesis mostly supersedes, and any prompt edit moves
+  the config identity.
+- **Fail-fast on repeated authentication failures** — aborting a job
+  after several consecutive auth-category trial failures, instead of
+  letting an expired token fail every remaining trial; if mid-run
+  token expiry recurs. Recovery already exists (target-count
+  `--repeats` re-runs launch exactly the missing trials), so this is
+  purely about not burning time on a doomed job.
 - **Professor-grade comparison** — grade-export ingestion under
   `tables/`, the discrepancy report (matched pairs with explicit
   de-duplication, bias, MAE, RMSE, correlation and concordance,

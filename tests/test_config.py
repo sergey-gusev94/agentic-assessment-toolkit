@@ -27,6 +27,14 @@ model = "openai/gpt-5.6-sol"
 prompt = "grader"
 """
 
+JUDGE_TOML = """\
+stage = "grade"
+agent = "codex"
+model = "openai/gpt-5.6-sol"
+prompt = "judge"
+judge = true
+"""
+
 
 def write_config(tmp_path: Path, text: str, name: str = "cfg") -> Path:
     path = tmp_path / f"{name}.toml"
@@ -46,6 +54,45 @@ def test_grade_config_defaults_rubric(tmp_path: Path) -> None:
     config = load_config(write_config(tmp_path, GRADE_TOML))
     assert config.stage == "grade"
     assert config.rubric_name == "default"
+
+
+def test_judge_config_loads(tmp_path: Path) -> None:
+    config = load_config(write_config(tmp_path, JUDGE_TOML, "codex-judge"))
+    assert config.judge is True
+    assert config.prompt_name == "judge"
+    # An ordinary grading config defaults to judge = False.
+    assert load_config(write_config(tmp_path, GRADE_TOML)).judge is False
+
+
+def test_judge_key_must_be_boolean(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="'judge' must be a boolean"):
+        load_config(write_config(tmp_path, GRADE_TOML + 'judge = "yes"\n'))
+
+
+def test_judge_key_is_grading_only(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="only valid in grading configs"):
+        load_config(write_config(tmp_path, SOLVE_TOML + "judge = true\n"))
+
+
+def test_judge_key_and_judge_prompt_travel_together(tmp_path: Path) -> None:
+    # judge = true with the grader prompt would fail every trial after
+    # full agent cost (the verifier requires feedback.md the prompt
+    # never mentions); the reverse runs the judge prompt against tasks
+    # with no prior gradings.
+    with pytest.raises(ConfigError, match="must use the 'judge' prompt template"):
+        load_config(write_config(tmp_path, GRADE_TOML + "judge = true\n"))
+    with pytest.raises(ConfigError, match="requires judge = true"):
+        load_config(
+            write_config(tmp_path, GRADE_TOML.replace('prompt = "grader"', 'prompt = "judge"'))
+        )
+
+
+def test_prior_gradings_fold_into_item_identity() -> None:
+    base = "c" * 64
+    without = item_identity(base, b"env", b"rubric", "a" * 64, None)
+    with_prior = item_identity(base, b"env", b"rubric", "a" * 64, None, "p" * 64)
+    other_prior = item_identity(base, b"env", b"rubric", "a" * 64, None, "q" * 64)
+    assert len({without, with_prior, other_prior}) == 3
 
 
 def test_unknown_key_rejected(tmp_path: Path) -> None:

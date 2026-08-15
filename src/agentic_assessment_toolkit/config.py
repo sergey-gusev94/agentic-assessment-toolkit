@@ -27,6 +27,9 @@ Stage = Literal["solve", "grade"]
 
 ENVIRONMENT_FLAVORS = ("data-science", "grading", "optimization", "scientific-python")
 GRADING_FLAVOR = "grading"
+# The final-judge prompt template; paired with the `judge` config key
+# (see load_config).
+JUDGE_PROMPT_NAME = "judge"
 
 # Per-stage task.toml substitutions: (artifact source path, agent timeout).
 # These render into every materialized task and are part of the config
@@ -43,7 +46,7 @@ _RESOURCE_STACK = contextlib.ExitStack()
 atexit.register(_RESOURCE_STACK.close)
 
 _KNOWN_KEYS = frozenset(
-    {"stage", "agent", "model", "reasoning_effort", "prompt", "rubric", "agent_args"}
+    {"stage", "agent", "model", "reasoning_effort", "prompt", "rubric", "agent_args", "judge"}
 )
 
 
@@ -65,6 +68,11 @@ class ExperimentConfig:
     prompt_name: str
     rubric_name: str | None
     agent_args: tuple[str, ...]
+    # True for a final-judge grading config: its tasks additionally
+    # present prior gradings of the same submission and require the
+    # student-facing feedback deliverable (docs/design.md, "Final
+    # judge").
+    judge: bool = False
 
 
 def load_config(path: Path) -> ExperimentConfig:
@@ -109,6 +117,25 @@ def load_config(path: Path) -> ExperimentConfig:
     ):
         raise ConfigError(f"config {path}: 'agent_args' must be a list of strings")
 
+    judge = data.get("judge", False)
+    if not isinstance(judge, bool):
+        raise ConfigError(f"config {path}: 'judge' must be a boolean")
+    if judge and stage != "grade":
+        raise ConfigError(f"config {path}: 'judge' is only valid in grading configs")
+    # The judge flag and the judge prompt template must travel together:
+    # a judge = true config with the grader prompt materializes tasks
+    # whose instruction never mentions the prior gradings or the
+    # feedback deliverable the verifier requires — every trial fails
+    # the contract after full agent cost — and the reverse runs the
+    # judge prompt against tasks that present no prior gradings.
+    if judge != (prompt_name == JUDGE_PROMPT_NAME):
+        detail = (
+            f"a judge config must use the {JUDGE_PROMPT_NAME!r} prompt template"
+            if judge
+            else f"the {JUDGE_PROMPT_NAME!r} prompt template requires judge = true"
+        )
+        raise ConfigError(f"config {path}: {detail}")
+
     prompt_path(prompt_name)  # fail early if the template does not exist
 
     return ExperimentConfig(
@@ -122,6 +149,7 @@ def load_config(path: Path) -> ExperimentConfig:
         prompt_name=prompt_name,
         rubric_name=rubric_name,
         agent_args=tuple(agent_args_value),
+        judge=judge,
     )
 
 
@@ -221,6 +249,7 @@ def item_identity(
     rubric_bytes: bytes | None = None,
     assignment_hash: str | None = None,
     rubric_source_hash: str | None = None,
+    prior_gradings_hash: str | None = None,
 ) -> str:
     """Per-item identity: the config identity plus the item's resolved inputs.
 
@@ -228,7 +257,10 @@ def item_identity(
     hash, and — when the assignment has one — the professor rubric
     source directory hash: everything the grader is shown is part of
     the frozen judge (docs/design.md, "Experiment configs and config
-    identity").
+    identity"). Final-judge items additionally fold in the hash of the
+    prior gradings presented in the task, so a judgment over three
+    initial gradings and one over the topped-up five are distinct
+    items — never merged by doneness or pooling.
     """
     parts = [
         ("config-identity", config_identity.encode("ascii")),
@@ -240,4 +272,6 @@ def item_identity(
         parts.append(("assignment", assignment_hash.encode("ascii")))
     if rubric_source_hash is not None:
         parts.append(("rubric-source", rubric_source_hash.encode("ascii")))
+    if prior_gradings_hash is not None:
+        parts.append(("prior-gradings", prior_gradings_hash.encode("ascii")))
     return sha256_parts(parts)

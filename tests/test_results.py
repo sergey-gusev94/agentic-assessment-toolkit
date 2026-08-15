@@ -12,6 +12,7 @@ from agentic_assessment_toolkit.config import Stage, load_config
 from agentic_assessment_toolkit.grading_schema import computed_sums, derive_scores
 from agentic_assessment_toolkit.harbor import (
     RUN_RECORD_FILENAME,
+    PriorTrialRef,
     RunRecordItem,
     write_run_record,
 )
@@ -72,6 +73,11 @@ TRIALS_COLUMNS = [
     "solver_config_name",
     "solver_config_identity",
     "solver_model",
+    "context_config_name",
+    "context_config_identity",
+    "n_prior_gradings",
+    "prior_trials",
+    "superseded",
 ]
 
 CRITERIA_COLUMNS = [
@@ -783,6 +789,199 @@ def test_solver_join(tmp_path: Path) -> None:
     student = row_for(trials, "s3__a")
     assert pd.isna(student["solve_job_name"])
     assert pd.isna(student["solver_config_name"])
+
+
+def judge_item(task: str) -> RunRecordItem:
+    """A final-judge item: a student grading item with judge lineage."""
+    return RunRecordItem(
+        item_id="SYN_C1/stu1/HW1",
+        task_dir_name=task,
+        item_identity="m" * 64,
+        course_id="SYN_C1",
+        assignment_id="HW1",
+        input_hashes={"rubric": RUBRIC_SHA, "prior_gradings": "2" * 64},
+        submission_source="student",
+        student_id="stu1",
+        context_config_name="codex-grader-high",
+        context_config_identity="e" * 64,
+        prior_trials=(
+            PriorTrialRef(job_name=GRADE_JOB, trial_name="g1__t1"),
+            PriorTrialRef(job_name=GRADE_JOB, trial_name="g1__t2"),
+        ),
+    )
+
+
+def test_judge_lineage_loads_into_trials(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    job_dir = make_job(
+        root,
+        tmp_path,
+        stage="grade",
+        job_name=GRADE_JOB,
+        items=[judge_item("jt"), student_item("gt", student="stu2")],
+    )
+    data = grading_data([criterion("a", 4.0, 5.0)])
+    for task in ("jt", "gt"):
+        write_trial(
+            job_dir,
+            f"{task}__t1",
+            trial_result(task, rewards=graded_rewards(data)),
+            artifact_text=json.dumps(data),
+        )
+    trials = load_results(root).trials
+    judge_row = trials[trials["trial_name"] == "jt__t1"].iloc[0]
+    assert judge_row["context_config_name"] == "codex-grader-high"
+    assert judge_row["context_config_identity"] == "e" * 64
+    assert judge_row["n_prior_gradings"] == 2
+    assert judge_row["prior_trials"] == f"{GRADE_JOB}/g1__t1; {GRADE_JOB}/g1__t2"
+    # An ordinary grading row carries the lineage columns as missing.
+    plain_row = trials[trials["trial_name"] == "gt__t1"].iloc[0]
+    assert pd.isna(plain_row["context_config_identity"])
+    assert pd.isna(plain_row["n_prior_gradings"])
+    assert pd.isna(plain_row["prior_trials"])
+
+
+def judge_item_over(task: str, identity: str, prior_trial_names: list[str]) -> RunRecordItem:
+    return RunRecordItem(
+        item_id="SYN_C1/stu1/HW1",
+        task_dir_name=task,
+        item_identity=identity,
+        course_id="SYN_C1",
+        assignment_id="HW1",
+        input_hashes={"rubric": RUBRIC_SHA},
+        submission_source="student",
+        student_id="stu1",
+        context_config_name="codex-grader-high",
+        context_config_identity="e" * 64,
+        prior_trials=tuple(
+            PriorTrialRef(job_name=GRADE_JOB, trial_name=name) for name in prior_trial_names
+        ),
+    )
+
+
+def test_supersession_marks_strict_prior_subsets(tmp_path: Path) -> None:
+    """A re-judge over more prior gradings supersedes the earlier judgment;
+    non-comparable prior sets all stay current."""
+    root = tmp_path / "root"
+    job_dir = make_job(
+        root,
+        tmp_path,
+        stage="grade",
+        job_name=GRADE_JOB,
+        items=[
+            judge_item_over("j2", "m" * 64, ["g1", "g2"]),
+            judge_item_over("j3", "n" * 64, ["g1", "g2", "g3"]),
+            judge_item_over("jx", "o" * 64, ["g4"]),  # disjoint: stays current
+        ],
+    )
+    data = grading_data([criterion("a", 4.0, 5.0)])
+    for task in ("j2", "j3", "jx"):
+        write_trial(
+            job_dir,
+            f"{task}__t1",
+            trial_result(task, rewards=graded_rewards(data)),
+            artifact_text=json.dumps(data),
+        )
+    trials = load_results(root).trials
+    by_trial = {row["trial_name"]: row for _, row in trials.iterrows()}
+    assert bool(by_trial["j2__t1"]["superseded"]) is True
+    assert bool(by_trial["j3__t1"]["superseded"]) is False
+    assert bool(by_trial["jx__t1"]["superseded"]) is False
+
+
+def test_invalid_judgment_never_supersedes(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    job_dir = make_job(
+        root,
+        tmp_path,
+        stage="grade",
+        job_name=GRADE_JOB,
+        items=[
+            judge_item_over("j2", "m" * 64, ["g1", "g2"]),
+            judge_item_over("j3", "n" * 64, ["g1", "g2", "g3"]),
+        ],
+    )
+    data = grading_data([criterion("a", 4.0, 5.0)])
+    write_trial(
+        job_dir,
+        "j2__t1",
+        trial_result("j2", rewards=graded_rewards(data)),
+        artifact_text=json.dumps(data),
+    )
+    # The wider judgment violated the contract: it is a failed
+    # measurement, so the earlier valid judgment stays current.
+    write_trial(job_dir, "j3__t1", trial_result("j3", rewards={"reward": 0.0}))
+    trials = load_results(root).trials
+    by_trial = {row["trial_name"]: row for _, row in trials.iterrows()}
+    assert bool(by_trial["j2__t1"]["superseded"]) is False
+
+
+def test_loaded_judge_lineage_joins_in_the_review_queue(tmp_path: Path) -> None:
+    """End to end across the loader and metrics: the loader's
+    "job/trial; ..." lineage string must be exactly what review_queue
+    splits, or every judge row silently detaches into a standalone row."""
+    from agentic_assessment_toolkit import metrics
+
+    root = tmp_path / "root"
+    initial_job = make_job(
+        root,
+        tmp_path,
+        stage="grade",
+        job_name=GRADE_JOB,
+        items=[student_item("g1")],
+    )
+    data = grading_data([criterion("a", 4.0, 5.0)])
+    write_trial(
+        initial_job,
+        "g1__t1",
+        trial_result("g1", rewards=graded_rewards(data)),
+        artifact_text=json.dumps(data),
+    )
+    judge_job = make_job(
+        root,
+        tmp_path,
+        stage="grade",
+        job_name="20260731T130000Z__codex-judge__jjjjjjjj",
+        items=[judge_item_over("jt", "m" * 64, ["g1__t1"])],
+        config_identity="j" * 64,
+    )
+    write_trial(
+        judge_job,
+        "jt__t1",
+        trial_result("jt", rewards=graded_rewards(data)),
+        artifact_text=json.dumps(data),
+    )
+    queue = metrics.review_queue(load_results(root).trials)
+    assert len(queue) == 1
+    row = queue.iloc[0]
+    assert row["n_gradings"] == 1  # attached, not a standalone judge row
+    assert row["n_final_gradings"] == 1
+
+
+def test_malformed_prior_trials_lineage_loads_as_missing(tmp_path: Path) -> None:
+    """One malformed entry drops the whole lineage, never a truncated one."""
+    root = tmp_path / "root"
+    job_dir = make_job(
+        root,
+        tmp_path,
+        stage="grade",
+        job_name=GRADE_JOB,
+        items=[judge_item_over("jt", "m" * 64, ["g1", "g2"])],
+    )
+    record_path = job_dir / RUN_RECORD_FILENAME
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["items"][0]["prior_trials"][1] = {"job_name": GRADE_JOB}  # no trial_name
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    data = grading_data([criterion("a", 4.0, 5.0)])
+    write_trial(
+        job_dir,
+        "jt__t1",
+        trial_result("jt", rewards=graded_rewards(data)),
+        artifact_text=json.dumps(data),
+    )
+    row = load_results(root).trials.iloc[0]
+    assert pd.isna(row["n_prior_gradings"])
+    assert pd.isna(row["prior_trials"])
 
 
 def test_stage_mismatched_or_recordless_jobs_contribute_nothing(tmp_path: Path) -> None:

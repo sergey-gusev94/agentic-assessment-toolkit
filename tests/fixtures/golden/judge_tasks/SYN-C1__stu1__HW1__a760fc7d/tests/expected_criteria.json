@@ -1,0 +1,17 @@
+[
+  {
+    "id": "slope",
+    "max_points": 8.0,
+    "bonus": false
+  },
+  {
+    "id": "method",
+    "max_points": 2.0,
+    "bonus": false
+  },
+  {
+    "id": "plot",
+    "max_points": 1.0,
+    "bonus": true
+  }
+]
