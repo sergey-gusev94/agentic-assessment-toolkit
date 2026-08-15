@@ -1533,7 +1533,7 @@ def test_judge_flow(
     submission = str(data_root / "submissions" / COURSE_ID / "stu1" / "HW1")
     grade_one_initial(data_root, grade_config, "graded__t1")
 
-    # One prior grading is short of --min-gradings 2: skipped loudly
+    # One prior grading is short of --gradings 2: skipped loudly
     # with the exact top-up command, no judge job is created, and the
     # run exits nonzero — it did not deliver what was asked.
     capsys.readouterr()
@@ -1546,7 +1546,7 @@ def test_judge_flow(
                 submission,
                 "--context-from",
                 str(grade_config),
-                "--min-gradings",
+                "--gradings",
                 "2",
                 "--materialize-only",
             )
@@ -1562,9 +1562,12 @@ def test_judge_flow(
     assert "nothing to do: 0 item(s)" in out
     assert "judge: 1 item(s) skipped with fewer than 2 usable prior grading(s)" in out
 
-    # With two prior gradings the judge task materializes: numbered
-    # rounds, the feedback declaration, identity and lineage recorded.
+    # With three prior gradings and --gradings 2 the judge task
+    # materializes over exactly the earliest two — numbered rounds, the
+    # feedback declaration, identity and lineage recorded; the third
+    # grading is not presented.
     grade_one_initial(data_root, grade_config, "graded__t2")
+    grade_one_initial(data_root, grade_config, "graded__t3")
     n_before = len(job_dirs(data_root, "grading"))
     assert (
         cli.main(
@@ -1575,7 +1578,7 @@ def test_judge_flow(
                 submission,
                 "--context-from",
                 str(grade_config),
-                "--min-gradings",
+                "--gradings",
                 "2",
                 "--materialize-only",
             )
@@ -1588,24 +1591,27 @@ def test_judge_flow(
     item = record["items"][0]
     assert record["config"]["judge"] is True
     assert item["context_config_name"] == "codex-grader-sol-high"
-    assert len(item["prior_trials"]) == 2
-    assert {ref["trial_name"] for ref in item["prior_trials"]} == {"graded__t1", "graded__t2"}
+    assert [ref["trial_name"] for ref in item["prior_trials"]] == ["graded__t1", "graded__t2"]
     assert "prior_gradings" in item["input_hashes"]
     task_dir = data_root / "tasks" / judge_jobs[0].name / item["task_dir_name"]
     assert (task_dir / "environment" / "prior_gradings" / "01" / "grading_result.json").is_file()
     assert (task_dir / "environment" / "prior_gradings" / "02" / "justification.md").is_file()
+    assert not (task_dir / "environment" / "prior_gradings" / "03").exists()
     assert json.loads((task_dir / "tests" / "required_files.json").read_text(encoding="utf-8")) == [
         "feedback.md"
     ]
 
-    # A third initial grading changes the judge item's inputs, so the
-    # judged-over-two item stays its own identity and the item re-judges.
+    # The item is judged over the earliest two gradings, and the
+    # selection is stable: a fourth initial grading changes nothing, so
+    # the item stays complete. Judging over more evidence means raising
+    # --gradings, which changes the item's inputs and re-judges.
     write_trial(
         judge_jobs[0],
         "judged__t1",
         task_name=item["task_dir_name"],
         rewards=GRADED_REWARDS,
     )
+    grade_one_initial(data_root, grade_config, "graded__t4")
     capsys.readouterr()
     assert (
         cli.main(
@@ -1616,7 +1622,7 @@ def test_judge_flow(
                 submission,
                 "--context-from",
                 str(grade_config),
-                "--min-gradings",
+                "--gradings",
                 "2",
                 "--dry-run",
             )
@@ -1624,8 +1630,6 @@ def test_judge_flow(
         == 0
     )
     assert "[complete]" in capsys.readouterr().out
-    grade_one_initial(data_root, grade_config, "graded__t3")
-    capsys.readouterr()
     assert (
         cli.main(
             grade_args(
@@ -1635,8 +1639,8 @@ def test_judge_flow(
                 submission,
                 "--context-from",
                 str(grade_config),
-                "--min-gradings",
-                "2",
+                "--gradings",
+                "3",
                 "--dry-run",
             )
         )
@@ -1696,7 +1700,7 @@ def test_judge_from_solve_flow(
     )
     write_grading_artifacts(trial_dir)
 
-    # ...is short of --min-gradings 2: the top-up command names the
+    # ...is short of --gradings 2: the top-up command names the
     # solve source, not a student folder.
     capsys.readouterr()
     assert (
@@ -1708,7 +1712,7 @@ def test_judge_from_solve_flow(
                 "codex-high",
                 "--context-from",
                 str(grade_config),
-                "--min-gradings",
+                "--gradings",
                 "2",
                 "--materialize-only",
             )
@@ -1718,7 +1722,7 @@ def test_judge_from_solve_flow(
     out = capsys.readouterr().out
     assert "--from-solve codex-high" in out.split("top up:")[1]
 
-    # And judges cleanly at --min-gradings 1: the task presents the
+    # And judges cleanly at --gradings 1: the task presents the
     # round, and the item keeps the solve-trial lineage.
     assert (
         cli.main(
@@ -1729,7 +1733,7 @@ def test_judge_from_solve_flow(
                 "codex-high",
                 "--context-from",
                 str(grade_config),
-                "--min-gradings",
+                "--gradings",
                 "1",
                 "--materialize-only",
             )
@@ -1780,7 +1784,7 @@ def test_top_up_command_uses_force_when_artifacts_are_missing(
                 submission,
                 "--context-from",
                 str(grade_config),
-                "--min-gradings",
+                "--gradings",
                 "2",
                 "--materialize-only",
             )
@@ -1810,7 +1814,7 @@ def test_judge_rubric_must_match_context_rubric(
                 submission,
                 "--context-from",
                 str(grade_config),
-                "--min-gradings",
+                "--gradings",
                 "1",
             )
         )
@@ -1863,7 +1867,7 @@ def test_judge_flag_validation(
     judge_config = write_config(tmp_path, JUDGE_TOML_CLI, "codex-judge")
     submission = str(data_root / "submissions" / COURSE_ID / "stu1" / "HW1")
 
-    # A judge config needs --context-from and --min-gradings.
+    # A judge config needs --context-from and --gradings.
     assert cli.main(grade_args(data_root, judge_config, "--submissions", submission)) == 2
     assert "--context-from" in capsys.readouterr().err
     assert (
@@ -1879,9 +1883,9 @@ def test_judge_flag_validation(
         )
         == 2
     )
-    assert "--min-gradings" in capsys.readouterr().err
+    assert "--gradings" in capsys.readouterr().err
 
-    # --context-from needs a judge config; --min-gradings needs --context-from.
+    # --context-from needs a judge config; --gradings needs --context-from.
     assert (
         cli.main(
             grade_args(
@@ -1891,7 +1895,7 @@ def test_judge_flag_validation(
                 submission,
                 "--context-from",
                 str(grade_config),
-                "--min-gradings",
+                "--gradings",
                 "2",
             )
         )
@@ -1900,7 +1904,7 @@ def test_judge_flag_validation(
     assert "does not set judge = true" in capsys.readouterr().err
     assert (
         cli.main(
-            grade_args(data_root, grade_config, "--submissions", submission, "--min-gradings", "2")
+            grade_args(data_root, grade_config, "--submissions", submission, "--gradings", "2")
         )
         == 2
     )
@@ -1916,7 +1920,7 @@ def test_judge_flag_validation(
                 submission,
                 "--context-from",
                 str(judge_config),
-                "--min-gradings",
+                "--gradings",
                 "2",
             )
         )

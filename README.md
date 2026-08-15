@@ -130,7 +130,8 @@ model-and-reasoning matrix:
 
 The judge model is independent of the initial grader model. Each judge
 run names the one initial-grader config whose stored results it consumes
-with `--context-from`, plus the required count with `--min-gradings`.
+with `--context-from`, plus the exact number of stored gradings each
+task presents with `--gradings`.
 
 ### Authentication for solving and grading
 

@@ -182,12 +182,19 @@ analysis are in research.md.
     score or the feedback — and its output is the same grading result
     schema plus a third required file, the feedback document, so every
     downstream layer (verifier, results, statistics, report) consumes
-    judge gradings unchanged. The prior gradings are judge inputs, so
-    their bytes fold into the judge item's per-item identity, and the
-    run record carries explicit lineage to the trials they came from.
-    By default the judge skips — loudly, with the exact top-up command
-    — any item with fewer usable prior gradings than the required
-    `--min-gradings`; judging on fewer is always an explicit choice.
+    judge gradings unchanged. Each judge task presents exactly
+    `--gradings N` prior gradings — the first N usable ones in the
+    pool's deterministic order. Within a pool the gradings are
+    exchangeable repeats of one frozen experiment, so taking the
+    earliest N keeps a judge item's inputs stable when initial
+    gradings are added later; judging over more evidence means raising
+    N, which re-judges and supersedes the smaller judgment. The prior
+    gradings are judge inputs, so their bytes fold into the judge
+    item's per-item identity, and the run record carries explicit
+    lineage to the trials they came from. The judge skips — loudly,
+    with the exact top-up command — any item with fewer than N usable
+    prior gradings; the evidence count is an experiment parameter, so
+    N has no default.
     The judge's feedback document is written for the student and never
     mentions the grading process; collecting and re-identifying the
     documents for distribution is a planned export step
@@ -576,9 +583,11 @@ directory presented in the task, and — when the assignment has one —
 the hash of the rubric source directory. A final-judge item further
 folds in the hash of the prior gradings presented in the task (their
 exact bytes, in presentation order), so a judgment over three initial
-gradings and one over the topped-up five are distinct items: the
-earlier judgment keeps its own identity and results, and doneness
-correctly re-judges after a top-up. Rubric source directories and
+gradings and one over five (`--gradings` raised) are distinct items:
+the earlier judgment keeps its own identity and results, and doneness
+correctly re-judges when the count is raised. Because the selection
+takes the earliest gradings in the pool, merely adding initial rounds
+never changes an existing judge item's inputs or doneness. Rubric source directories and
 assignment directories freeze at first use; a rubric *version* is
 likewise immutable, but the name selecting it may advance to a
 corrected version once the superseded bytes are archived (see
@@ -1000,8 +1009,9 @@ tidy pandas tables:
   within one (grading config identity, item id, context config
   identity), a valid judgment whose prior-trial set is a strict subset
   of another valid judgment's was replaced by a re-judge over more
-  evidence — the designed outcome of topping up initial gradings and
-  re-judging. Superseded judgments are excluded from every score
+  evidence — the designed outcome of raising the judge's `--gradings`
+  count: the earliest-N selection makes the larger selection a strict
+  superset of the smaller. Superseded judgments are excluded from every score
   aggregate (a current and an outdated final grade must never average)
   and counted per student as `n_superseded`, never silently dropped;
   judgments with equal or non-comparable prior sets all stay current. A graded trial whose stored
@@ -1299,7 +1309,7 @@ handled differently:
    grading selection only — `--sample N`, which keeps, per assignment,
    the first N submitted students in a deterministic hash order (see
    below). For a final-judge run, `--context-from NAME` and
-   `--min-gradings N` select which stored gradings each judge task
+   `--gradings N` select which stored gradings each judge task
    presents (decision 16). Selection is not
    an experimental variable, so convenience wins.
 2. **Experiment configuration — how to run** (named config files, never
@@ -1399,7 +1409,7 @@ plain re-run of the same command launches exactly the missing trials
 (after a `--force` run, which adds rather than ensures, the summary
 says to re-run with `--force` and the missing count). A final-judge
 run additionally reports, at plan time, every item skipped for having
-fewer usable prior gradings than `--min-gradings`, each with the exact
+fewer usable prior gradings than `--gradings`, each with the exact
 initial-grading top-up command. `grade --from-solve`
 reports every in-scope solve trial it skips (a failed solve, or a
 verified trial with an empty submission artifact) and warns, with the
@@ -1425,7 +1435,7 @@ aat grade  (--from-solve NAME [--course ID] [--assignment ID]
             | --course ID [--assignment ID] | --all)
            --config NAME [--data-root PATH] [--repeats N]
            [--sample N]
-           [--context-from NAME --min-gradings N]
+           [--context-from NAME --gradings N]
            [--max-concurrent-trials N] [--force]
            [--dry-run] [--materialize-only]
 
@@ -1504,7 +1514,7 @@ loud", above). One grading materializer underneath, two source resolvers on top,
 per decision 5.
 
 A final-judge run is `aat grade` with a `judge = true` config plus
-`--context-from NAME --min-gradings N`; all three legs are required
+`--context-from NAME --gradings N`; all three legs are required
 together — a judge config without context would grade blind, and
 context supplied to an ordinary grader config would change the
 experiment without changing its identity. The `judge` key and the
@@ -1523,9 +1533,18 @@ item's resolved inputs, including the context config's rubric), so the
 judge consumes exactly the gradings that pool together under the
 frozen initial config; a context rubric that has since advanced
 matches nothing, which is correct — the initial rounds under the new
-rubric do not exist yet. A valid grading whose stored artifacts are
+rubric do not exist yet. Each task presents exactly N prior gradings:
+the first N usable ones in the pool's deterministic (job name, trial
+name) order — job names are timestamped, so this is the earliest N.
+Within a pool the gradings are exchangeable repeats of one frozen
+experiment, so order carries no quality information, and taking the
+earliest N means adding initial rounds never changes an existing
+judge item's inputs or doneness; judging over more evidence is done
+by raising `--gradings`, and because a larger N selects a strict
+superset, the results layer then supersedes the smaller judgment. A
+valid grading whose stored artifacts are
 missing on disk is unusable and counted in the skip report. Items
-short of `--min-gradings` are skipped loudly with the exact top-up
+short of `--gradings` are skipped loudly with the exact top-up
 command — when unusable gradings exist the command uses `--force` with
 the usable shortfall, because the plain target already counts the
 artifact-less trials as done — and a run that skipped any item exits

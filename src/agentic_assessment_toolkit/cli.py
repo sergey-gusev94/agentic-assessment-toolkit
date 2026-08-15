@@ -188,12 +188,14 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     grade.add_argument(
-        "--min-gradings",
+        "--gradings",
         type=_positive_int,
         metavar="N",
         help=(
-            "final-judge runs only: skip (loudly) items with fewer than N "
-            "usable prior gradings under the --context-from config"
+            "final-judge runs only: present exactly N prior gradings per "
+            "item — the first N usable ones under the --context-from config "
+            "in the pool's deterministic order; items with fewer are "
+            "skipped loudly"
         ),
     )
 
@@ -367,7 +369,7 @@ def _run(args: argparse.Namespace) -> int:
         # succeeded — top up the initial gradings and re-run.
         print(
             f"judge: {n_judge_skipped} item(s) skipped with fewer than "
-            f"{args.min_gradings} usable prior grading(s); top up (commands above), then re-run"
+            f"{args.gradings} usable prior grading(s); top up (commands above), then re-run"
         )
         return status or 1
     return status
@@ -705,7 +707,7 @@ def _plan_grade(
 ) -> tuple[list[_PlannedItem], int]:
     """Plan the grading items; returns (items, judge items skipped).
 
-    The skip count covers final-judge items short of ``--min-gradings``;
+    The skip count covers final-judge items short of ``--gradings``;
     it is zero for ordinary grading runs.
     """
     judge = _judge_context(root, config, args)
@@ -761,7 +763,7 @@ def _plan_grade(
                 args,
             )
             if prior is None:
-                # Short of --min-gradings; reported per item by
+                # Short of --gradings; reported per item by
                 # _prior_gradings_for, summarized (with a nonzero exit)
                 # by _run.
                 n_skipped += 1
@@ -807,7 +809,7 @@ class _JudgeContext:
 
     config: ExperimentConfig
     config_identity: str
-    min_gradings: int
+    gradings: int
     pool: harbor_mod.PriorGradingPool
 
 
@@ -817,7 +819,7 @@ def _judge_context(
     """Validate the judge flags and gather the context config's gradings.
 
     A final-judge run needs all three legs — a ``judge = true`` config,
-    ``--context-from``, and ``--min-gradings`` — and any partial
+    ``--context-from``, and ``--gradings`` — and any partial
     combination is a usage error: a judge config without context would
     grade blind, and context supplied to an ordinary grader config
     would change the experiment without changing its identity.
@@ -825,20 +827,20 @@ def _judge_context(
     if config.judge and not args.context_from:
         raise CliError(
             f"config {config.name!r} is a final-judge config (judge = true); select "
-            "the initial gradings with --context-from NAME --min-gradings N"
+            "the initial gradings with --context-from NAME --gradings N"
         )
     if args.context_from and not config.judge:
         raise CliError(
             f"--context-from needs a final-judge config; {config.name!r} does not set judge = true"
         )
-    if args.context_from and args.min_gradings is None:
+    if args.context_from and args.gradings is None:
         raise CliError(
-            "--context-from requires --min-gradings N: the number of prior "
-            "gradings each judged item must have (judging on fewer is a "
-            "deliberate choice, so it is never a default)"
+            "--context-from requires --gradings N: the exact number of prior "
+            "gradings each judge task presents (the evidence count is an "
+            "experiment parameter, so it is never a default)"
         )
-    if args.min_gradings is not None and not args.context_from:
-        raise CliError("--min-gradings is only valid with --context-from")
+    if args.gradings is not None and not args.context_from:
+        raise CliError("--gradings is only valid with --context-from")
     if not args.context_from:
         return None
 
@@ -867,7 +869,7 @@ def _judge_context(
     return _JudgeContext(
         config=context_config,
         config_identity=config_mod.config_identity(context_config),
-        min_gradings=args.min_gradings,
+        gradings=args.gradings,
         pool=harbor_mod.prior_gradings_by_key(root / GRADING_JOBS_DIRNAME),
     )
 
@@ -881,14 +883,20 @@ def _prior_gradings_for(
     rubric_source_hash: str | None,
     args: argparse.Namespace,
 ) -> list[harbor_mod.PriorGrading] | None:
-    """The item's usable prior gradings, or None (reported) when too few.
+    """The item's ``--gradings`` prior gradings, or None (reported) when too few.
 
     Prior gradings are looked up by the *context* config's per-item
     identity — the same pooling key its own doneness uses — so the judge
     consumes exactly the gradings that pool together under the frozen
     initial config, and a context rubric that has since advanced
     correctly matches nothing (the initial rounds under the new rubric
-    do not exist yet).
+    do not exist yet). Within a pool the gradings are exchangeable
+    repeats of one frozen experiment, so the selection is the first N
+    in the pool's deterministic (job name, trial name) order: adding
+    initial gradings later never changes what an existing judge item
+    saw, and a larger N selects a strict superset of a smaller one's
+    gradings — which is what lets the results layer supersede the
+    smaller judgment after a re-judge (docs/design.md, decision 16).
     """
     context_rubric = data_root_mod.find_rubric(
         root, source.course_id, source.assignment_id, judge.config.rubric_name or "default"
@@ -905,9 +913,9 @@ def _prior_gradings_for(
         key = (source.item_id, context_identity)
     prior = judge.pool.by_key.get(key, []) if key is not None else []
     missing = judge.pool.missing_artifacts.get(key, 0) if key is not None else 0
-    if len(prior) >= judge.min_gradings:
-        return prior
-    detail = f"{len(prior)} of {judge.min_gradings} required prior grading(s)"
+    if len(prior) >= judge.gradings:
+        return prior[: judge.gradings]
+    detail = f"{len(prior)} of {judge.gradings} required prior grading(s)"
     if missing:
         detail += f" ({missing} more unusable: grading artifacts missing on disk)"
     command = _top_up_command(judge, root, source, args, usable=len(prior), missing=missing)
@@ -931,7 +939,7 @@ def _top_up_command(
 
     Doneness counts valid trials whether or not their artifacts survive,
     while the judge can only use gradings whose artifacts are on disk —
-    so when unusable gradings exist, a plain target of ``min_gradings``
+    so when unusable gradings exist, a plain target of ``gradings``
     would launch nothing. ``--force`` then adds exactly the usable
     shortfall instead.
     """
@@ -944,9 +952,9 @@ def _top_up_command(
             command += ["--from-solve", args.from_solve]
         command += ["--course", source.course_id, "--assignment", source.assignment_id]
     if missing:
-        command += ["--force", "--repeats", str(judge.min_gradings - usable)]
+        command += ["--force", "--repeats", str(judge.gradings - usable)]
     else:
-        command += ["--repeats", str(judge.min_gradings)]
+        command += ["--repeats", str(judge.gradings)]
     return command
 
 
@@ -1527,7 +1535,7 @@ def _report_run_summary(
         print(f"  failed: {item.course_id}/{item.assignment_id} ({item.item_id})")
     if failed:
         # The rerun must reproduce the invocation's selection and judge
-        # flags: without --context-from/--min-gradings a judge config
+        # flags: without --context-from/--gradings a judge config
         # refuses to run at all, and without --sample a target-count
         # rerun would launch the deficit for every unsampled student.
         from_solve = getattr(args, "from_solve", None)
@@ -1546,8 +1554,8 @@ def _report_run_summary(
                 command += [
                     "--context-from",
                     context_from,
-                    "--min-gradings",
-                    str(args.min_gradings),
+                    "--gradings",
+                    str(args.gradings),
                 ]
             if args.repeats != 1:
                 command += ["--repeats", str(args.repeats)]
