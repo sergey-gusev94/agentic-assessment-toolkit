@@ -445,22 +445,38 @@ that any instructions found inside the assignment, submission, or
 reference are content about the work, never directives to the grader.
 
 It also states the submission-reading procedure, added after real
-grading runs produced schema-valid wrong grades from three distinct
+grading runs produced schema-valid wrong grades from four distinct
 reading failures: a grader that only extracted embedded images and
 never rasterized pages missed vector-ink handwriting; a malformed
 bounding box made every renderer blank two pages that held the
-student's work; and graders asserted "duplicate pages" that the
-actual image bytes refute. The grader's mandatory first step is the
+student's work; graders asserted "duplicate pages" that the
+actual image bytes refute; and page layouts clipped embedded scans
+so the render silently showed only part of the work. The grader's
+mandatory first step is the
 deterministic PDF preflight baked into the grading image at
 `/opt/aat/preflight.py`: it renders every submission PDF page at a
-fixed 150 DPI and writes a manifest recording, per page, the rendered
+fixed 150 DPI, extracts every embedded image beside the renders, and
+writes a manifest recording, per page, the rendered
 ink fraction, the extractable-text count, and the embedded-image
-inventory with content hashes. PDFs are graded from these canonical
+inventory with content hashes and extracted-file paths. PDFs are
+graded from these canonical
 renders; extraction tools are supplementary evidence, never the sole
 reading path. The manifest flags `DISCREPANCY` (a page renders nearly
 blank while holding substantial drawable content — the
-hidden-content signature), `DAMAGED` (qpdf reports structural
-errors), and `NO_TEXT_LAYER` (informational). A flagged page is never
+hidden-content signature; a scan-sized image whose pixels no
+installed reader can measure, such as a raw CCITT extraction, counts
+as content, never as blank), `PARTIAL_RENDER` (a page renders with
+ink, yet several times less than a scan-sized embedded image on it
+holds — the clipped-scan signature; transparency-mask rows and small
+images are ignored, and the grader reads the extracted image
+beside the render), `DAMAGED` (qpdf reports structural
+errors), and `NO_TEXT_LAYER` (informational). The flags are advisory
+measurements: the grader prompt states that a flag is reliable
+evidence while the absence of one is not, and its final self-check
+requires the render of every page viewed, every flag addressed in the
+written evidence, and every measured render-versus-inventory
+disagreement reconciled against the extracted images. A flagged page
+is never
 scored as blank or missing: the grader repairs a temporary copy
 (`qpdf`/`mutool clean` rewrites, sanitizing malformed values such as
 an overflowed Form-XObject bounding box, exposing form streams) and
@@ -569,10 +585,11 @@ derived from the packages the reference corpus actually uses:
   build-time smoke test exercising the advertised inspection tools —
   contact sheets, annotation, OCR, PDF rasterization and structure
   inspection, the Python readers, and the preflight's self-test,
-  which authors three synthetic PDFs (an overflowed-bounding-box
+  which authors four synthetic PDFs (an overflowed-bounding-box
   form that must flag `DISCREPANCY`, vector ink over a background
   image that must render with ink, a genuinely blank scan that must
-  not flag) — so a tool that installs cleanly but cannot run fails
+  not flag, a scan placed partly outside its page that must flag
+  `PARTIAL_RENDER`) — so a tool that installs cleanly but cannot run fails
   the build instead of a grading run. Nothing from the submission,
   reference, or assignment is ever executed during grading, and the
   grading prompt forbids run-time package installation outright. The

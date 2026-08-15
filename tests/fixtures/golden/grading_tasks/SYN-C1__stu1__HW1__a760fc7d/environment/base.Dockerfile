@@ -80,13 +80,16 @@ COPY <<'PREFLIGHT_EOF' /opt/aat/preflight.py
 
 The grader runs this before reading anything else. It walks an input
 directory (default /app/submission), renders every page of every PDF to
-PNG with pdftoppm at a fixed 150 DPI, and writes an output directory
-(default /tmp/preflight) holding those renders plus manifest.json and a
+PNG with pdftoppm at a fixed 150 DPI, extracts every embedded image
+with pdfimages, and writes an output directory (default /tmp/preflight)
+holding those renders and extracted images plus manifest.json and a
 short human-readable manifest.txt. The renders are the canonical
 reading of the submission; the manifest records, per page, the rendered
 ink fraction, the extractable text count, and the embedded-image
-inventory with content hashes, so claims about blank, duplicated, or
-missing pages can cite measurements instead of impressions.
+inventory with content hashes and extracted-file paths, so claims about
+blank, duplicated, or missing pages can cite measurements instead of
+impressions — and a page whose render hides part of its scan can be
+read from the extracted scan itself.
 
 Flags (advisory measurements, never judgments about the work):
 
@@ -96,15 +99,26 @@ Flags (advisory measurements, never judgments about the work):
   itself not blank. This catches malformed PDFs that standard renderers
   silently render blank (for example a Form XObject whose /BBox holds
   overflowed numbers). A genuinely blank scanned page — a near-white
-  embedded image behind a tiny content stream — does not flag.
+  embedded image behind a tiny content stream — does not flag. A
+  scan-sized image whose pixels no installed reader can measure (for
+  example a raw CCITT extraction) counts as substantial: a failed
+  measurement is never evidence of blankness.
+- PARTIAL_RENDER (per page, echoed on the file): the page renders with
+  real ink, yet several times less than a scan-sized embedded image on
+  it holds — the signature of a scan clipped or partly hidden by the
+  page layout (for example a portrait scan placed partly outside a
+  landscape page). Transparency-mask rows are ignored, as are small
+  images such as corner badges and logos. The extracted image named in
+  the manifest holds the scan's full content.
 - DAMAGED (per file): qpdf --check reports errors, the PDF library
   cannot parse the file, or the renderer fails outright.
 - NO_TEXT_LAYER (per file, informational): near-zero extractable text;
   the pages are images and need OCR to read as text.
 - TOOL_UNAVAILABLE (per file): a tool the measurements needed
-  (pdftoppm, pypdf, or pdftotext) could not run; the affected facts
-  are recorded as unknown (and listed in tools_unavailable), never fed
-  into the flags above — a missing tool must not flag a healthy file.
+  (pdftoppm, pdfimages, pypdf, or pdftotext) could not run; the
+  affected facts are recorded as unknown (and listed in
+  tools_unavailable), never fed into the flags above — a missing tool
+  must not flag a healthy file.
 
 Determinism: files are visited in sorted order, the manifest carries no
 timestamps or random content, and render filenames are normalized, so
@@ -113,10 +127,11 @@ the same input directory always yields byte-identical manifests.
 Standalone by design: stdlib plus the tools already in the grading
 image (poppler-utils, qpdf, pypdf, and Pillow or pymupdf for pixel
 counts). Each external tool degrades gracefully — a missing tool is
-recorded in the manifest, never a crash. `--selftest` authors three
+recorded in the manifest, never a crash. `--selftest` authors four
 synthetic PDFs (an overflow-/BBox form that renders blank, vector
-strokes over an embedded image, and a blank scanned page) and asserts
-the flag decisions on them; the grading image runs it at build time.
+strokes over an embedded image, a blank scanned page, and a scan placed
+partly outside its page) and asserts the flag decisions on them; the
+grading image runs it at build time.
 """
 
 from __future__ import annotations
@@ -159,11 +174,23 @@ SUBSTANTIAL_CONTENT_BYTES = 1024
 # substantial content; a scan of blank paper stays below it.
 SUBSTANTIAL_IMAGE_INK = 0.001
 
+# An embedded image at least this many pixels across on both sides is
+# scan-sized: a scanned sheet is thousands of pixels across, while
+# corner badges and logos stay far below.
+SCAN_IMAGE_MIN_PIXELS = 1000
+
+# A page whose rendered ink falls short of a scan-sized image's
+# nonwhite fraction by at least this factor renders only part of the
+# scan. Measured on real submissions: clipped pages sit near a tenth of
+# the image's fraction, completely rendered pages near or above it.
+PARTIAL_RENDER_RATIO = 4.0
+
 # A file whose total extractable text falls below this many
 # non-whitespace characters gets the informational NO_TEXT_LAYER flag.
 NO_TEXT_LAYER_CHARS = 50
 
 FLAG_DISCREPANCY = "DISCREPANCY"
+FLAG_PARTIAL_RENDER = "PARTIAL_RENDER"
 FLAG_DAMAGED = "DAMAGED"
 FLAG_NO_TEXT_LAYER = "NO_TEXT_LAYER"
 FLAG_TOOL_UNAVAILABLE = "TOOL_UNAVAILABLE"
@@ -221,6 +248,7 @@ def page_is_low_ink(ink_fraction: float | None, render_exists: bool, renderer_ra
 def page_has_substantial_content(
     content_stream_bytes: int | None,
     image_ink_fractions: list[float | None],
+    unmeasured_scan_image: bool,
     file_drawable_stream_bytes: int,
     content_accounting_ran: bool,
 ) -> bool:
@@ -231,7 +259,9 @@ def page_has_substantial_content(
     raw drawable-stream scan, which needs no object parsing. When the
     accounting never ran (pypdf unavailable), an unknown byte count is
     not evidence about the file and the fallback stays off; only an
-    embedded image with real ink can then establish substance.
+    embedded image with real ink can then establish substance. A
+    scan-sized image nothing could measure also establishes substance:
+    an unknown scan is never assumed blank.
     """
     if content_stream_bytes is not None and content_stream_bytes >= SUBSTANTIAL_CONTENT_BYTES:
         return True
@@ -240,10 +270,66 @@ def page_has_substantial_content(
         for fraction in image_ink_fractions
     ):
         return True
+    if unmeasured_scan_image:
+        return True
     return (
         content_accounting_ran
         and content_stream_bytes is None
         and file_drawable_stream_bytes >= SUBSTANTIAL_CONTENT_BYTES
+    )
+
+
+def scan_image_ink_fractions(images: list[dict[str, Any]]) -> list[float]:
+    """Nonwhite fractions of the measurable scan-sized images on a page.
+
+    Only real image rows count: pdfimages also lists transparency-mask
+    rows (smask, stencil, mask), whose pixels encode alpha coverage,
+    not ink — a mostly-black soft mask means transparent, and its
+    fraction would read as heavy ink on a page that renders perfectly.
+    """
+    return [
+        row["nonwhite_fraction"]
+        for row in images
+        if row["type"] == "image"
+        and row["nonwhite_fraction"] is not None
+        and row["width"] >= SCAN_IMAGE_MIN_PIXELS
+        and row["height"] >= SCAN_IMAGE_MIN_PIXELS
+    ]
+
+
+def has_unmeasured_scan_image(images: list[dict[str, Any]]) -> bool:
+    """A scan-sized image row whose pixels no reader could measure.
+
+    Raw CCITT/JBIG2 extractions carry no image header the installed
+    readers accept, so their nonwhite fraction stays unknown. For the
+    substance decision that unknown must count as content: treating it
+    as blank would let a fax-mode scan render blank without a flag.
+    """
+    return any(
+        row["type"] == "image"
+        and row["nonwhite_fraction"] is None
+        and row["width"] >= SCAN_IMAGE_MIN_PIXELS
+        and row["height"] >= SCAN_IMAGE_MIN_PIXELS
+        for row in images
+    )
+
+
+def page_is_partial_render(
+    ink_fraction: float | None, scan_image_ink_fractions: list[float]
+) -> bool:
+    """The page renders real ink, yet far less than its scan holds.
+
+    Catches a scan the page layout clips or hides: the render shows the
+    printed header or a fragment of the work while the embedded scan
+    holds much more. A page that renders nearly blank is DISCREPANCY
+    territory and never flags here; an unknown ink fraction is
+    inconclusive and never flags either.
+    """
+    if ink_fraction is None or ink_fraction < LOW_INK_FRACTION:
+        return False
+    return any(
+        fraction >= SUBSTANTIAL_IMAGE_INK and ink_fraction * PARTIAL_RENDER_RATIO < fraction
+        for fraction in scan_image_ink_fractions
     )
 
 
@@ -253,16 +339,21 @@ def page_flags(
     renderer_ran: bool,
     content_stream_bytes: int | None,
     image_ink_fractions: list[float | None],
+    scan_ink_fractions: list[float],
+    unmeasured_scan_image: bool,
     file_drawable_stream_bytes: int,
     content_accounting_ran: bool,
 ) -> list[str]:
     if page_is_low_ink(ink_fraction, render_exists, renderer_ran) and page_has_substantial_content(
         content_stream_bytes,
         image_ink_fractions,
+        unmeasured_scan_image,
         file_drawable_stream_bytes,
         content_accounting_ran,
     ):
         return [FLAG_DISCREPANCY]
+    if page_is_partial_render(ink_fraction, scan_ink_fractions):
+        return [FLAG_PARTIAL_RENDER]
     return []
 
 
@@ -286,6 +377,8 @@ def file_flags(
     flags = []
     if any(FLAG_DISCREPANCY in flags_for_page for flags_for_page in page_flag_lists):
         flags.append(FLAG_DISCREPANCY)
+    if any(FLAG_PARTIAL_RENDER in flags_for_page for flags_for_page in page_flag_lists):
+        flags.append(FLAG_PARTIAL_RENDER)
     if qpdf_check == "errors" or parse_error is not None or render_error is not None:
         flags.append(FLAG_DAMAGED)
     if text_chars_total is not None and text_chars_total < NO_TEXT_LAYER_CHARS:
@@ -495,19 +588,27 @@ def extracted_image_paths(extract_dir: Path) -> dict[tuple[int, int], Path]:
     return extracted
 
 
-def pdf_image_inventory(pdf_path: Path) -> dict[int, list[dict[str, Any]]]:
+def pdf_image_inventory(
+    pdf_path: Path, images_dir: Path, images_dir_prefix: str
+) -> tuple[dict[int, list[dict[str, Any]]], bool]:
     """Per-page embedded images: pdfimages -list joined with extraction.
 
     Each entry carries the listed geometry and embedded size, plus the
-    md5 and nonwhite fraction of the image as pdfimages -all extracts
-    it. Empty when pdfimages is missing or lists nothing — which itself
-    is evidence: extraction-only reading misses content that rendering
-    shows.
+    path, md5, and nonwhite fraction of the image as pdfimages -all
+    extracts it into images_dir. The extracted files stay in the output
+    directory as an alternate reading of the page, so a scan the render
+    clips or hides can be read directly from its extraction. Empty when
+    pdfimages is missing or lists nothing — which itself is evidence:
+    extraction-only reading misses content that rendering shows. The
+    second element reports whether pdfimages ran at all; its absence is
+    a missing tool, never a fact about the file.
     """
     listed = _run(["pdfimages", "-list", str(pdf_path)])
     inventory: dict[int, list[dict[str, Any]]] = {}
-    if listed is None or listed.returncode != 0:
-        return inventory
+    if listed is None:
+        return inventory, False
+    if listed.returncode != 0:
+        return inventory, True
     rows: list[dict[str, Any]] = []
     for line in listed.stdout.decode("utf-8", errors="replace").splitlines()[2:]:
         fields = line.split()
@@ -527,25 +628,29 @@ def pdf_image_inventory(pdf_path: Path) -> dict[int, list[dict[str, Any]]]:
         except ValueError:
             continue
 
-    with tempfile.TemporaryDirectory() as extract_dir:
-        _run(["pdfimages", "-p", "-all", str(pdf_path), str(Path(extract_dir) / "img")])
-        extracted = extracted_image_paths(Path(extract_dir))
-        for row in rows:
-            extracted_path = extracted.get((row["page"], row["index"]))
-            if extracted_path is None:
-                row["extracted_bytes"] = None
-                row["md5"] = None
-                row["nonwhite_fraction"] = None
-            else:
-                data = extracted_path.read_bytes()
-                row["extracted_bytes"] = len(data)
-                row["md5"] = hashlib.md5(data).hexdigest()  # noqa: S324 - content id, not security
-                fraction = image_ink_fraction(extracted_path)
-                row["nonwhite_fraction"] = None if fraction is None else round(fraction, 6)
-            inventory.setdefault(row["page"], []).append(row)
+    if not rows:
+        return inventory, True
+    images_dir.mkdir(parents=True, exist_ok=True)
+    _run(["pdfimages", "-p", "-all", str(pdf_path), str(images_dir / "img")])
+    extracted = extracted_image_paths(images_dir)
+    for row in rows:
+        extracted_path = extracted.get((row["page"], row["index"]))
+        if extracted_path is None:
+            row["extracted_path"] = None
+            row["extracted_bytes"] = None
+            row["md5"] = None
+            row["nonwhite_fraction"] = None
+        else:
+            data = extracted_path.read_bytes()
+            row["extracted_path"] = f"{images_dir_prefix}/{extracted_path.name}"
+            row["extracted_bytes"] = len(data)
+            row["md5"] = hashlib.md5(data).hexdigest()  # noqa: S324 - content id, not security
+            fraction = image_ink_fraction(extracted_path)
+            row["nonwhite_fraction"] = None if fraction is None else round(fraction, 6)
+        inventory.setdefault(row["page"], []).append(row)
     for images in inventory.values():
         images.sort(key=lambda row: row["index"])
-    return inventory
+    return inventory, True
 
 
 def pdf_content_stream_bytes(pdf_path: Path) -> tuple[int | None, list[int | None], str | None]:
@@ -604,8 +709,8 @@ def _form_stream_bytes(resources: Any, seen: set[int]) -> int:
 # --- manifest assembly ---
 
 
-def _render_dir_name(relative_path: str) -> str:
-    """A flat, collision-free directory name for one PDF's renders.
+def _derived_dir_name(relative_path: str) -> str:
+    """A flat, collision-free directory name for one PDF's derived files.
 
     The readable part is truncated to 100 bytes so the name always fits
     a 255-byte filename limit; the digest — over the full relative path —
@@ -619,11 +724,13 @@ def _render_dir_name(relative_path: str) -> str:
 
 def analyze_pdf(pdf_path: Path, relative_path: str, output_dir: Path) -> dict[str, Any]:
     data = pdf_path.read_bytes()
-    render_dir_name = _render_dir_name(relative_path)
-    render_dir = output_dir / "renders" / render_dir_name
+    derived_dir_name = _derived_dir_name(relative_path)
+    render_dir = output_dir / "renders" / derived_dir_name
     renders, render_error = render_pdf(pdf_path, render_dir)
     page_count, per_page_content, parse_error = pdf_content_stream_bytes(pdf_path)
-    inventory = pdf_image_inventory(pdf_path)
+    inventory, pdfimages_ran = pdf_image_inventory(
+        pdf_path, output_dir / "images" / derived_dir_name, f"images/{derived_dir_name}"
+    )
     drawable_bytes = raw_drawable_stream_bytes(data)
 
     # A tool that could not run leaves its facts unknown: it is listed
@@ -638,6 +745,8 @@ def analyze_pdf(pdf_path: Path, relative_path: str, output_dir: Path) -> dict[st
     if not parser_ran:
         tools_unavailable.append("pypdf")
         parse_error = None
+    if not pdfimages_ran:
+        tools_unavailable.append("pdfimages")
 
     last_page = max(
         page_count or 0, max(renders, default=0), max(inventory, default=0), len(per_page_content)
@@ -650,7 +759,7 @@ def analyze_pdf(pdf_path: Path, relative_path: str, output_dir: Path) -> dict[st
     image_bytes_total = 0
     for page_number in range(1, last_page + 1):
         render_name = renders.get(page_number)
-        render_path = None if render_name is None else f"renders/{render_dir_name}/{render_name}"
+        render_path = None if render_name is None else f"renders/{derived_dir_name}/{render_name}"
         ink = None if render_name is None else image_ink_fraction(render_dir / render_name)
         text_chars, text_tool_ran = page_text_chars(pdf_path, page_number)
         pdftotext_ran = pdftotext_ran and text_tool_ran
@@ -668,6 +777,8 @@ def analyze_pdf(pdf_path: Path, relative_path: str, output_dir: Path) -> dict[st
             renderer_ran=renderer_ran,
             content_stream_bytes=content_bytes,
             image_ink_fractions=[row["nonwhite_fraction"] for row in images],
+            scan_ink_fractions=scan_image_ink_fractions(images),
+            unmeasured_scan_image=has_unmeasured_scan_image(images),
             file_drawable_stream_bytes=drawable_bytes,
             content_accounting_ran=parser_ran,
         )
@@ -704,7 +815,10 @@ def analyze_pdf(pdf_path: Path, relative_path: str, output_dir: Path) -> dict[st
         "render_error": render_error,
         "tools_unavailable": tools_unavailable,
         "page_count": last_page,
-        "render_dir": f"renders/{render_dir_name}",
+        "render_dir": f"renders/{derived_dir_name}",
+        # None when nothing was extracted: the directory then does not
+        # exist, and a path pointing at nothing would be a false claim.
+        "images_dir": f"images/{derived_dir_name}" if inventory else None,
         "raw_stream_bytes": raw_stream_bytes(data),
         "drawable_stream_bytes": drawable_bytes,
         "image_count": image_count_total,
@@ -755,6 +869,8 @@ def build_manifest(input_dir: Path, output_dir: Path) -> dict[str, Any]:
             "low_ink_fraction": LOW_INK_FRACTION,
             "substantial_content_bytes": SUBSTANTIAL_CONTENT_BYTES,
             "substantial_image_ink": SUBSTANTIAL_IMAGE_INK,
+            "scan_image_min_pixels": SCAN_IMAGE_MIN_PIXELS,
+            "partial_render_ratio": PARTIAL_RENDER_RATIO,
             "no_text_layer_chars": NO_TEXT_LAYER_CHARS,
         },
         "summary": {
@@ -909,14 +1025,39 @@ def _fixture_blank_scan() -> bytes:
     return _raw_pdf(_page_objects("/Im0 5 0 R", content, _gray_image_obj(0xFF)))
 
 
+def _clipped_scan_image_obj() -> bytes:
+    """A 1200x1600 1-bit scan: a little ink in the top half, most of it
+    in the bottom half that the clipped-scan fixture pushes off-page."""
+    width, height = 1200, 1600
+    white_row = b"\xff" * (width // 8)
+    black_row = b"\x00" * (width // 8)
+    rows = [
+        black_row if 40 <= index < 48 or 900 <= index < 1100 else white_row
+        for index in range(height)
+    ]
+    return _stream_obj(
+        f"/Type /XObject /Subtype /Image /Width {width} /Height {height} "
+        "/ColorSpace /DeviceGray /BitsPerComponent 1",
+        b"".join(rows),
+    )
+
+
+def _fixture_clipped_scan() -> bytes:
+    """Renders only part of its scan: the portrait scan is placed so its
+    lower half — holding most of the ink — lies below the page."""
+    content = b"q 612 0 0 1584 0 -792 cm /Im0 Do Q\n"
+    return _raw_pdf(_page_objects("/Im0 5 0 R", content, _clipped_scan_image_obj()))
+
+
 def selftest() -> int:
-    """Author the three fixtures, run the pipeline, assert the decisions."""
+    """Author the four fixtures, run the pipeline, assert the decisions."""
     with tempfile.TemporaryDirectory() as scratch:
         input_dir = Path(scratch) / "input"
         input_dir.mkdir()
         (input_dir / "overflow_bbox.pdf").write_bytes(_fixture_overflow_bbox())
         (input_dir / "vector_over_image.pdf").write_bytes(_fixture_vector_over_image())
         (input_dir / "blank_scan.pdf").write_bytes(_fixture_blank_scan())
+        (input_dir / "clipped_scan.pdf").write_bytes(_fixture_clipped_scan())
 
         manifest = run_preflight(input_dir, Path(scratch) / "out")
         repeat = run_preflight(input_dir, Path(scratch) / "out2")
@@ -942,6 +1083,18 @@ def selftest() -> int:
         blank = by_path["blank_scan.pdf"]
         if FLAG_DISCREPANCY in blank["flags"]:
             failures.append("blank_scan.pdf must not flag DISCREPANCY")
+
+        clipped = by_path["clipped_scan.pdf"]
+        if FLAG_PARTIAL_RENDER not in clipped["flags"]:
+            failures.append("clipped_scan.pdf must flag PARTIAL_RENDER")
+        if FLAG_DISCREPANCY in clipped["flags"]:
+            failures.append("clipped_scan.pdf must not flag DISCREPANCY")
+        clipped_image = clipped["pages"][0]["images"][0]
+        if (
+            clipped_image["extracted_path"] is None
+            or not (Path(scratch) / "out" / clipped_image["extracted_path"]).is_file()
+        ):
+            failures.append("clipped_scan.pdf must keep its extracted scan in the output")
 
         if manifest != repeat:
             failures.append("manifest must be deterministic across runs")

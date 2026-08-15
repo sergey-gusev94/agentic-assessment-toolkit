@@ -29,15 +29,17 @@ Your mandatory first step, before reading anything in
     python3 /opt/aat/preflight.py
 
 It renders every page of every PDF under `/app/submission/` to PNG at
-a fixed 150 DPI and writes `/tmp/preflight/` holding those renders, a
+a fixed 150 DPI, extracts every embedded image, and writes
+`/tmp/preflight/` holding those renders and extracted images, a
 machine-readable `manifest.json`, and a short `manifest.txt`. The
 manifest records, per page, the rendered ink fraction, the extractable
-text count, and the embedded-image inventory with content hashes. Read
-the manifest, then grade each PDF from its canonical page renders
-under `/tmp/preflight/renders/`. Extraction tools (`pdfimages`,
-`pdftotext`) are supplementary evidence about structure and text,
-never your sole reading of a page: a page can hold vector-drawn
-handwriting that extraction misses entirely while the render shows it.
+text count, and the embedded-image inventory with content hashes and
+the path of each extracted image. Read the manifest, then grade each
+PDF from its canonical page renders under `/tmp/preflight/renders/`.
+Extraction tools (`pdfimages`, `pdftotext`) are supplementary evidence
+about structure and text, never your sole reading of a page: a page
+can hold vector-drawn handwriting that extraction misses entirely
+while the render shows it.
 
 The submission is everything under `/app/submission/`. When files
 overlap or duplicate one another — a revised upload beside an earlier
@@ -63,12 +65,21 @@ as saved model checkpoints without loading them. For your own
 independent check calculations, `scipy`, `scikit-learn`, and `sympy`
 are preinstalled.
 
-The manifest flags pages whose rendering disagrees with their
-content. `DISCREPANCY` marks a page that renders blank or nearly
-blank while the file holds substantial content for it — some
-malformed PDFs make every standard renderer silently drop content
-that is still inside the file. `DAMAGED` marks a file whose structure
-is broken. On either flag, attempt recovery before grading the page:
+The manifest flags pages whose rendering measurably disagrees with
+their content. A flag is reliable evidence; the absence of a flag is
+not — some clipped or hidden content produces no flag, and each
+page's image inventory is your cross-check against its render.
+`PARTIAL_RENDER` marks a page that renders with ink, yet
+several times less than a scan-sized embedded image on it holds — the
+page layout may be clipping or hiding part of the scan. On that flag,
+read the page's extracted image (its path is in the manifest)
+alongside the render and grade from the complete view. `DISCREPANCY`
+marks a page that renders blank or nearly blank while the file holds
+substantial content for it — some malformed PDFs make every standard
+renderer silently drop content that is still inside the file; the
+page's extracted images, when it has any, are the first thing to
+read. `DAMAGED` marks a file whose structure is broken. On
+`DISCREPANCY` or `DAMAGED`, attempt recovery before grading the page:
 rewrite the file with `qpdf` or `mutool clean` and re-render;
 decompress it with `qpdf --qdf` and inspect the objects; in a
 temporary copy, sanitize malformed values (for example a Form XObject
@@ -80,9 +91,14 @@ output — never score a flagged page as blank or missing work.
 
 For PDF submissions, any claim that a page is blank, duplicated, or
 missing must cite the manifest: the page's ink fraction for blankness,
-matching embedded-image hashes for duplication. Never claim two pages
-are duplicates unless the manifest hashes match or you have compared
-the two renders directly and say so in your evidence.
+matching embedded-image hashes for duplication. A null `ink_fraction`
+or `nonwhite_fraction` is a failed measurement, never evidence of
+blankness. When a page renders with little or no ink yet lists a
+scan-sized image whose `nonwhite_fraction` is null, treat the page
+exactly as if it were flagged `DISCREPANCY`: escalate through the
+alternative readers before concluding anything about it. Never claim
+two pages are duplicates unless the manifest hashes match or you have
+compared the two renders directly and say so in your evidence.
 
 More generally, whenever you cannot read content you have reason to
 believe exists — an unknown format, a malformed file, a tool
@@ -229,9 +245,14 @@ Before you finish, verify your output: `grading_result.json` parses as
 valid JSON and contains exactly the fields specified above; every
 criterion has a unique id, points within `0 <= points <= max_points`,
 and specific evidence; the four sums match your criteria;
-`justification.md` covers every criterion; and every page you judged
+`justification.md` covers every criterion; every page you judged
 blank, duplicated, or missing cites the preflight manifest in your
-evidence. Then stop.
+evidence; you viewed the render of every page of every PDF in the
+manifest; every manifest flag is addressed explicitly in your
+evidence; and on any page where the image inventory disagrees with
+the render — image nonwhite fractions far above the page's ink
+fraction, more than one scan-sized image, or a null fraction — you
+read the extracted images and reconciled the difference. Then stop.
 
 A genuinely empty submission is graded, not withheld: when the
 content is readable but contains no gradable academic work, award 0

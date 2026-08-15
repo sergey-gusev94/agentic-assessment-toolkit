@@ -88,6 +88,8 @@ def _flags(
     image_inks: list[float | None],
     drawable: int,
     *,
+    scan_inks: list[float] | None = None,
+    unmeasured_scan: bool = False,
     renderer_ran: bool = True,
     accounting_ran: bool = True,
 ) -> list[str]:
@@ -97,6 +99,8 @@ def _flags(
         renderer_ran=renderer_ran,
         content_stream_bytes=content_bytes,
         image_ink_fractions=image_inks,
+        scan_ink_fractions=scan_inks or [],
+        unmeasured_scan_image=unmeasured_scan,
         file_drawable_stream_bytes=drawable,
         content_accounting_ran=accounting_ran,
     )
@@ -127,6 +131,64 @@ def test_page_flags_do_not_fire_without_a_discrepancy() -> None:
     assert _flags(None, True, 5000, [], 5000) == []
 
 
+def test_page_flags_partial_render() -> None:
+    # A page showing a tenth of what its scan holds: the clipped-scan
+    # signature measured on real submissions.
+    assert _flags(0.004, True, 5000, [0.04], 9000, scan_inks=[0.04]) == ["PARTIAL_RENDER"]
+    # A completely rendered scan sits near the image's own fraction.
+    assert _flags(0.05, True, 5000, [0.055], 9000, scan_inks=[0.055]) == []
+    # An image legitimately covering part of the page dilutes the page
+    # fraction; a ratio within the threshold does not flag.
+    assert _flags(0.02, True, 5000, [0.06], 9000, scan_inks=[0.06]) == []
+    # A nearly blank render is the DISCREPANCY case, never this flag.
+    assert _flags(0.0, True, 40, [0.6], 0, scan_inks=[0.6]) == ["DISCREPANCY"]
+    # Below the low-ink line with no substantial content: no flag at all.
+    assert _flags(0.0005, True, 40, [0.0004], 0, scan_inks=[0.0004]) == []
+    # An unknown render ink fraction is inconclusive.
+    assert _flags(None, True, 5000, [0.6], 9000, scan_inks=[0.6]) == []
+    # A near-blank scan behind a lightly inked page is not evidence.
+    assert _flags(0.002, True, 5000, [0.0005], 9000, scan_inks=[0.0005]) == []
+
+
+def test_scan_image_ink_fractions_filters_to_scan_sized_images() -> None:
+    images = [
+        {"type": "image", "width": 3297, "height": 2330, "nonwhite_fraction": 0.04},
+        # A corner badge: far too small to be a scanned sheet.
+        {"type": "image", "width": 120, "height": 40, "nonwhite_fraction": 0.5},
+        # Tall but narrow: not scan-sized either.
+        {"type": "image", "width": 400, "height": 3000, "nonwhite_fraction": 0.3},
+        # Scan-sized but unmeasured: no ratio evidence.
+        {"type": "image", "width": 2550, "height": 3300, "nonwhite_fraction": None},
+        # A soft mask's pixels are alpha coverage, not ink: mostly-black
+        # means transparent, so it must never read as a heavy-ink scan.
+        {"type": "smask", "width": 1200, "height": 1600, "nonwhite_fraction": 0.9},
+        {"type": "stencil", "width": 1200, "height": 1600, "nonwhite_fraction": 0.8},
+    ]
+    assert preflight.scan_image_ink_fractions(images) == [0.04]
+
+
+def test_has_unmeasured_scan_image() -> None:
+    unmeasured_scan = {"type": "image", "width": 2550, "height": 3300, "nonwhite_fraction": None}
+    assert preflight.has_unmeasured_scan_image([unmeasured_scan])
+    # A measured scan, an unmeasured small image, and an unmeasured
+    # mask are each no evidence of an unreadable scan.
+    assert not preflight.has_unmeasured_scan_image(
+        [
+            {"type": "image", "width": 2550, "height": 3300, "nonwhite_fraction": 0.05},
+            {"type": "image", "width": 120, "height": 40, "nonwhite_fraction": None},
+            {"type": "smask", "width": 2550, "height": 3300, "nonwhite_fraction": None},
+        ]
+    )
+
+
+def test_page_flags_unmeasured_scan_counts_as_content() -> None:
+    # A blank-rendering page whose scan nothing could measure (raw
+    # CCITT extraction): never assumed blank.
+    assert _flags(0.0, True, 40, [None], 0, unmeasured_scan=True) == ["DISCREPANCY"]
+    # The same unknown is no evidence against a page that renders ink.
+    assert _flags(0.3, True, 5000, [None], 9000, unmeasured_scan=True) == []
+
+
 def test_page_flags_missing_tools_are_not_evidence() -> None:
     # The renderer never ran: a missing render is not blankness.
     assert _flags(None, False, 5000, [], 0, renderer_ran=False) == []
@@ -147,6 +209,12 @@ def test_file_flags() -> None:
     assert preflight.file_flags("warnings", None, None, 500, [["DISCREPANCY"], []], []) == [
         "DISCREPANCY"
     ]
+    assert preflight.file_flags("ok", None, None, 500, [[], ["PARTIAL_RENDER"]], []) == [
+        "PARTIAL_RENDER"
+    ]
+    assert preflight.file_flags(
+        "ok", None, None, 500, [["DISCREPANCY"], ["PARTIAL_RENDER"]], []
+    ) == ["DISCREPANCY", "PARTIAL_RENDER"]
 
 
 def test_file_flags_tool_unavailability_is_distinct() -> None:
@@ -170,18 +238,18 @@ def test_parse_pdfimages_size() -> None:
 def test_render_dir_name_stays_within_filename_limits() -> None:
     """A deeply nested path flattens to a name a filesystem accepts."""
     deep = "/".join(["directory-" + "x" * 60] * 6) + "/" + "y" * 150 + ".pdf"
-    name = preflight._render_dir_name(deep)
+    name = preflight._derived_dir_name(deep)
     assert len(name.encode("utf-8")) <= 255
     # Two paths sharing the truncated readable part stay distinct.
-    other = preflight._render_dir_name(deep.replace(".pdf", "-2.pdf"))
+    other = preflight._derived_dir_name(deep.replace(".pdf", "-2.pdf"))
     assert name != other
     # Determinism: the name depends only on the relative path.
-    assert name == preflight._render_dir_name(deep)
+    assert name == preflight._derived_dir_name(deep)
 
 
 def test_render_dir_name_pins_flattening_collisions() -> None:
     """a/b.pdf and a__b.pdf flatten alike; the digest keeps them apart."""
-    assert preflight._render_dir_name("a/b.pdf") != preflight._render_dir_name("a__b.pdf")
+    assert preflight._derived_dir_name("a/b.pdf") != preflight._derived_dir_name("a__b.pdf")
 
 
 def test_extracted_image_paths_skips_params_files(tmp_path: Path) -> None:
@@ -239,6 +307,7 @@ def test_pipeline_manifest_and_flags(tmp_path: Path) -> None:
     (input_dir / "nested").mkdir()
     (input_dir / "nested" / "vector.pdf").write_bytes(preflight._fixture_vector_over_image())
     (input_dir / "blank_scan.pdf").write_bytes(preflight._fixture_blank_scan())
+    (input_dir / "clipped_scan.pdf").write_bytes(preflight._fixture_clipped_scan())
     (input_dir / "notes.txt").write_text("plain notes\n", encoding="utf-8")
     (input_dir / "blob.bin").write_bytes(b"\x00\x01\x02")
 
@@ -251,6 +320,8 @@ def test_pipeline_manifest_and_flags(tmp_path: Path) -> None:
     assert "DISCREPANCY" in overflow["flags"]
     assert overflow["pages"][0]["flags"] == ["DISCREPANCY"]
     assert overflow["pages"][0]["ink_fraction"] < preflight.LOW_INK_FRACTION
+    # No embedded images, so no extraction directory to point at.
+    assert overflow["images_dir"] is None
 
     vector = by_path["nested/vector.pdf"]
     assert "DISCREPANCY" not in vector["flags"]
@@ -259,9 +330,24 @@ def test_pipeline_manifest_and_flags(tmp_path: Path) -> None:
     assert (output_dir / page["render"]).is_file()
     assert page["image_count"] == 1
     assert page["images"][0]["md5"]
+    # The extraction stays in the output directory as an alternate view.
+    assert vector["images_dir"] is not None
+    assert page["images"][0]["extracted_path"].startswith(vector["images_dir"])
+    assert (output_dir / page["images"][0]["extracted_path"]).is_file()
 
     blank = by_path["blank_scan.pdf"]
     assert "DISCREPANCY" not in blank["flags"]
+
+    clipped = by_path["clipped_scan.pdf"]
+    assert "PARTIAL_RENDER" in clipped["flags"]
+    assert "DISCREPANCY" not in clipped["flags"]
+    clipped_page = clipped["pages"][0]
+    assert clipped_page["flags"] == ["PARTIAL_RENDER"]
+    # The page renders real ink — just far less than the scan holds.
+    assert clipped_page["ink_fraction"] >= preflight.LOW_INK_FRACTION
+    scan = clipped_page["images"][0]
+    assert scan["nonwhite_fraction"] > clipped_page["ink_fraction"] * preflight.PARTIAL_RENDER_RATIO
+    assert (output_dir / scan["extracted_path"]).is_file()
 
     assert by_path["notes.txt"]["kind"] == "text"
     assert by_path["notes.txt"]["size_bytes"] == 12
@@ -336,6 +422,29 @@ def test_missing_pdftoppm_degrades_without_flagging(
     assert "DAMAGED" not in entry["flags"]
     assert "TOOL_UNAVAILABLE" in entry["flags"]
     assert all(page["render"] is None for page in entry["pages"])
+
+
+@requires_pipeline_tools
+def test_missing_pdfimages_degrades_without_flagging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No image tool: the inventory is unknown, never an image-free file.
+
+    PARTIAL_RENDER depends on pdfimages, so its silent absence would be
+    silent loss of coverage; TOOL_UNAVAILABLE surfaces it instead."""
+    input_dir = tmp_path / "submission"
+    input_dir.mkdir()
+    (input_dir / "clipped_scan.pdf").write_bytes(preflight._fixture_clipped_scan())
+    _hide_tool(monkeypatch, "pdfimages")
+
+    manifest = preflight.run_preflight(input_dir, tmp_path / "out")
+    (entry,) = manifest["files"]
+    assert entry["tools_unavailable"] == ["pdfimages"]
+    assert "TOOL_UNAVAILABLE" in entry["flags"]
+    assert "PARTIAL_RENDER" not in entry["flags"]
+    assert "DISCREPANCY" not in entry["flags"]
+    assert entry["images_dir"] is None
+    assert entry["pages"][0]["images"] == []
 
 
 @requires_pipeline_tools
