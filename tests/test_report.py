@@ -162,7 +162,8 @@ def test_report_md_sections_and_benchmark_prose(tmp_path: Path) -> None:
 
     assert "## Benchmark results" in report
     assert (
-        "### SYN_C1 — solver codex-high (dddddddd), grader codex-grader-high (cccccccc)" in report
+        "### SYN_C1 — solver codex-high (dddddddd), grader codex-grader-sol-high (cccccccc)"
+        in report
     )
     # The per-assignment means table is always printed; the lone solve
     # trial scores base 80, score 100, and has no spread. The rubric
@@ -238,7 +239,7 @@ def test_empty_data_root_report_is_header_only(tmp_path: Path) -> None:
 def test_provenance_records_the_computation(tmp_path: Path) -> None:
     root = build_root(tmp_path)
     report_dir = run_report(
-        root, courses=["SYN_C1"], config_names=["codex-high", "codex-grader-high"], seed=7
+        root, courses=["SYN_C1"], config_names=["codex-high", "codex-grader-sol-high"], seed=7
     )
     provenance = json.loads((report_dir / "provenance.json").read_text(encoding="utf-8"))
     assert provenance["created_utc"] == NOW.isoformat()
@@ -247,7 +248,7 @@ def test_provenance_records_the_computation(tmp_path: Path) -> None:
     assert provenance["filters"] == {
         "courses": ["SYN_C1"],
         "assignments": None,
-        "configs": ["codex-high", "codex-grader-high"],
+        "configs": ["codex-high", "codex-grader-sol-high"],
     }
     assert provenance["seed"] == 7
     assert provenance["bootstrap"] == {
@@ -261,7 +262,7 @@ def test_provenance_records_the_computation(tmp_path: Path) -> None:
         "near_timeout_fraction": metrics.NEAR_TIMEOUT_FRACTION,
     }
     assert provenance["configs"] == [
-        {"name": "codex-grader-high", "identity": "c" * 64, "stage": "grade"},
+        {"name": "codex-grader-sol-high", "identity": "c" * 64, "stage": "grade"},
         {"name": "codex-high", "identity": "d" * 64, "stage": "solve"},
     ]
     assert provenance["jobs"] == {"grade": [GRADE_JOB], "solve": [SOLVE_JOB]}
@@ -330,7 +331,7 @@ def test_two_rubric_versions_are_reported_separately(tmp_path: Path) -> None:
         root,
         tmp_path,
         stage="grade",
-        job_name="20260801T130000Z__codex-grader-high__cccccccc",
+        job_name="20260801T130000Z__codex-grader-sol-high__cccccccc",
         items=[
             RunRecordItem(
                 item_id=f"{SOLVE_JOB}/HW1__abc1234",
@@ -373,7 +374,7 @@ def test_two_rubric_versions_are_reported_separately(tmp_path: Path) -> None:
 def test_consistency_section_lists_a_flagged_repeat_group(tmp_path: Path) -> None:
     """A wildly disagreeing regrade of one item is flagged, never excluded."""
     root = build_root(tmp_path)
-    repeat_job = "20260801T140000Z__codex-grader-high__cccccccc"
+    repeat_job = "20260801T140000Z__codex-grader-sol-high__cccccccc"
     repeat = make_job(
         root, tmp_path, stage="grade", job_name=repeat_job, items=[student_item("g2")]
     )

@@ -457,11 +457,11 @@ def write_grading_artifacts(trial_dir: Path) -> None:
 
 
 def test_prior_gradings_by_key_collects_valid_gradings(tmp_path: Path) -> None:
-    config_path = write_config(tmp_path, GRADE_TOML, "codex-grader-high")
+    config_path = write_config(tmp_path, GRADE_TOML, "codex-grader-sol-high")
     grading_root = tmp_path / "grading"
     first = write_job(
         grading_root,
-        "20260731T000000Z__codex-grader-high__cccccccc",
+        "20260731T000000Z__codex-grader-sol-high__cccccccc",
         stage="grade",
         config_path=config_path,
         items=[make_item("g1", "C1/stu1/HW1", "i1"), make_item("g2", "C1/stu2/HW1", "i1")],
@@ -473,7 +473,7 @@ def test_prior_gradings_by_key_collects_valid_gradings(tmp_path: Path) -> None:
     write_trial(first, "g2__bad", task_name="g2", rewards={"reward": 0.0})
     second = write_job(
         grading_root,
-        "20260801T000000Z__codex-grader-high__cccccccc",
+        "20260801T000000Z__codex-grader-sol-high__cccccccc",
         stage="grade",
         config_path=config_path,
         items=[make_item("g1", "C1/stu1/HW1", "i1")],
@@ -531,11 +531,11 @@ def test_solve_contract_failure_counts_done(tmp_path: Path) -> None:
 
 def test_grading_doneness_requires_valid_result(tmp_path: Path) -> None:
     """An invalid grading result leaves the item not-done for regrading."""
-    config_path = write_config(tmp_path, GRADE_TOML, "codex-grader-high")
+    config_path = write_config(tmp_path, GRADE_TOML, "codex-grader-sol-high")
     jobs_root = tmp_path / "grading"
     job_dir = write_job(
         jobs_root,
-        "20260731T000000Z__codex-grader-high__cccccccc",
+        "20260731T000000Z__codex-grader-sol-high__cccccccc",
         stage="grade",
         config_path=config_path,
         items=[
@@ -596,17 +596,17 @@ def test_verified_solve_submissions(tmp_path: Path) -> None:
 
 def test_grading_jobs_are_not_solve_sources(tmp_path: Path) -> None:
     grade_toml = SOLVE_TOML.replace('"solve"', '"grade"').replace('"solver"', '"grader"')
-    config_path = write_config(tmp_path, grade_toml, "codex-grader-high")
+    config_path = write_config(tmp_path, grade_toml, "codex-grader-sol-high")
     jobs_root = tmp_path / "solving"
     job_dir = write_job(
         jobs_root,
-        "20260731T000000Z__codex-grader-high__cccccccc",
+        "20260731T000000Z__codex-grader-sol-high__cccccccc",
         stage="grade",
         config_path=config_path,
         items=[make_item("t1", "C1/HW1", "i1")],
     )
     write_trial(job_dir, "t1__abc1234", task_name="t1", submission_files={"a.md": "x"})
-    selection = verified_solve_submissions(jobs_root, "codex-grader-high")
+    selection = verified_solve_submissions(jobs_root, "codex-grader-sol-high")
     assert selection.submissions == [] and selection.skipped == []
 
 

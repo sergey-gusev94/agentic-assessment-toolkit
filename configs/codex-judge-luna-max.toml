@@ -1,0 +1,13 @@
+# Pinned Codex Luna final-judge configuration (docs/design.md,
+# decision 16 and "Experiment configs and config identity"). Run with
+# --context-from naming the initial grading config whose stored
+# gradings each judge task presents, plus --min-gradings. Any edit
+# here, to the judge prompt template, or to the selected rubric is a
+# new config identity by construction.
+stage = "grade"
+agent = "codex"
+model = "openai/gpt-5.6-luna"
+reasoning_effort = "max"
+prompt = "judge"
+rubric = "default"
+judge = true

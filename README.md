@@ -47,8 +47,8 @@ aat intake --all                             # build courses/ from dumps under r
 aat check-course --course PU_CHE597DS_S2026  # per course: re-run until clean
 aat ingest-submissions --all                 # build submissions/ from LMS exports
 aat solve --all --config codex-high          # solve every assignment of every course
-aat grade --from-solve codex-high --config codex-grader-high  # grade the agent's solutions
-aat grade --all --config codex-grader-high   # grade every student submission
+aat grade --from-solve codex-high --config codex-grader-sol-high  # grade the agent's solutions
+aat grade --all --config codex-grader-sol-high   # grade every student submission
 aat report                                   # tables + report.md under analysis/
 ```
 
@@ -117,6 +117,20 @@ writes the statistics tables, a Markdown report, and provenance into
 one timestamped directory under `analysis/` in the data root (`--out`
 moves the destination, which is never allowed inside this repository).
 See the [design](docs/design.md) for the full CLI contract.
+
+The committed initial-grader and final-judge configs form the same
+model-and-reasoning matrix:
+
+| Model and reasoning | Initial grader | Final judge |
+| --- | --- | --- |
+| Sol, high | `codex-grader-sol-high` | `codex-judge-sol-high` |
+| Luna, high | `codex-grader-luna-high` | `codex-judge-luna-high` |
+| Luna, max | `codex-grader-luna-max` | `codex-judge-luna-max` |
+| Terra, high | `codex-grader-terra-high` | `codex-judge-terra-high` |
+
+The judge model is independent of the initial grader model. Each judge
+run names the one initial-grader config whose stored results it consumes
+with `--context-from`, plus the required count with `--min-gradings`.
 
 ### Authentication for solving and grading
 
@@ -249,7 +263,7 @@ browse a whole stage — job directories are Harbor job directories, so the
 viewer works on the shared `solving/` and `grading/` parents too:
 
 ```bash
-harbor view ~/aat-data/grading/20260801T044338Z__codex-grader-high__44292e75
+harbor view ~/aat-data/grading/20260801T044338Z__codex-grader-sol-high__44292e75
 harbor view ~/aat-data/solving
 ```
 

@@ -27,7 +27,7 @@ FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 RESULT_FULL = FIXTURES_DIR / "harbor" / "result_full.json"
 
 SOLVE_JOB = "20260731T000000Z__codex-high__cccccccc"
-GRADE_JOB = "20260731T120000Z__codex-grader-high__cccccccc"
+GRADE_JOB = "20260731T120000Z__codex-grader-sol-high__cccccccc"
 RUBRIC_SHA = "ab" * 32
 
 # The exact column contract of the tidy tables (stage-3 spec); results.py,
@@ -108,7 +108,7 @@ def make_job(
     """A job directory with a run record, under the stage's parent by default."""
     parent = stage_dir if stage_dir is not None else ("solving" if stage == "solve" else "grading")
     toml, name = (
-        (SOLVE_TOML, "codex-high") if stage == "solve" else (GRADE_TOML, "codex-grader-high")
+        (SOLVE_TOML, "codex-high") if stage == "solve" else (GRADE_TOML, "codex-grader-sol-high")
     )
     config = load_config(write_config(scratch, toml, name))
     job_dir = root / parent / job_name
@@ -317,7 +317,7 @@ def test_full_shape_fixture_pins_every_consumed_field(tmp_path: Path) -> None:
     assert row["item_identity"] == "j" * 64
     assert row["course_id"] == "SYN_C1"
     assert row["assignment_id"] == "HW1"
-    assert row["config_name"] == "codex-grader-high"
+    assert row["config_name"] == "codex-grader-sol-high"
     assert row["config_identity"] == "c" * 64
     assert row["agent"] == "codex"
     assert row["model"] == "openai/gpt-5.6-sol"
@@ -363,7 +363,7 @@ def test_full_shape_fixture_pins_every_consumed_field(tmp_path: Path) -> None:
     assert first["trial_name"] == "SYN_C1__stu1__HW1__full1aa"
     assert first["item_id"] == "SYN_C1/stu1/HW1"
     assert first["item_identity"] == "j" * 64
-    assert first["config_name"] == "codex-grader-high"
+    assert first["config_name"] == "codex-grader-sol-high"
     assert first["config_identity"] == "c" * 64
     assert first["title"] == "criterion slope"
 
@@ -802,7 +802,7 @@ def judge_item(task: str) -> RunRecordItem:
         input_hashes={"rubric": RUBRIC_SHA, "prior_gradings": "2" * 64},
         submission_source="student",
         student_id="stu1",
-        context_config_name="codex-grader-high",
+        context_config_name="codex-grader-sol-high",
         context_config_identity="e" * 64,
         prior_trials=(
             PriorTrialRef(job_name=GRADE_JOB, trial_name="g1__t1"),
@@ -830,7 +830,7 @@ def test_judge_lineage_loads_into_trials(tmp_path: Path) -> None:
         )
     trials = load_results(root).trials
     judge_row = trials[trials["trial_name"] == "jt__t1"].iloc[0]
-    assert judge_row["context_config_name"] == "codex-grader-high"
+    assert judge_row["context_config_name"] == "codex-grader-sol-high"
     assert judge_row["context_config_identity"] == "e" * 64
     assert judge_row["n_prior_gradings"] == 2
     assert judge_row["prior_trials"] == f"{GRADE_JOB}/g1__t1; {GRADE_JOB}/g1__t2"
@@ -851,7 +851,7 @@ def judge_item_over(task: str, identity: str, prior_trial_names: list[str]) -> R
         input_hashes={"rubric": RUBRIC_SHA},
         submission_source="student",
         student_id="stu1",
-        context_config_name="codex-grader-high",
+        context_config_name="codex-grader-sol-high",
         context_config_identity="e" * 64,
         prior_trials=tuple(
             PriorTrialRef(job_name=GRADE_JOB, trial_name=name) for name in prior_trial_names

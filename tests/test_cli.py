@@ -66,7 +66,7 @@ def solve_config(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def grade_config(tmp_path: Path) -> Path:
-    return write_config(tmp_path, GRADE_TOML, "codex-grader-high")
+    return write_config(tmp_path, GRADE_TOML, "codex-grader-sol-high")
 
 
 def run_cli(*args: str) -> int:
@@ -1032,7 +1032,7 @@ def test_report_out_elsewhere_is_honored_with_filters(data_root: Path, tmp_path:
             "--config",
             "codex-high",
             "--config",
-            "codex-grader-high",
+            "codex-grader-sol-high",
             "--seed",
             "7",
         )
@@ -1046,7 +1046,7 @@ def test_report_out_elsewhere_is_honored_with_filters(data_root: Path, tmp_path:
     assert provenance["filters"] == {
         "courses": [COURSE_ID],
         "assignments": ["HW1"],
-        "configs": ["codex-high", "codex-grader-high"],
+        "configs": ["codex-high", "codex-grader-sol-high"],
     }
 
 
@@ -1556,7 +1556,7 @@ def test_judge_flow(
     out = capsys.readouterr().out
     assert (
         f"skipping {COURSE_ID}/stu1/HW1: 1 of 2 required prior grading(s) "
-        f"under config 'codex-grader-high'" in out
+        f"under config 'codex-grader-sol-high'" in out
     )
     assert f"--submissions {submission} --repeats 2" in out
     assert "nothing to do: 0 item(s)" in out
@@ -1587,7 +1587,7 @@ def test_judge_flow(
     record = json.loads((judge_jobs[0] / "aat-run.json").read_text(encoding="utf-8"))
     item = record["items"][0]
     assert record["config"]["judge"] is True
-    assert item["context_config_name"] == "codex-grader-high"
+    assert item["context_config_name"] == "codex-grader-sol-high"
     assert len(item["prior_trials"]) == 2
     assert {ref["trial_name"] for ref in item["prior_trials"]} == {"graded__t1", "graded__t2"}
     assert "prior_gradings" in item["input_hashes"]

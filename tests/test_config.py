@@ -64,6 +64,31 @@ def test_judge_config_loads(tmp_path: Path) -> None:
     assert load_config(write_config(tmp_path, GRADE_TOML)).judge is False
 
 
+@pytest.mark.parametrize(
+    ("grader_name", "judge_name"),
+    [
+        ("codex-grader-sol-high", "codex-judge-sol-high"),
+        ("codex-grader-luna-high", "codex-judge-luna-high"),
+        ("codex-grader-luna-max", "codex-judge-luna-max"),
+        ("codex-grader-terra-high", "codex-judge-terra-high"),
+    ],
+)
+def test_committed_judge_configs_match_initial_graders(grader_name: str, judge_name: str) -> None:
+    configs_dir = Path(__file__).parents[1] / "configs"
+    grader = load_config(configs_dir / f"{grader_name}.toml")
+    judge = load_config(configs_dir / f"{judge_name}.toml")
+
+    assert judge.stage == grader.stage == "grade"
+    assert judge.agent == grader.agent
+    assert judge.model == grader.model
+    assert judge.reasoning_effort == grader.reasoning_effort
+    assert judge.rubric_name == grader.rubric_name
+    assert grader.prompt_name == "grader"
+    assert grader.judge is False
+    assert judge.prompt_name == "judge"
+    assert judge.judge is True
+
+
 def test_judge_key_must_be_boolean(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="'judge' must be a boolean"):
         load_config(write_config(tmp_path, GRADE_TOML + 'judge = "yes"\n'))
