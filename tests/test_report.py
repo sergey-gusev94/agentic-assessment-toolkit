@@ -166,9 +166,9 @@ def test_report_md_sections_and_benchmark_prose(tmp_path: Path) -> None:
         in report
     )
     # The per-assignment means table is always printed; the lone solve
-    # trial scores base 80, score 100, and has no spread. The rubric
+    # trial scores 100 including bonus and has no spread. The rubric
     # version it was graded against is named beside the assignment.
-    assert "| HW1 | abababab | 1 | 1 | 80.00 |  | 100.00 |" in report
+    assert "| HW1 | abababab | 1 | 1 | 100.00 |  |" in report
     # One assignment is below the cluster gate: the explicit note
     # replaces the interval, and coverage is stated.
     assert "fewer than the 5 the bootstrap needs" in report
@@ -211,7 +211,7 @@ def test_review_queue_section_renders_flagged_rows() -> None:
         )
     )
     section = "\n\n".join(_review_queue_section(queue))
-    assert "1 with a final-judge grading, 1 of those outside the initial range" in section
+    assert "1 with a final-judge grading, 1 of those outside their complete prior range" in section
     assert "1 row(s) with an initial score range above 20" in section
     for column in _REVIEW_TABLE_COLUMNS:
         assert f" {column} " in section
@@ -378,7 +378,7 @@ def test_consistency_section_lists_a_flagged_repeat_group(tmp_path: Path) -> Non
     repeat = make_job(
         root, tmp_path, stage="grade", job_name=repeat_job, items=[student_item("g2")]
     )
-    # The same student item as build_root's g2 (base 80), regraded at 0.
+    # The same student item as build_root's g2 (score 100), regraded at 0.
     data = grading_data([criterion("a", 0.0, 5.0), criterion("b", 0.0, 2.0, bonus=True)])
     write_trial(
         repeat,
@@ -390,11 +390,11 @@ def test_consistency_section_lists_a_flagged_repeat_group(tmp_path: Path) -> Non
     report_dir = run_report(root)
     report = (report_dir / "report.md").read_text(encoding="utf-8")
     assert "1 of 1 repeated item(s) flagged; 2 grading(s) deviate more than 10 points" in report
-    assert "| 0; 80 |" in report  # the score list, sorted ascending
+    assert "| 0; 100 |" in report  # the score list, sorted ascending
     assert f"{GRADE_JOB}/g2__t1; {repeat_job}/g2__t2" in report
     body = [line for line in csv_lines(report_dir, "repeat_consistency.csv")[1:] if line]
     assert len(body) == 1
-    assert "0; 80" in body[0]
+    assert "0; 100" in body[0]
     assert "True" in body[0]  # range_flagged
     # Flag only: both gradings still enter the student aggregates.
     students = [line for line in csv_lines(report_dir, "students.csv")[1:] if line]

@@ -62,9 +62,8 @@ _ASSIGNMENT_TABLE_COLUMNS = (
     "rubric",
     "n_solve_trials",
     "n_gradings",
-    "mean_base_pct",
-    "sd_base_pct",
     "mean_score_pct",
+    "sd_score_pct",
 )
 
 # The near-timeout table drops the config identity, whose full hash
@@ -91,9 +90,9 @@ _CONSISTENCY_TABLE_COLUMNS = (
     "item_id",
     "rubric",
     "n_gradings",
-    "base_pct_values",
-    "median_base_pct",
-    "range_base_pct",
+    "score_pct_values",
+    "median_score_pct",
+    "range_score_pct",
     "n_deviant_gradings",
     "deviant_trials",
 )
@@ -310,8 +309,8 @@ def _benchmark_section(by_assignment: pd.DataFrame, by_course: pd.DataFrame) -> 
         "Scores follow the fixed ladder: grading repeats of one solve trial "
         "average to a per-solve-trial score, solve trials average to the "
         "per-assignment score, and assignments macro-average — each weighing "
-        "equally — to the course score. `base_pct` (0-100, bonus excluded) is "
-        "the primary comparison metric; `score_pct` includes bonus points. One "
+        "equally — to the course score. `score_pct` is the bonus-inclusive "
+        "gradebook score and can exceed 100. One "
         "subsection per (solver config, grading config, course)."
     )
     for _, row in by_course.iterrows():
@@ -321,7 +320,7 @@ def _benchmark_section(by_assignment: pd.DataFrame, by_course: pd.DataFrame) -> 
         subset = by_assignment[_ladder_mask(by_assignment, row)]
         parts.append(
             "Per-assignment means (`n_solve_trials` graded solve trials, "
-            "`n_gradings` gradings; `sd_base_pct` is the spread across "
+            "`n_gradings` gradings; `sd_score_pct` is the spread across "
             "per-solve-trial means). `rubric` is the first 8 characters of the "
             "sha256 of the rubric version graded against — an assignment whose "
             "rubric was revised appears once per version, never averaged across "
@@ -338,9 +337,8 @@ def _benchmark_section(by_assignment: pd.DataFrame, by_course: pd.DataFrame) -> 
             )
         else:
             macro = (
-                f"Course macro-mean over {row['n_assignments']} assignment(s): "
-                f"`base_pct` {_cell(row['macro_mean_base_pct'])}, "
-                f"`score_pct` {_cell(row['macro_mean_score_pct'])}."
+                f"Course macro-mean `score_pct` over {row['n_assignments']} "
+                f"assignment(s): {_cell(row['macro_mean_score_pct'])}."
             )
             if pd.isna(row["ci_low"]):
                 macro += (
@@ -350,7 +348,7 @@ def _benchmark_section(by_assignment: pd.DataFrame, by_course: pd.DataFrame) -> 
                 )
             else:
                 macro += (
-                    f" 95% confidence interval for the macro-mean `base_pct`: "
+                    f" 95% confidence interval for the macro-mean `score_pct`: "
                     f"{_cell(row['ci_low'])} to {_cell(row['ci_high'])} (percentile "
                     "bootstrap over assignments; seed in provenance.json)."
                 )
@@ -381,7 +379,7 @@ def _judge_section(judge: pd.DataFrame) -> list[str]:
         "One row per grading config over its grading trials, pseudo-students "
         "included — judge quality is about the judge. A valid grading is a "
         "completed grading trial with a score (`n_valid_gradings`). Repeat "
-        "stability is the within-item SD and range of `base_pct` over items "
+        "stability is the within-item SD and range of `score_pct` over items "
         "graded more than once (`n_items_repeated`); per-criterion agreement "
         "compares the criterion ids both gradings of a repeat pair share."
     )
@@ -418,7 +416,7 @@ def _consistency_section(consistency: pd.DataFrame) -> list[str]:
     parts.append(
         "One row per repeated item: the same submission graded more than "
         "once under one grading config and rubric version. A group is "
-        f"flagged when its `base_pct` range exceeds "
+        f"flagged when its `score_pct` range exceeds "
         f"{metrics.REPEAT_RANGE_FLAG_PCT:g} percentage points; a single "
         "grading is flagged when it deviates more than "
         f"{metrics.REPEAT_DEVIATION_FLAG_PCT:g} points from its group "
@@ -450,13 +448,18 @@ _REVIEW_TABLE_COLUMNS = (
     "assignment_id",
     "student_id",
     "rubric",
-    "n_gradings",
-    "base_pct_values",
-    "median_base_pct",
-    "range_base_pct",
-    "final_base_pct",
+    "n_initial_gradings",
+    "initial_score_pct_values",
+    "initial_range_score_pct",
     "n_prior_gradings",
+    "prior_score_pct_values",
+    "prior_range_score_pct",
+    "final_score_pct",
     "final_outside_range",
+    "final_distance_outside_range_pct",
+    "n_unseen_initial_gradings",
+    "n_missing_prior_gradings",
+    "review_reasons",
 )
 
 
@@ -468,30 +471,41 @@ def _review_queue_section(queue: pd.DataFrame) -> list[str]:
     parts.append(
         "The human-review navigation table: one row per graded submission "
         "under one initial grading config (single gradings included), "
-        "sorted by score disagreement, biggest first. Rows carry the exact "
+        "sorted with final scores outside the judge's prior range first, "
+        "farthest outside first, then by complete initial-score range. Rows carry the exact "
         "trial names and per-trial justification paths (relative to the "
         "data root; a final-judge trial's feedback document sits beside "
         "its justification as feedback.md), so a row opens in one step — "
         "`harbor view <data-root>/grading/<job>` browses a named job. "
-        "Where a final-judge grading exists, `final_base_pct` is its "
-        "score (the median when the judge graded the item more than "
-        "once) and `final_outside_range` marks a final score outside the "
-        "initial scores' span — not evidence the judge is wrong, but "
-        "exactly what a human should read, since the judge did the most "
-        "interpretive work there. Advisory only: nothing here excludes "
+        "The `initial_*` fields describe every currently loaded initial "
+        "grading; the `prior_*` fields describe exactly what the final judge "
+        "saw. An outside-range decision is left empty unless all recorded "
+        "prior results resolve to one initial group and their count agrees. "
+        "`final_distance_outside_range_pct` measures the distance beyond the "
+        "nearest prior boundary. `review_reasons` also identifies wide initial "
+        "ranges, initial gradings absent from the judge context, missing prior "
+        "results, and unresolved lineage. Advisory only: nothing here excludes "
         "any grading from any aggregate. The full table is "
         "review_queue.csv."
     )
     outside = queue["final_outside_range"].fillna(False).astype(bool)
-    wide = (queue["range_base_pct"] > metrics.REPEAT_RANGE_FLAG_PCT).fillna(False).astype(bool)
+    wide = (
+        (queue["initial_range_score_pct"] > metrics.REPEAT_RANGE_FLAG_PCT)
+        .fillna(False)
+        .astype(bool)
+    )
+    unseen = queue["n_unseen_initial_gradings"].fillna(0).gt(0)
+    missing = queue["n_missing_prior_gradings"].fillna(0).gt(0)
     n_final = int(queue["n_final_gradings"].gt(0).sum())
     parts.append(
         f"{len(queue)} row(s); {n_final} with a final-judge grading, "
-        f"{int(outside.sum())} of those outside the initial range; "
+        f"{int(outside.sum())} of those outside their complete prior range; "
         f"{int(wide.sum())} row(s) with an initial score range above "
-        f"{metrics.REPEAT_RANGE_FLAG_PCT:g} points."
+        f"{metrics.REPEAT_RANGE_FLAG_PCT:g} points; {int(unseen.sum())} with "
+        f"initial gradings absent from the judge context; {int(missing.sum())} "
+        "with recorded prior results unavailable."
     )
-    flagged = queue[outside | wide]
+    flagged = queue[queue["review_reasons"].notna()]
     if flagged.empty:
         parts.append("No row is flagged; the full queue is in review_queue.csv.")
     else:
@@ -507,7 +521,7 @@ def _checks_section(checks: pd.DataFrame) -> list[str]:
     parts.append(
         "Known submissions graded as pseudo-students, one row per grading "
         "config, course, assignment, pseudo-student, and rubric version. "
-        "Advisory thresholds on `base_pct`: a "
+        "Advisory thresholds on `score_pct`: a "
         "reference solution should grade at or above 95, an irrelevant "
         "submission at or below 5. The numbers are raw — nothing here is a "
         "machine pass or fail."

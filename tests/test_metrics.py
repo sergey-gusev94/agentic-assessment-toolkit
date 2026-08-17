@@ -44,9 +44,8 @@ ASSIGNMENT_COLUMNS = [
     "rubric_sha256",
     "n_solve_trials",
     "n_gradings",
-    "mean_base_pct",
-    "sd_base_pct",
     "mean_score_pct",
+    "sd_score_pct",
 ]
 
 COURSE_COLUMNS = [
@@ -58,7 +57,6 @@ COURSE_COLUMNS = [
     "n_assignments",
     "n_assignments_mixed_rubric",
     "n_assignments_total",
-    "macro_mean_base_pct",
     "macro_mean_score_pct",
     "ci_low",
     "ci_high",
@@ -98,8 +96,6 @@ STUDENT_COLUMNS = [
     "n_valid_gradings",
     "mean_score_pct",
     "sd_score_pct",
-    "mean_base_pct",
-    "sd_base_pct",
     "n_failed_gradings",
     "n_superseded",
     "n_sums_inconsistent",
@@ -130,10 +126,9 @@ CHECK_COLUMNS = [
     "rubric_sha256",
     "role",
     "n_valid_gradings",
-    "mean_base_pct",
-    "min_base_pct",
-    "max_base_pct",
     "mean_score_pct",
+    "min_score_pct",
+    "max_score_pct",
 ]
 
 FAILURE_COLUMNS = ["stage", "config_name", "config_identity", "outcome", "n_trials", "share"]
@@ -149,9 +144,9 @@ CONSISTENCY_COLUMNS = [
     "submission_source",
     "rubric_sha256",
     "n_gradings",
-    "base_pct_values",
-    "median_base_pct",
-    "range_base_pct",
+    "score_pct_values",
+    "median_score_pct",
+    "range_score_pct",
     "range_flagged",
     "n_deviant_gradings",
     "deviant_trials",
@@ -167,20 +162,31 @@ REVIEW_QUEUE_COLUMNS = [
     "student_id",
     "submission_source",
     "rubric_sha256",
-    "n_gradings",
-    "base_pct_values",
-    "median_base_pct",
-    "range_base_pct",
-    "trials",
-    "justification_paths",
+    "n_initial_gradings",
+    "initial_score_pct_values",
+    "initial_median_score_pct",
+    "initial_range_score_pct",
+    "initial_trials",
+    "initial_justification_paths",
     "judge_config_name",
     "judge_config_identity",
     "n_final_gradings",
-    "final_base_pct",
     "final_score_pct",
     "n_prior_gradings",
+    "n_resolved_prior_gradings",
+    "n_missing_prior_gradings",
+    "prior_score_pct_values",
+    "prior_min_score_pct",
+    "prior_max_score_pct",
+    "prior_range_score_pct",
+    "prior_trials",
+    "prior_justification_paths",
+    "n_unseen_initial_gradings",
+    "unseen_initial_trials",
     "final_outside_range",
+    "final_distance_outside_range_pct",
     "final_trials",
+    "review_reasons",
 ]
 
 NEAR_TIMEOUT_COLUMNS = [
@@ -405,16 +411,14 @@ def test_grades_by_assignment_ladder_arithmetic() -> None:
     assert hw1["grading_config_identity"] == "G"
     assert hw1["n_solve_trials"] == 2
     assert hw1["n_gradings"] == 3
-    assert float(hw1["mean_base_pct"]) == pytest.approx(77.5)  # mean of 85 and 70
-    assert float(hw1["sd_base_pct"]) == pytest.approx(112.5**0.5)  # SD of [85, 70], ddof=1
     assert float(hw1["mean_score_pct"]) == pytest.approx(87.5)  # mean of 95 and 80
+    assert float(hw1["sd_score_pct"]) == pytest.approx(112.5**0.5)  # SD of [95, 80]
 
     hw2 = row_where(table, "assignment_id", "HW2")
     assert hw2["n_solve_trials"] == 1
     assert hw2["n_gradings"] == 1
-    assert float(hw2["mean_base_pct"]) == 50.0
-    assert pd.isna(hw2["sd_base_pct"])  # one solve trial: no spread
     assert float(hw2["mean_score_pct"]) == 60.0
+    assert pd.isna(hw2["sd_score_pct"])  # one solve trial: no spread
 
 
 def test_grades_by_assignment_never_pools_across_identities() -> None:
@@ -429,7 +433,7 @@ def test_grades_by_assignment_never_pools_across_identities() -> None:
     # Same item id under two identities is two solve trials: the mean is
     # (80 + 100) / 2, not the pooled (80 + 80 + 100) / 3.
     assert row["n_solve_trials"] == 2
-    assert float(row["mean_base_pct"]) == pytest.approx(90.0)
+    assert float(row["mean_score_pct"]) == pytest.approx(90.0)
 
 
 def test_grades_by_assignment_keeps_na_solver_keys() -> None:
@@ -445,7 +449,7 @@ def test_grades_by_assignment_keeps_na_solver_keys() -> None:
     unknown = table.iloc[1]
     assert pd.isna(unknown["solver_config_name"])
     assert pd.isna(unknown["solver_config_identity"])
-    assert float(unknown["mean_base_pct"]) == 60.0
+    assert float(unknown["mean_score_pct"]) == 60.0
 
 
 def ladder_rows() -> list[dict[str, object]]:
@@ -477,7 +481,6 @@ def test_grades_by_course_macro_average_and_coverage() -> None:
     assert row["course_id"] == "C1"
     assert row["n_assignments"] == 2
     assert row["n_assignments_total"] == 3  # "2 of 3 assignments" coverage
-    assert float(row["macro_mean_base_pct"]) == pytest.approx(63.75)  # (77.5 + 50) / 2
     assert float(row["macro_mean_score_pct"]) == pytest.approx(73.75)  # (87.5 + 60) / 2
     # Below MIN_BOOTSTRAP_CLUSTERS assignments there is no interval.
     assert pd.isna(row["ci_low"])
@@ -514,7 +517,7 @@ def test_grades_by_course_bootstrap_is_seeded_and_gated() -> None:
     trials = bootstrap_trials((60.0, 70.0, 80.0, 90.0, 100.0))
     row = metrics.grades_by_course(trials, seed=42).iloc[0]
     assert row["n_assignments"] == 5  # exactly at the cluster gate
-    assert float(row["macro_mean_base_pct"]) == pytest.approx(80.0)
+    assert float(row["macro_mean_score_pct"]) == pytest.approx(80.0)
     assert 60.0 <= float(row["ci_low"]) < 80.0 < float(row["ci_high"]) <= 100.0
     # Deterministic: the same seed reproduces the interval exactly.
     again = metrics.grades_by_course(trials, seed=42).iloc[0]
@@ -703,8 +706,6 @@ def test_student_grades_per_student_means_and_flags() -> None:
     assert stu1["n_valid_gradings"] == 3
     assert float(stu1["mean_score_pct"]) == pytest.approx(90.0)  # mean of [90, 100, 80]
     assert float(stu1["sd_score_pct"]) == pytest.approx(10.0)
-    assert float(stu1["mean_base_pct"]) == pytest.approx(80.0)  # mean of [80, 90, 70]
-    assert float(stu1["sd_base_pct"]) == pytest.approx(10.0)
     assert stu1["n_failed_gradings"] == 1
     assert stu1["n_superseded"] == 0
     assert stu1["n_sums_inconsistent"] == 1
@@ -715,7 +716,6 @@ def test_student_grades_per_student_means_and_flags() -> None:
     assert stu2["n_valid_gradings"] == 1
     assert float(stu2["mean_score_pct"]) == 50.0
     assert pd.isna(stu2["sd_score_pct"])  # one grading: no repeat SD
-    assert float(stu2["mean_base_pct"]) == 40.0
     assert stu2["n_failed_gradings"] == 0
 
 
@@ -762,14 +762,13 @@ def test_grader_checks_roles_and_raw_numbers() -> None:
 
     reference = row_where(table, "student_id", "_reference")
     assert reference["n_valid_gradings"] == 2
-    assert float(reference["mean_base_pct"]) == pytest.approx(97.0)
-    assert float(reference["min_base_pct"]) == 96.0
-    assert float(reference["max_base_pct"]) == 98.0
     assert float(reference["mean_score_pct"]) == pytest.approx(99.0)
+    assert float(reference["min_score_pct"]) == 98.0
+    assert float(reference["max_score_pct"]) == 100.0
 
     irrelevant = row_where(table, "student_id", "_irrelevant")
     assert irrelevant["n_valid_gradings"] == 1
-    assert float(irrelevant["mean_base_pct"]) == 3.0
+    assert float(irrelevant["mean_score_pct"]) == 3.0
 
 
 def repeated(value: float, name: str, item: str = "X", **over: object) -> dict[str, object]:
@@ -810,15 +809,15 @@ def test_repeat_consistency_flags_ranges_and_deviant_runs() -> None:
     x = row_where(table, "item_id", "X")
     assert x["config_name"] == "grader"
     assert x["n_gradings"] == 5
-    assert x["base_pct_values"] == "8; 90; 92; 95; 97"
-    assert float(x["median_base_pct"]) == 92.0
-    assert float(x["range_base_pct"]) == 89.0
+    assert x["score_pct_values"] == "8; 90; 92; 95; 97"
+    assert float(x["median_score_pct"]) == 92.0
+    assert float(x["range_score_pct"]) == 89.0
     assert bool(x["range_flagged"]) is True
     assert x["n_deviant_gradings"] == 1
     assert x["deviant_trials"] == "J/x2"
 
     v = row_where(table, "item_id", "V")
-    assert float(v["range_base_pct"]) == 15.0
+    assert float(v["range_score_pct"]) == 15.0
     assert bool(v["range_flagged"]) is False
     assert v["n_deviant_gradings"] == 1
     assert v["deviant_trials"] == "J/v3"
@@ -826,9 +825,9 @@ def test_repeat_consistency_flags_ranges_and_deviant_runs() -> None:
     y = row_where(table, "item_id", "Y")
     assert y["student_id"] == "stu1"
     assert y["rubric_sha256"] == "ab" * 32
-    assert y["base_pct_values"] == "80; 85"
-    assert float(y["median_base_pct"]) == 82.5
-    assert float(y["range_base_pct"]) == 5.0
+    assert y["score_pct_values"] == "80; 85"
+    assert float(y["median_score_pct"]) == 82.5
+    assert float(y["range_score_pct"]) == 5.0
     assert bool(y["range_flagged"]) is False
     assert y["n_deviant_gradings"] == 0
     assert pd.isna(y["deviant_trials"])
@@ -838,7 +837,7 @@ def test_repeat_consistency_thresholds_are_strict() -> None:
     # Exactly at the thresholds — range 20, deviations 10 — nothing flags.
     trials = trials_frame([repeated(60.0, "b1", item="B"), repeated(80.0, "b2", item="B")])
     row = metrics.repeat_consistency(trials).iloc[0]
-    assert float(row["range_base_pct"]) == 20.0
+    assert float(row["range_score_pct"]) == 20.0
     assert bool(row["range_flagged"]) is False
     assert row["n_deviant_gradings"] == 0
 
@@ -860,7 +859,7 @@ def judged(value: float, name: str, item: str = "X", **over: object) -> dict[str
     return graded(value, value, **row)
 
 
-def test_review_queue_sorts_by_disagreement_and_includes_singles() -> None:
+def test_review_queue_sorts_by_initial_disagreement_and_includes_singles() -> None:
     trials = trials_frame(
         [
             repeated(90.0, "x1"),
@@ -876,17 +875,18 @@ def test_review_queue_sorts_by_disagreement_and_includes_singles() -> None:
     # Singles included (unlike repeat_consistency); failed gradings not.
     assert list(table["item_id"]) == ["X", "Y", "Z"]  # range 30, 5, 0
     x = table.iloc[0]
-    assert x["n_gradings"] == 2
-    assert x["base_pct_values"] == "60; 90"
-    assert float(x["range_base_pct"]) == 30.0
-    assert x["trials"] == "J/x1; J/x2"
-    assert x["justification_paths"] == (
+    assert x["n_initial_gradings"] == 2
+    assert x["initial_score_pct_values"] == "60; 90"
+    assert float(x["initial_range_score_pct"]) == 30.0
+    assert x["initial_trials"] == "J/x1; J/x2"
+    assert x["initial_justification_paths"] == (
         "grading/J/x1/artifacts/app/grading_output/justification.md; "
         "grading/J/x2/artifacts/app/grading_output/justification.md"
     )
     assert x["n_final_gradings"] == 0
-    assert pd.isna(x["final_base_pct"])
+    assert pd.isna(x["final_score_pct"])
     assert pd.isna(x["final_outside_range"])
+    assert x["review_reasons"] == "wide_initial_range"
 
 
 def test_review_queue_joins_final_judge_through_lineage() -> None:
@@ -907,9 +907,16 @@ def test_review_queue_joins_final_judge_through_lineage() -> None:
     x = row_where(table, "item_id", "X")
     assert x["judge_config_name"] == "judge"
     assert x["n_final_gradings"] == 1
-    assert float(x["final_base_pct"]) == 75.0
+    assert float(x["final_score_pct"]) == 75.0
     assert x["n_prior_gradings"] == 2
+    assert x["n_resolved_prior_gradings"] == 2
+    assert x["n_missing_prior_gradings"] == 0
+    assert x["prior_score_pct_values"] == "60; 90"
+    assert float(x["prior_min_score_pct"]) == 60.0
+    assert float(x["prior_max_score_pct"]) == 90.0
+    assert float(x["prior_range_score_pct"]) == 30.0
     assert bool(x["final_outside_range"]) is False
+    assert float(x["final_distance_outside_range_pct"]) == 0.0
     assert x["final_trials"] == "J/jx"
     y = row_where(table, "item_id", "Y")
     assert bool(y["final_outside_range"]) is True
@@ -927,8 +934,73 @@ def test_review_queue_final_is_median_over_repeated_judgings() -> None:
     )
     row = metrics.review_queue(trials).iloc[0]
     assert row["n_final_gradings"] == 3
-    assert float(row["final_base_pct"]) == 74.0
+    assert float(row["final_score_pct"]) == 74.0
     assert bool(row["final_outside_range"]) is True  # 74 < min(80, 90)
+    assert float(row["final_distance_outside_range_pct"]) == 6.0
+
+
+def test_review_queue_prioritizes_outside_distance_before_initial_range() -> None:
+    trials = trials_frame(
+        [
+            repeated(20.0, "a1", item="A"),
+            repeated(80.0, "a2", item="A"),
+            judged(50.0, "ja", item="A"),  # inside a 60-point range
+            repeated(80.0, "b1", item="B"),
+            repeated(85.0, "b2", item="B"),
+            judged(95.0, "jb", item="B"),  # 10 points outside
+            repeated(50.0, "c1", item="C"),
+            repeated(60.0, "c2", item="C"),
+            judged(80.0, "jc", item="C"),  # 20 points outside
+        ]
+    )
+    table = metrics.review_queue(trials)
+    assert list(table["item_id"]) == ["C", "B", "A"]
+    assert list(table["final_distance_outside_range_pct"]) == [20.0, 10.0, 0.0]
+
+
+def test_bonus_only_score_disagreement_enters_consistency_and_review() -> None:
+    trials = trials_frame(
+        [
+            graded(80.0, 80.0, trial_name="x1", item_id="X", item_identity="X-id"),
+            graded(80.0, 105.0, trial_name="x2", item_id="X", item_identity="X-id"),
+        ]
+    )
+    consistency = metrics.repeat_consistency(trials).iloc[0]
+    assert consistency["score_pct_values"] == "80; 105"
+    assert float(consistency["range_score_pct"]) == 25.0
+    assert bool(consistency["range_flagged"]) is True
+    review = metrics.review_queue(trials).iloc[0]
+    assert review["initial_score_pct_values"] == "80; 105"
+    assert review["review_reasons"] == "wide_initial_range"
+
+
+def test_review_queue_requires_every_recorded_prior_to_resolve() -> None:
+    trials = trials_frame([repeated(90.0, "x1"), judged(95.0, "jx")])
+    row = metrics.review_queue(trials).iloc[0]
+    assert row["n_resolved_prior_gradings"] == 1
+    assert row["n_missing_prior_gradings"] == 1
+    assert pd.isna(row["prior_min_score_pct"])
+    assert pd.isna(row["final_outside_range"])
+    assert pd.isna(row["final_distance_outside_range_pct"])
+    assert row["review_reasons"] == "missing_prior_results; unresolved_prior_lineage"
+
+
+def test_review_queue_rejects_prior_trials_from_different_groups() -> None:
+    judge = judged(95.0, "jx", prior_trials="J/x1; J/y1")
+    trials = trials_frame([repeated(90.0, "x1"), repeated(80.0, "y1", item="Y"), judge])
+    table = metrics.review_queue(trials)
+    assert len(table) == 3
+    row = table[table["judge_config_name"].notna()].iloc[0]
+    assert row["n_resolved_prior_gradings"] == 2
+    assert pd.isna(row["final_outside_range"])
+    assert row["review_reasons"] == ("unresolved_prior_lineage; final_without_loaded_initial_group")
+
+
+def test_review_queue_range_boundaries_are_inside() -> None:
+    trials = trials_frame([repeated(60.0, "x1"), repeated(90.0, "x2"), judged(90.0, "jx")])
+    row = metrics.review_queue(trials).iloc[0]
+    assert bool(row["final_outside_range"]) is False
+    assert float(row["final_distance_outside_range_pct"]) == 0.0
 
 
 def test_review_queue_outside_range_uses_the_judged_priors_span() -> None:
@@ -944,8 +1016,18 @@ def test_review_queue_outside_range_uses_the_judged_priors_span() -> None:
         ]
     )
     row = metrics.review_queue(trials).iloc[0]
-    assert float(row["final_base_pct"]) == 93.0
+    assert float(row["final_score_pct"]) == 93.0
     assert bool(row["final_outside_range"]) is True
+    assert row["n_initial_gradings"] == 3
+    assert row["n_prior_gradings"] == 2
+    assert row["n_unseen_initial_gradings"] == 1
+    assert row["unseen_initial_trials"] == "J/x3"
+    assert row["prior_score_pct_values"] == "60; 90"
+    assert float(row["prior_range_score_pct"]) == 30.0
+    assert float(row["initial_range_score_pct"]) == 35.0
+    assert row["review_reasons"] == (
+        "final_outside_prior_range; wide_initial_range; initial_not_in_judge_context"
+    )
 
 
 def test_review_queue_ignores_superseded_judgments() -> None:
@@ -960,7 +1042,7 @@ def test_review_queue_ignores_superseded_judgments() -> None:
     table = metrics.review_queue(trials)
     assert len(table) == 1
     row = table.iloc[0]
-    assert float(row["final_base_pct"]) == 70.0
+    assert float(row["final_score_pct"]) == 70.0
     assert row["final_trials"] == "J/j_new"
 
 
@@ -1008,11 +1090,16 @@ def test_review_queue_unmatched_judge_is_a_standalone_row() -> None:
     row = table.iloc[0]
     assert row["config_name"] == "grader"
     assert row["config_identity"] == "G"
-    assert row["n_gradings"] == 0
-    assert pd.isna(row["median_base_pct"])
+    assert row["n_initial_gradings"] == 0
+    assert pd.isna(row["initial_median_score_pct"])
     assert row["judge_config_name"] == "judge"
-    assert float(row["final_base_pct"]) == 75.0
+    assert float(row["final_score_pct"]) == 75.0
     assert pd.isna(row["final_outside_range"])
+    assert row["n_resolved_prior_gradings"] == 0
+    assert row["n_missing_prior_gradings"] == 2
+    assert row["review_reasons"] == (
+        "missing_prior_results; unresolved_prior_lineage; final_without_loaded_initial_group"
+    )
 
 
 def test_near_timeouts_counts_per_job_and_config() -> None:
@@ -1228,7 +1315,7 @@ def test_a_revised_rubric_never_averages_across_versions() -> None:
     )
     by_assignment = metrics.grades_by_assignment(trials)
     hw1 = by_assignment[by_assignment["assignment_id"] == "HW1"]
-    assert list(hw1["mean_base_pct"]) == [60.0, 90.0]
+    assert list(hw1["mean_score_pct"]) == [60.0, 90.0]
 
     course = metrics.grades_by_course(trials).iloc[0]
     # HW1 has no single score, so only HW2 enters the macro-mean — and
@@ -1236,4 +1323,4 @@ def test_a_revised_rubric_never_averages_across_versions() -> None:
     assert course["n_assignments"] == 1
     assert course["n_assignments_mixed_rubric"] == 1
     assert course["n_assignments_total"] == 2
-    assert float(course["macro_mean_base_pct"]) == pytest.approx(80.0)
+    assert float(course["macro_mean_score_pct"]) == pytest.approx(80.0)

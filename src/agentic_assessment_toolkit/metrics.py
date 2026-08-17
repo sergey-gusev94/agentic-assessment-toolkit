@@ -10,7 +10,7 @@ columns.
 Definitions used throughout (docs/design.md, denominator policy):
 
 - A **valid grading** is a trials row with stage ``grade``, outcome
-  ``completed``, a non-NA ``base_pct``, and no superseded flag (a final
+  ``completed``, a non-NA ``score_pct``, and no superseded flag (a final
   judgment replaced by a re-judge over more prior gradings is a valid
   measurement of an outdated item — excluded from score aggregates and
   counted per student, never silently dropped). Score statistics cover
@@ -56,7 +56,7 @@ BOOTSTRAP_CONFIDENCE = 0.95
 # the too-few-clusters note instead).
 MIN_BOOTSTRAP_CLUSTERS = 5
 
-# Cross-run consistency thresholds, in percentage points of base_pct: a
+# Cross-run consistency thresholds, in percentage points of score_pct: a
 # repeated item is flagged when its score range exceeds the first, an
 # individual grading when it deviates from the group median by more than
 # the second. Sized from observed schema-valid but wrong grades, whose
@@ -114,9 +114,8 @@ _ASSIGNMENT_DTYPES: dict[str, str] = {
     **dict.fromkeys(_ASSIGNMENT_KEYS, "string"),
     "n_solve_trials": "int64",
     "n_gradings": "int64",
-    "mean_base_pct": "Float64",
-    "sd_base_pct": "Float64",
     "mean_score_pct": "Float64",
+    "sd_score_pct": "Float64",
 }
 
 _COURSE_DTYPES: dict[str, str] = {
@@ -124,7 +123,6 @@ _COURSE_DTYPES: dict[str, str] = {
     "n_assignments": "int64",
     "n_assignments_mixed_rubric": "int64",
     "n_assignments_total": "int64",
-    "macro_mean_base_pct": "Float64",
     "macro_mean_score_pct": "Float64",
     "ci_low": "Float64",
     "ci_high": "Float64",
@@ -152,8 +150,6 @@ _STUDENT_DTYPES: dict[str, str] = {
     "n_valid_gradings": "int64",
     "mean_score_pct": "Float64",
     "sd_score_pct": "Float64",
-    "mean_base_pct": "Float64",
-    "sd_base_pct": "Float64",
     "n_failed_gradings": "int64",
     "n_superseded": "int64",
     "n_sums_inconsistent": "int64",
@@ -175,10 +171,9 @@ _CHECK_DTYPES: dict[str, str] = {
     **dict.fromkeys(_STUDENT_KEYS, "string"),
     "role": "string",
     "n_valid_gradings": "int64",
-    "mean_base_pct": "Float64",
-    "min_base_pct": "Float64",
-    "max_base_pct": "Float64",
     "mean_score_pct": "Float64",
+    "min_score_pct": "Float64",
+    "max_score_pct": "Float64",
 }
 
 _FAILURE_DTYPES: dict[str, str] = {
@@ -210,20 +205,31 @@ _REVIEW_DTYPES: dict[str, str] = {
     "student_id": "string",
     "submission_source": "string",
     "rubric_sha256": "string",
-    "n_gradings": "int64",
-    "base_pct_values": "string",
-    "median_base_pct": "Float64",
-    "range_base_pct": "Float64",
-    "trials": "string",
-    "justification_paths": "string",
+    "n_initial_gradings": "int64",
+    "initial_score_pct_values": "string",
+    "initial_median_score_pct": "Float64",
+    "initial_range_score_pct": "Float64",
+    "initial_trials": "string",
+    "initial_justification_paths": "string",
     "judge_config_name": "string",
     "judge_config_identity": "string",
     "n_final_gradings": "int64",
-    "final_base_pct": "Float64",
     "final_score_pct": "Float64",
     "n_prior_gradings": "Int64",
+    "n_resolved_prior_gradings": "Int64",
+    "n_missing_prior_gradings": "Int64",
+    "prior_score_pct_values": "string",
+    "prior_min_score_pct": "Float64",
+    "prior_max_score_pct": "Float64",
+    "prior_range_score_pct": "Float64",
+    "prior_trials": "string",
+    "prior_justification_paths": "string",
+    "n_unseen_initial_gradings": "Int64",
+    "unseen_initial_trials": "string",
     "final_outside_range": "boolean",
+    "final_distance_outside_range_pct": "Float64",
     "final_trials": "string",
+    "review_reasons": "string",
 }
 
 _CONSISTENCY_DTYPES: dict[str, str] = {
@@ -232,9 +238,9 @@ _CONSISTENCY_DTYPES: dict[str, str] = {
     "submission_source": "string",
     "rubric_sha256": "string",
     "n_gradings": "int64",
-    "base_pct_values": "string",
-    "median_base_pct": "Float64",
-    "range_base_pct": "Float64",
+    "score_pct_values": "string",
+    "median_score_pct": "Float64",
+    "range_score_pct": "Float64",
     "range_flagged": "bool",
     "n_deviant_gradings": "int64",
     "deviant_trials": "string",
@@ -282,7 +288,7 @@ def grades_by_assignment(trials: pd.DataFrame) -> pd.DataFrame:
 
     Grading repeats of one solve trial — one pooling key — average to a
     per-solve-trial score; solve trials average to the per-assignment
-    score, so repeat counts never weigh the mean. ``sd_base_pct`` is the
+    score, so repeat counts never weigh the mean. ``sd_score_pct`` is the
     spread across the per-solve-trial means (ddof=1, NA below two).
     """
     valid = trials[_valid_grading_mask(trials)]
@@ -293,16 +299,14 @@ def grades_by_assignment(trials: pd.DataFrame) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     for key, group in work.groupby(_ASSIGNMENT_KEYS, dropna=False, sort=True):
         per_trial = group.groupby(_POOLING_KEY, dropna=False, sort=True)
-        base_means = per_trial["base_pct"].mean()
         score_means = per_trial["score_pct"].mean()
         row: dict[str, object] = dict(zip(_ASSIGNMENT_KEYS, key, strict=True))
         row.update(
             {
-                "n_solve_trials": len(base_means),
+                "n_solve_trials": len(score_means),
                 "n_gradings": len(group),
-                "mean_base_pct": _mean(base_means),
-                "sd_base_pct": _sd(base_means),
                 "mean_score_pct": _mean(score_means),
+                "sd_score_pct": _sd(score_means),
             }
         )
         rows.append(row)
@@ -314,7 +318,7 @@ def grades_by_course(trials: pd.DataFrame, *, seed: int = DEFAULT_SEED) -> pd.Da
 
     Each assignment weighs equally. ``ci_low``/``ci_high`` are a
     percentile bootstrap of the macro mean of the per-assignment
-    ``mean_base_pct`` values, NA below ``MIN_BOOTSTRAP_CLUSTERS``
+    ``mean_score_pct`` values, NA below ``MIN_BOOTSTRAP_CLUSTERS``
     assignments. One rng is seeded once and the groups are processed in
     sorted key order, so the output is deterministic for a given seed.
 
@@ -354,14 +358,13 @@ def grades_by_course(trials: pd.DataFrame, *, seed: int = DEFAULT_SEED) -> pd.Da
         ci_low: float | None = None
         ci_high: float | None = None
         if n_assignments >= MIN_BOOTSTRAP_CLUSTERS:
-            values = group["mean_base_pct"].to_numpy(dtype=float)
+            values = group["mean_score_pct"].to_numpy(dtype=float)
             ci_low, ci_high = _bootstrap_interval(rng, values)
         row.update(
             {
                 "n_assignments": n_assignments,
                 "n_assignments_mixed_rubric": n_mixed,
                 "n_assignments_total": n_total,
-                "macro_mean_base_pct": _mean(group["mean_base_pct"]),
                 "macro_mean_score_pct": _mean(group["mean_score_pct"]),
                 "ci_low": ci_low,
                 "ci_high": ci_high,
@@ -403,9 +406,9 @@ def judge_quality(trials: pd.DataFrame, criteria: pd.DataFrame, *, data_root: Pa
         for _, item_group in valid.groupby(_POOLING_KEY, dropna=False, sort=True):
             if len(item_group) < 2:
                 continue
-            base = item_group["base_pct"]
-            within_sds.append(float(base.std(ddof=1)))
-            within_ranges.append(float(base.max() - base.min()))
+            scores = item_group["score_pct"]
+            within_sds.append(float(scores.std(ddof=1)))
+            within_ranges.append(float(scores.max() - scores.min()))
             trial_keys = sorted(zip(item_group["job_name"], item_group["trial_name"], strict=True))
             for first, second in itertools.combinations(trial_keys, 2):
                 shared = set(points_by_trial.get(first, {})) & set(points_by_trial.get(second, {}))
@@ -493,8 +496,6 @@ def student_grades(trials: pd.DataFrame) -> pd.DataFrame:
                 "n_valid_gradings": len(valid),
                 "mean_score_pct": _mean(valid["score_pct"]),
                 "sd_score_pct": _sd(valid["score_pct"]),
-                "mean_base_pct": _mean(valid["base_pct"]),
-                "sd_base_pct": _sd(valid["base_pct"]),
                 # Superseded judgments are neither valid (they measured
                 # an outdated judge item) nor failed; they get their own
                 # count so nothing is silently dropped.
@@ -539,23 +540,22 @@ def grader_checks(trials: pd.DataFrame) -> pd.DataFrame:
     """Grader-check summary: pseudo-students only, raw numbers.
 
     The advisory thresholds (reference at or above 95, irrelevant at or
-    below 5, on ``base_pct``) are stated in the report text, never
+    below 5, on ``score_pct``) are stated in the report text, never
     applied as a machine pass or fail here.
     """
     pseudo = trials[_student_mask(trials) & _pseudo_mask(trials)]
     rows: list[dict[str, object]] = []
     for key, group in pseudo.groupby(_STUDENT_KEYS, dropna=False, sort=True):
         valid = group[_valid_grading_mask(group)]
-        base = valid["base_pct"]
+        scores = valid["score_pct"]
         row: dict[str, object] = dict(zip(_STUDENT_KEYS, key, strict=True))
         row.update(
             {
                 "role": _pseudo_role(str(row["student_id"])),
                 "n_valid_gradings": len(valid),
-                "mean_base_pct": _mean(base),
-                "min_base_pct": float(base.min()) if len(valid) else None,
-                "max_base_pct": float(base.max()) if len(valid) else None,
-                "mean_score_pct": _mean(valid["score_pct"]),
+                "mean_score_pct": _mean(scores),
+                "min_score_pct": float(scores.min()) if len(valid) else None,
+                "max_score_pct": float(scores.max()) if len(valid) else None,
             }
         )
         rows.append(row)
@@ -611,7 +611,7 @@ def repeat_consistency(trials: pd.DataFrame) -> pd.DataFrame:
     Valid gradings group by grading config and pooling key — the same
     submission graded more than once under one config and rubric
     version; an item with a single valid grading contributes no row.
-    Per group: the sorted ``base_pct`` values, their median and range,
+    Per group: the sorted ``score_pct`` values, their median and range,
     the group flag (range above ``REPEAT_RANGE_FLAG_PCT``), and the
     gradings deviating from the median by more than
     ``REPEAT_DEVIATION_FLAG_PCT`` — counted and named as
@@ -623,13 +623,13 @@ def repeat_consistency(trials: pd.DataFrame) -> pd.DataFrame:
     for key, group in valid.groupby(_CONSISTENCY_KEYS, dropna=False, sort=True):
         if len(group) < 2:
             continue
-        base = group["base_pct"].astype(float)
-        median = float(base.median())
-        spread = float(base.max() - base.min())
+        scores = group["score_pct"].astype(float)
+        median = float(scores.median())
+        spread = float(scores.max() - scores.min())
         deviant = sorted(
             f"{job_name}/{trial_name}"
             for job_name, trial_name, value in zip(
-                group["job_name"], group["trial_name"], base, strict=True
+                group["job_name"], group["trial_name"], scores, strict=True
             )
             if abs(value - median) > REPEAT_DEVIATION_FLAG_PCT
         )
@@ -641,9 +641,9 @@ def repeat_consistency(trials: pd.DataFrame) -> pd.DataFrame:
                 "submission_source": first["submission_source"],
                 "rubric_sha256": first["rubric_sha256"],
                 "n_gradings": len(group),
-                "base_pct_values": "; ".join(f"{value:g}" for value in sorted(base)),
-                "median_base_pct": median,
-                "range_base_pct": spread,
+                "score_pct_values": "; ".join(f"{value:g}" for value in sorted(scores)),
+                "median_score_pct": median,
+                "range_score_pct": spread,
                 "range_flagged": spread > REPEAT_RANGE_FLAG_PCT,
                 "n_deviant_gradings": len(deviant),
                 "deviant_trials": "; ".join(deviant) if deviant else None,
@@ -654,57 +654,46 @@ def repeat_consistency(trials: pd.DataFrame) -> pd.DataFrame:
 
 
 def review_queue(trials: pd.DataFrame) -> pd.DataFrame:
-    """The human-review navigation table, sorted by disagreement.
+    """The human-review navigation table, sorted by review priority.
 
-    One row per graded submission under one initial grading config and
-    pooling key — single gradings included, unlike ``repeat_consistency``
-    — with the sorted scores, their spread, and the exact trial names
-    and justification paths (relative to the data root) so a flagged row
-    opens in one step. When a final-judge grading of the same submission
-    exists, the row also carries the final score (the median over the
-    judge's valid gradings when repeated), how many prior gradings the
-    judge saw, and ``final_outside_range`` — true when the final score
-    falls outside the span of the initial scores the judge actually saw
-    (its recorded prior trials), which is not evidence the judge is
-    wrong but exactly the definition of a row a human should read. A
-    judge grading whose initial group is not in the loaded trials
-    appears as its own row (``n_gradings`` 0) rather than being
-    dropped. Judge rows are matched to their initial group through the
-    recorded prior-trial lineage; superseded judgments are not valid
-    gradings, so only current judgments join, and two judge configs
-    over one submission yield one row each. Advisory throughout:
-    nothing here excludes any grading from any aggregate.
+    The complete initial grading set and the exact historical subset a
+    final judge saw are separate fields. An outside-range decision is
+    made only when the recorded count agrees and every prior trial
+    resolves to one initial group. Final scores outside that complete
+    prior range sort first by distance beyond the nearest boundary; all
+    remaining rows sort by the complete initial range. Every reason is
+    advisory and excludes nothing from score aggregates.
     """
     valid = trials[_valid_grading_mask(trials)]
     is_judge = valid["context_config_identity"].notna()
 
     initial_rows: list[dict[str, object]] = []
-    spans: list[tuple[float, float]] = []  # (min, max) base_pct per initial row
+    initial_trial_sets: list[set[str]] = []
     row_by_trial: dict[str, int] = {}
-    base_by_trial: dict[str, float] = {}
+    score_by_trial: dict[str, float] = {}
     for key, group in valid[~is_judge].groupby(_REVIEW_KEYS, dropna=False, sort=True):
-        base = group["base_pct"].astype(float)
+        scores = group["score_pct"].astype(float)
         first = group.iloc[0]
         trial_names = sorted(
             f"{job_name}/{trial_name}"
             for job_name, trial_name in zip(group["job_name"], group["trial_name"], strict=True)
         )
         for job_name, trial_name, value in zip(
-            group["job_name"], group["trial_name"], base, strict=True
+            group["job_name"], group["trial_name"], scores, strict=True
         ):
-            base_by_trial[f"{job_name}/{trial_name}"] = float(value)
+            score_by_trial[f"{job_name}/{trial_name}"] = float(value)
         row: dict[str, object] = dict(zip(_REVIEW_KEYS, key, strict=True))
         row.update(
             {
                 "student_id": first["student_id"],
                 "submission_source": first["submission_source"],
                 "rubric_sha256": first["rubric_sha256"],
-                "n_gradings": len(group),
-                "base_pct_values": "; ".join(f"{value:g}" for value in sorted(base)),
-                "median_base_pct": float(base.median()),
-                "range_base_pct": float(base.max() - base.min()),
-                "trials": "; ".join(trial_names),
-                "justification_paths": "; ".join(
+                "n_initial_gradings": len(group),
+                "initial_score_pct_values": "; ".join(f"{value:g}" for value in sorted(scores)),
+                "initial_median_score_pct": float(scores.median()),
+                "initial_range_score_pct": float(scores.max() - scores.min()),
+                "initial_trials": "; ".join(trial_names),
+                "initial_justification_paths": "; ".join(
                     f"grading/{name}/artifacts/app/grading_output/justification.md"
                     for name in trial_names
                 ),
@@ -714,40 +703,61 @@ def review_queue(trials: pd.DataFrame) -> pd.DataFrame:
         for name in trial_names:
             row_by_trial[name] = len(initial_rows)
         initial_rows.append(row)
-        spans.append((float(base.min()), float(base.max())))
+        initial_trial_sets.append(set(trial_names))
 
     combined: list[dict[str, object]] = []
     attached: set[int] = set()
     judge_keys = [*_CONFIG_KEYS, "item_id", "item_identity"]
     for key, group in valid[is_judge].groupby(judge_keys, dropna=False, sort=True):
-        base = group["base_pct"].astype(float)
+        final_scores = group["score_pct"].astype(float)
         first = group.iloc[0]
         final_trials = sorted(
             f"{job_name}/{trial_name}"
             for job_name, trial_name in zip(group["job_name"], group["trial_name"], strict=True)
         )
-        n_prior = first["n_prior_gradings"]
+        recorded_count = (
+            None if pd.isna(first["n_prior_gradings"]) else int(first["n_prior_gradings"])
+        )
+        prior_names = (
+            str(first["prior_trials"]).split("; ") if pd.notna(first["prior_trials"]) else []
+        )
+        resolved_names = [name for name in prior_names if name in row_by_trial]
+        matching_indices = {row_by_trial[name] for name in resolved_names}
+        index = next(iter(matching_indices)) if len(matching_indices) == 1 else None
+        missing_count = (
+            None
+            if recorded_count is None
+            else max(recorded_count - len(resolved_names), len(prior_names) - len(resolved_names))
+        )
+        count_agrees = recorded_count is not None and recorded_count == len(prior_names)
+        names_are_unique = len(set(prior_names)) == len(prior_names)
         judge_columns: dict[str, object] = {
             "judge_config_name": key[0],
             "judge_config_identity": key[1],
             "n_final_gradings": len(group),
-            "final_base_pct": float(base.median()),
-            "final_score_pct": float(group["score_pct"].astype(float).median()),
-            "n_prior_gradings": None if pd.isna(n_prior) else int(n_prior),
+            "final_score_pct": float(final_scores.median()),
+            "n_prior_gradings": recorded_count,
+            "n_resolved_prior_gradings": len(resolved_names),
+            "n_missing_prior_gradings": missing_count,
+            "prior_score_pct_values": (
+                "; ".join(
+                    f"{value:g}" for value in sorted(score_by_trial[n] for n in resolved_names)
+                )
+                if resolved_names
+                else None
+            ),
+            "prior_trials": "; ".join(prior_names) if prior_names else None,
+            "prior_justification_paths": (
+                "; ".join(
+                    f"grading/{name}/artifacts/app/grading_output/justification.md"
+                    for name in prior_names
+                )
+                if prior_names
+                else None
+            ),
             "final_trials": "; ".join(final_trials),
         }
-        index = None
-        prior_names: list[str] = []
-        prior_trials = first["prior_trials"]
-        if pd.notna(prior_trials):
-            prior_names = str(prior_trials).split("; ")
-            for name in prior_names:
-                if name in row_by_trial:
-                    index = row_by_trial[name]
-                    break
         if index is None:
-            # No loaded initial group: a standalone row, its config
-            # columns naming the judge's recorded context config.
             row = {
                 "config_name": first["context_config_name"],
                 "config_identity": first["context_config_identity"],
@@ -758,36 +768,75 @@ def review_queue(trials: pd.DataFrame) -> pd.DataFrame:
                 "student_id": first["student_id"],
                 "submission_source": first["submission_source"],
                 "rubric_sha256": first["rubric_sha256"],
-                "n_gradings": 0,
+                "n_initial_gradings": 0,
                 **judge_columns,
+                "_final_without_initial": True,
+                "_lineage_unresolved": True,
             }
         else:
             attached.add(index)
-            # The flag compares the final score against the span of the
-            # initial gradings the judge actually saw (its recorded
-            # prior trials): trials added to the group after the
-            # judgment must not widen the span and hide an outlier.
-            seen = [base_by_trial[name] for name in prior_names if name in base_by_trial]
-            low, high = (min(seen), max(seen)) if seen else spans[index]
-            final_base = float(base.median())
+            seen = [score_by_trial[name] for name in prior_names if name in score_by_trial]
+            unseen = sorted(initial_trial_sets[index] - set(prior_names))
+            complete = (
+                count_agrees
+                and names_are_unique
+                and missing_count == 0
+                and bool(seen)
+                and len(matching_indices) == 1
+            )
+            low = min(seen) if complete else None
+            high = max(seen) if complete else None
+            final_score = float(final_scores.median())
             row = {
                 **initial_rows[index],
                 **judge_columns,
-                "final_outside_range": bool(final_base < low or final_base > high),
+                "prior_min_score_pct": low,
+                "prior_max_score_pct": high,
+                "prior_range_score_pct": (None if low is None or high is None else high - low),
+                "n_unseen_initial_gradings": len(unseen),
+                "unseen_initial_trials": "; ".join(unseen) if unseen else None,
+                "final_outside_range": (
+                    None if low is None or high is None else final_score < low or final_score > high
+                ),
+                "final_distance_outside_range_pct": (
+                    None
+                    if low is None or high is None
+                    else max(low - final_score, final_score - high, 0.0)
+                ),
+                "_lineage_unresolved": not complete,
             }
         combined.append(row)
     combined.extend(row for index, row in enumerate(initial_rows) if index not in attached)
 
+    for row in combined:
+        reasons: list[str] = []
+        if row.get("final_outside_range") is True:
+            reasons.append("final_outside_prior_range")
+        initial_range = row.get("initial_range_score_pct")
+        if isinstance(initial_range, int | float) and initial_range > REPEAT_RANGE_FLAG_PCT:
+            reasons.append("wide_initial_range")
+        if row.get("n_unseen_initial_gradings", 0):
+            reasons.append("initial_not_in_judge_context")
+        if row.get("n_missing_prior_gradings", 0):
+            reasons.append("missing_prior_results")
+        if row.pop("_lineage_unresolved", False):
+            reasons.append("unresolved_prior_lineage")
+        if row.pop("_final_without_initial", False):
+            reasons.append("final_without_loaded_initial_group")
+        row["review_reasons"] = "; ".join(reasons) if reasons else None
+
     frame = pd.DataFrame(combined, columns=list(_REVIEW_DTYPES)).astype(_REVIEW_DTYPES)
-    # Sorted by disagreement, biggest first — the review priority; ties
-    # and no-repeat rows follow in key order.
-    return frame.sort_values(
-        by=["range_base_pct", *_REVIEW_KEYS],
-        ascending=[False, *([True] * len(_REVIEW_KEYS))],
+    prioritized = frame.assign(
+        _outside=frame["final_outside_range"].fillna(False).astype(bool),
+        _distance=frame["final_distance_outside_range_pct"].fillna(0.0),
+    )
+    return prioritized.sort_values(
+        by=["_outside", "_distance", "initial_range_score_pct", *_REVIEW_KEYS],
+        ascending=[False, False, False, *([True] * len(_REVIEW_KEYS))],
         na_position="last",
         kind="stable",
         ignore_index=True,
-    )
+    ).drop(columns=["_outside", "_distance"])
 
 
 def near_timeouts(trials: pd.DataFrame) -> pd.DataFrame:
@@ -961,7 +1010,7 @@ def _stage_mask(trials: pd.DataFrame, stage: str) -> pd.Series[bool]:
 
 
 def _valid_grading_mask(trials: pd.DataFrame) -> pd.Series[bool]:
-    """Valid gradings: completed, non-superseded grading rows with a base_pct.
+    """Valid gradings: completed, non-superseded rows with a score_pct.
 
     A superseded row is a final judgment replaced by a re-judge over
     more prior gradings (see the trials-table contract): a valid
@@ -970,7 +1019,7 @@ def _valid_grading_mask(trials: pd.DataFrame) -> pd.Series[bool]:
     """
     completed = (trials["outcome"] == "completed").fillna(False)
     current = ~trials["superseded"].fillna(False).astype(bool)
-    return _stage_mask(trials, "grade") & completed & trials["base_pct"].notna() & current
+    return _stage_mask(trials, "grade") & completed & trials["score_pct"].notna() & current
 
 
 def _student_mask(trials: pd.DataFrame) -> pd.Series[bool]:

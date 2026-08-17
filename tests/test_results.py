@@ -50,7 +50,6 @@ TRIALS_COLUMNS = [
     "exception_type",
     "reward",
     "score_pct",
-    "base_pct",
     "sums_consistent",
     "grading_load_error",
     "n_input_tokens",
@@ -327,7 +326,6 @@ def test_full_shape_fixture_pins_every_consumed_field(tmp_path: Path) -> None:
     assert pd.isna(row["exception_type"])
     assert row["reward"] == 85.0
     assert row["score_pct"] == 85.0
-    assert row["base_pct"] == 80.0
     assert as_bool(row["sums_consistent"]) is True
     assert as_bool(row["grading_load_error"]) is False
     assert row["n_input_tokens"] == 12345
@@ -432,7 +430,6 @@ def test_outcome_taxonomy_over_solve_trials(tmp_path: Path) -> None:
     for name in ("ok__a", "contract__a"):
         row = row_for(trials, name)
         assert pd.isna(row["score_pct"])
-        assert pd.isna(row["base_pct"])
         assert pd.isna(row["sums_consistent"])
         assert pd.isna(row["submission_source"])
         assert pd.isna(row["rubric_name"])
@@ -523,7 +520,6 @@ def test_grading_outcomes_flags_and_criteria(tmp_path: Path) -> None:
     valid_row = row_for(trials, "valid__a")
     assert valid_row["outcome"] == "completed"
     assert valid_row["score_pct"] == 100.0
-    assert valid_row["base_pct"] == 75.0
     assert as_bool(valid_row["sums_consistent"]) is True
     assert as_bool(valid_row["grading_load_error"]) is False
     assert valid_row["submission_source"] == "student"
@@ -542,7 +538,6 @@ def test_grading_outcomes_flags_and_criteria(tmp_path: Path) -> None:
     assert contract_row["outcome"] == "contract_failed"
     assert contract_row["reward"] == 0.0
     assert pd.isna(contract_row["score_pct"])
-    assert pd.isna(contract_row["base_pct"])
     assert pd.isna(contract_row["sums_consistent"])
     assert as_bool(contract_row["grading_load_error"]) is False
 
@@ -552,7 +547,6 @@ def test_grading_outcomes_flags_and_criteria(tmp_path: Path) -> None:
         row = row_for(trials, name)
         assert row["outcome"] == "completed"
         assert row["score_pct"] == 100.0
-        assert row["base_pct"] == 75.0
         assert pd.isna(row["sums_consistent"])
         assert as_bool(row["grading_load_error"]) is True
 
@@ -954,7 +948,7 @@ def test_loaded_judge_lineage_joins_in_the_review_queue(tmp_path: Path) -> None:
     queue = metrics.review_queue(load_results(root).trials)
     assert len(queue) == 1
     row = queue.iloc[0]
-    assert row["n_gradings"] == 1  # attached, not a standalone judge row
+    assert row["n_initial_gradings"] == 1  # attached, not a standalone judge row
     assert row["n_final_gradings"] == 1
 
 

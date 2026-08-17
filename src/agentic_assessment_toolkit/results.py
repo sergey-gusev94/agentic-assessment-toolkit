@@ -129,7 +129,6 @@ _TRIALS_DTYPES: dict[str, str] = {
     "exception_type": "string",
     "reward": "Float64",
     "score_pct": "Float64",
-    "base_pct": "Float64",
     "sums_consistent": "boolean",
     "grading_load_error": "bool",
     "n_input_tokens": "Int64",
@@ -308,17 +307,15 @@ def _trial_row(
         )
         late_exception = False
 
-    # score_pct/base_pct are set only for grading rows with a valid
+    # score_pct is set only for grading rows with a valid
     # grading result (the base_pct reward key): a contract-violation
     # reward of 0.0 must never look like a score.
     score_pct: float | None = None
-    base_pct: float | None = None
     sums_consistent: bool | None = None
     grading_load_error = False
     criteria: list[dict[str, object]] = []
     if stage == "grade" and "base_pct" in rewards:
         score_pct = _opt_number(rewards.get("reward"))
-        base_pct = _opt_number(rewards.get("base_pct"))
         # The sums flag is recomputed from the stored artifact, never
         # read from verifier details. A missing, unreadable, or invalid
         # artifact keeps the reward-file percentages but flags the row
@@ -386,7 +383,6 @@ def _trial_row(
         "exception_type": exception_type,
         "reward": _opt_number(rewards.get("reward")) if verified else None,
         "score_pct": score_pct,
-        "base_pct": base_pct,
         "sums_consistent": sums_consistent,
         "grading_load_error": grading_load_error,
         "n_input_tokens": n_input,
@@ -440,7 +436,7 @@ def _mark_superseded(trial_rows: list[dict[str, object]]) -> None:
             row["stage"] == "grade"
             and row["context_config_identity"] is not None
             and isinstance(row["prior_trials"], str)
-            and row["base_pct"] is not None
+            and row["score_pct"] is not None
         ):
             key = (row["config_identity"], row["item_id"], row["context_config_identity"])
             prior_set = frozenset(str(row["prior_trials"]).split("; "))

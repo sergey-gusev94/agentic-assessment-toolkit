@@ -1163,8 +1163,8 @@ tidy pandas tables:
   record's explicit lineage fields), item id, config name and
   identity, item identity, model, reasoning effort, job and trial
   names, outcome category, the late-exception flag (an exception
-  recorded after the verifier's reward), reward, `score_pct`,
-  `base_pct`, the sums-consistency flag (recomputed from the
+  recorded after the verifier's reward), reward, `score_pct`, the
+  sums-consistency flag (recomputed from the
   artifact via `sums_report`, the same shared validation module the
   verifier uses), token counts (input, cached, output), reported cost
   when present, per-phase durations (environment setup, agent setup,
@@ -1237,10 +1237,12 @@ score mean.
 
 **Statistics (`metrics.py`).** Trials pool by (item id, per-item
 identity) across jobs — the same key as doneness, so pooling can never
-merge trials whose rubric or environment differed. `base_pct` is the
-primary comparison metric (0–100, comparable across assignments
-regardless of bonus availability); `score_pct` is reported beside it
-as the bonus-inclusive gradebook score.
+merge trials whose rubric or environment differed. `score_pct`, the
+bonus-inclusive gradebook score, is the one comparison metric in
+derived tables and may exceed 100. The loader still recognizes the
+verifier's stored `base_pct` reward key as the validity marker required
+by the grading contract, but does not export that auxiliary percentage
+in `trials.csv`.
 
 Benchmark aggregation follows one fixed ladder, grouped per (solver
 config identity, grading config identity) pair — one row per pair per
@@ -1269,7 +1271,7 @@ corpus scale they are the primary result and the interval is a
 summary.
 
 Judge quality is measured per grading configuration: the within-item
-standard deviation and range of `base_pct` over repeated gradings,
+standard deviation and range of `score_pct` over repeated gradings,
 aggregated as the mean within-item SD and the worst-case range;
 per-criterion agreement, computed pairwise over each repeated item's
 grading pairs and only over the criterion ids both gradings of a pair
@@ -1291,7 +1293,7 @@ rates per outcome category complete the set.
 Cross-run consistency is a deterministic flag over repeated gradings:
 valid gradings group by grading config and pooling key — the same
 submission graded more than once under one config and rubric version —
-and each group reports its sorted `base_pct` values, median, and
+and each group reports its sorted `score_pct` values, median, and
 range. A group is flagged when the range exceeds 20 percentage
 points, an individual grading when it deviates more than 10 points
 from the group median; the thresholds are recorded in the report
@@ -1301,23 +1303,34 @@ never exclude a grading from any aggregate.
 
 The review queue is the navigation companion to those flags: one row
 per graded submission under one initial grading config and pooling key
-— single gradings included — sorted by score disagreement, biggest
-first, with the exact trial names and per-trial justification paths so
-a row opens in one step. Current (non-superseded) final-judge gradings
-are matched to their
-initial group through the recorded prior-trial lineage and appear on
-the same row: the final score (the median when the judge graded the
-item more than once), the prior-grading count, and
-`final_outside_range` — true when the final score falls outside the
-span of the initial scores the judge actually saw (its recorded prior
-trials, so a later top-up never widens the span and hides an outlier).
-The flag is not evidence the judge is wrong but
-exactly the row a human should read before releasing feedback. A judge
-grading whose initial group is not among the loaded trials appears as
-its own row rather than being dropped, and two judge configs over one
-submission yield one row each. Repeat consistency diagnoses
-the judge configuration; the review queue prioritizes the human pass —
-both advisory, excluding nothing. Near-timeout accounting
+— single gradings included — with exact trial names and per-trial
+justification paths so a row opens in one step. Its `initial_*` fields
+describe every currently loaded initial grading. When a current
+(non-superseded) final judgment exists, separate `prior_*` fields
+describe exactly the historical subset that judge saw. A later top-up
+therefore expands the initial set without rewriting the judge's
+context; `n_unseen_initial_gradings` and `unseen_initial_trials` expose
+the difference.
+
+The final score is the median when the judge graded the same item more
+than once. `final_outside_range` is computed only when the recorded
+prior count agrees, every named prior trial resolves, and all resolve
+to one initial group. Otherwise the flag and distance are missing and
+`review_reasons` names the lineage problem instead of making a claim
+from partial evidence. A complete comparison also reports
+`final_distance_outside_range_pct`, the distance beyond the nearest
+prior boundary (zero inside or on a boundary). Queue priority is final
+outside the complete prior range first, greatest outside distance
+first, then complete initial range greatest first, with identity keys
+breaking ties deterministically. Other review reasons identify an
+initial range above 20 points, initial gradings absent from the judge
+context, unavailable prior results, unresolved prior lineage, and a
+final judgment without a loaded initial group. A judge grading whose
+initial group is not among the loaded trials appears as its own row
+rather than being dropped, and two judge configs over one submission
+yield one row each. Repeat consistency diagnoses the judge
+configuration; the review queue prioritizes the human pass — both
+advisory, excluding nothing. Near-timeout accounting
 makes duration creep visible before it becomes timeout failures: per
 job, trials whose agent-execution duration exceeds 60% of their own
 agent timeout are counted, beside the trials whose duration or
@@ -1368,8 +1381,8 @@ derived tables (`solve_summary.csv`, `grades_by_assignment.csv`,
 `grades_by_course.csv`, `students.csv`, `judge_quality.csv`,
 `grader_checks.csv`, `repeat_consistency.csv` — one row per repeated
 item with its score list, median, range, and flags,
-`review_queue.csv` — the disagreement-sorted review table with
-final-judge joins,
+`review_queue.csv` — the priority-sorted review table with explicit
+initial and final-judge-prior sets,
 `near_timeouts.csv` — per-job near-timeout counts,
 `failures.csv`, `ungraded_solves.csv` — one named
 row per solve trial with no valid grading and its outcome, the direct
