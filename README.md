@@ -220,17 +220,37 @@ injection.
 Live Claude Code runs use the subscription token from `claude
 setup-token`. Write it once to `~/.claude/aat-oauth-token` and every
 later `aat solve` or `aat grade` finds it with nothing exported, the way
-Codex runs find `~/.codex/auth.json`:
+Codex runs find `~/.codex/auth.json`.
+
+Run `claude setup-token` on its own and finish the browser sign-in; it
+prints the token, `sk-ant-oat…`, and the date it expires. Do not
+redirect that command into the file: it draws an interactive interface
+on standard output, so a redirect captures the interface instead of the
+token. Copy the printed token into the file with an editor, or paste it
+into a `cat` that reads until Ctrl-D:
 
 ```bash
-claude setup-token > ~/.claude/aat-oauth-token
-chmod 600 ~/.claude/aat-oauth-token
+claude setup-token                      # complete the sign-in, copy the token
+
+install -m 600 /dev/null ~/.claude/aat-oauth-token
+cat > ~/.claude/aat-oauth-token         # paste, Enter, then Ctrl-D
 ```
+
+Pasting into `cat` keeps the token out of shell history, which
+`echo 'sk-ant-oat…' > file` would not. The file must hold the token and
+nothing else; a launch rejects anything else before creating a job
+directory, so a mistake here costs one command, not a run.
 
 Keep that file outside this repository and the data root; it is a
 credential like `auth.json`. The host `claude` CLI is needed only to
 mint the token — the task images carry their own pinned copy. Minting is
 the one interactive step, the counterpart of `codex login`.
+
+The token is long-lived and static: AAT reads it as bytes and never
+refreshes it, so note the expiry the CLI prints. Logging the `claude`
+CLI out and back in refreshes the interactive login only; it neither
+renews nor extends this token. When it does expire, mint another and
+overwrite the file.
 
 `~/.claude/.credentials.json`, the interactive login the `claude` CLI
 keeps, is deliberately not read: its access token lasts hours and only

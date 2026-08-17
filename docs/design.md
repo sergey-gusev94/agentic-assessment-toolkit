@@ -919,9 +919,14 @@ For `claude-code` it uses the first applicable source:
 5. `ANTHROPIC_API_KEY`, when it is set at all.
 
 The token file is the Claude counterpart of the cached Codex login: written once
-with `claude setup-token > ~/.claude/aat-oauth-token`, it is then discovered
-automatically, so neither agent needs a credential exported per shell. Minting
-the token is the one interactive step, as `codex login` is for Codex. The
+with the token `claude setup-token` prints, it is then discovered automatically,
+so neither agent needs a credential exported per shell. Minting the token is the
+one interactive step, as `codex login` is for Codex, and the command draws an
+interface on standard output rather than emitting the token alone — the reason a
+token file is validated rather than trusted, since redirecting the command
+captures the interface. The token itself is long-lived and static: it is read as
+bytes and never refreshed, and refreshing the CLI's own login does not renew it.
+The
 interactive login the `claude` CLI keeps in `~/.claude/.credentials.json` is
 deliberately never read: its access token lasts hours and only that CLI can
 refresh it, so a run of any length would lose its credential mid-flight, one
