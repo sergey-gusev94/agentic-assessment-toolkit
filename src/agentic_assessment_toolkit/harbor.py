@@ -44,8 +44,20 @@ CODEX_HOST_OVERRIDE_ENVS = ("OPENAI_BASE_URL",)
 
 CLAUDE_FORCE_OAUTH_ENV = "CLAUDE_FORCE_OAUTH"
 CLAUDE_CODE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"
+CLAUDE_TOKEN_FILE_ENV = "AAT_CLAUDE_TOKEN_FILE"
 ANTHROPIC_API_KEY_ENV = "ANTHROPIC_API_KEY"
 ANTHROPIC_AUTH_TOKEN_ENV = "ANTHROPIC_AUTH_TOKEN"
+
+# The Claude counterpart of the cached Codex login: a file holding the
+# subscription token from `claude setup-token`, discovered automatically
+# so a launch needs nothing exported. Harbor's Claude adapter reads only
+# environment variables, so the file is read here and its contents are
+# placed in CLAUDE_CODE_OAUTH_TOKEN for the Harbor subprocess alone.
+# ~/.claude/.credentials.json is deliberately not this file: it holds the
+# interactive login, whose access token lasts hours and which only the
+# `claude` CLI can refresh, so a long run would lose its credential
+# mid-flight.
+CLAUDE_TOKEN_FILE_RELATIVE = (".claude", "aat-oauth-token")
 
 # Host variables Harbor's Claude Code adapter reads on its own, which
 # every managed Claude launch removes on both credential paths. Two
@@ -156,9 +168,10 @@ def resolve_harbor_authentication(
     decision 3) and fall back to an API key only when explicitly selected
     or when no subscription credential exists. Codex runs prefer the same
     file-based cached login used by the local Codex CLI; Claude Code runs
-    prefer the subscription token from ``claude setup-token``. Explicit
-    Harbor overrides retain precedence in both cases. Other agents retain
-    Harbor's own authentication behavior.
+    prefer the subscription token from ``claude setup-token``, taken from
+    the environment or from the token file this toolkit discovers under
+    the user's home. Explicit Harbor overrides retain precedence in both
+    cases. Other agents retain Harbor's own authentication behavior.
 
     Bedrock-backed Claude is deliberately out of scope: it is a third
     billing route this project does not use, so rather than manage it,
@@ -170,7 +183,9 @@ def resolve_harbor_authentication(
     if agent == CODEX_AGENT:
         return _resolve_codex_authentication(environment, Path.home() if home is None else home)
     if agent == CLAUDE_CODE_AGENT:
-        return _resolve_claude_code_authentication(environment)
+        return _resolve_claude_code_authentication(
+            environment, Path.home() if home is None else home
+        )
     return None
 
 
@@ -294,7 +309,7 @@ def _api_key_authentication(
 
 
 def _resolve_claude_code_authentication(
-    environment: Mapping[str, str],
+    environment: Mapping[str, str], user_home: Path
 ) -> HarborAuthentication:
     """Select the Claude Code credential, subscription token first.
 
@@ -313,47 +328,123 @@ def _resolve_claude_code_authentication(
 
     Precedence on failure mirrors Codex: a candidate that is absent is
     skipped, while the last-resort variable, once present, is selected
-    and must be non-empty.
+    and must be non-empty. ``CLAUDE_FORCE_OAUTH=false`` never reads the
+    token file, so a broken token file cannot fail a launch that
+    deliberately selected the API key.
     """
     if CLAUDE_FORCE_OAUTH_ENV in environment:
         force_token = _parse_env_bool(
             environment[CLAUDE_FORCE_OAUTH_ENV], name=CLAUDE_FORCE_OAUTH_ENV
         )
         if force_token:
-            return _claude_token_authentication(environment, explicitly_selected=True)
+            return _claude_token_authentication(
+                _claude_token_selection(environment, user_home),
+                user_home,
+                explicitly_selected=True,
+            )
         return _anthropic_api_key_authentication(environment, explicitly_selected=True)
 
-    token = environment.get(CLAUDE_CODE_OAUTH_TOKEN_ENV)
-    if token is not None and token.strip():
-        return _claude_token_authentication(environment, explicitly_selected=False)
+    selection = _claude_token_selection(environment, user_home)
+    if selection is not None:
+        return _claude_token_authentication(selection, user_home, explicitly_selected=False)
 
     if ANTHROPIC_API_KEY_ENV in environment:
         return _anthropic_api_key_authentication(environment, explicitly_selected=False)
 
     raise HarborAuthenticationError(
         "no Claude Code subscription token or Anthropic API key is available; run "
-        f"'claude setup-token' and export {CLAUDE_CODE_OAUTH_TOKEN_ENV}, or set "
-        f"{ANTHROPIC_API_KEY_ENV}"
+        f"'claude setup-token > {_claude_default_token_file(user_home)}' "
+        f"(or export {CLAUDE_CODE_OAUTH_TOKEN_ENV}), or set {ANTHROPIC_API_KEY_ENV}"
     )
 
 
-def _claude_token_authentication(
-    environment: Mapping[str, str], *, explicitly_selected: bool
-) -> HarborAuthentication:
+def _claude_default_token_file(user_home: Path) -> Path:
+    return user_home.joinpath(*CLAUDE_TOKEN_FILE_RELATIVE)
+
+
+def _claude_token_selection(
+    environment: Mapping[str, str], user_home: Path
+) -> tuple[str, str] | None:
+    """The subscription token and the source that supplied it, if any.
+
+    The order mirrors Codex: an explicitly named file wins, because
+    naming it is a deliberate act; then the environment variable Harbor
+    itself reads; then the automatically discovered token file. An
+    explicitly named file that cannot be read is an error rather than a
+    fallthrough, exactly as ``CODEX_AUTH_JSON_PATH`` is.
+    """
+    if CLAUDE_TOKEN_FILE_ENV in environment:
+        raw_path = environment[CLAUDE_TOKEN_FILE_ENV]
+        if not raw_path.strip():
+            raise HarborAuthenticationError(f"{CLAUDE_TOKEN_FILE_ENV} is set but empty")
+        path = Path(raw_path).expanduser().resolve()
+        return _read_claude_token_file(path, source=CLAUDE_TOKEN_FILE_ENV), CLAUDE_TOKEN_FILE_ENV
+
     token = environment.get(CLAUDE_CODE_OAUTH_TOKEN_ENV)
-    if token is None or not token.strip():
-        selection = (
+    if token is not None and token.strip():
+        return token, CLAUDE_CODE_OAUTH_TOKEN_ENV
+
+    path = _claude_default_token_file(user_home)
+    try:
+        path.stat()
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise HarborAuthenticationError(
+            f"cannot inspect the automatic Claude token file: {path}"
+        ) from error
+    return _read_claude_token_file(path, source="automatic-token-file"), "automatic-token-file"
+
+
+def _read_claude_token_file(path: Path, *, source: str) -> str:
+    """The one token a token file holds, with surrounding whitespace gone.
+
+    The file is written by redirecting ``claude setup-token``, so it
+    normally holds the token and a trailing newline. Anything else — a
+    missing file, an empty one, or several whitespace-separated words
+    from a session that printed more than the token — is rejected here,
+    before a job directory exists, rather than reaching every trial as a
+    provider rejection that looks like an agent failure.
+    """
+    try:
+        content = path.read_text(encoding="utf-8")
+    except FileNotFoundError as error:
+        raise HarborAuthenticationError(
+            f"{source} selected a missing Claude token file: {path}"
+        ) from error
+    except (OSError, UnicodeDecodeError) as error:
+        raise HarborAuthenticationError(
+            f"{source} selected an unreadable Claude token file: {path}"
+        ) from error
+    token = content.strip()
+    if not token:
+        raise HarborAuthenticationError(f"{source} selected an empty Claude token file: {path}")
+    if len(token.split()) > 1:
+        raise HarborAuthenticationError(
+            f"{source} selected a Claude token file holding more than the token: {path}; "
+            "it must contain only the output of 'claude setup-token'"
+        )
+    return token
+
+
+def _claude_token_authentication(
+    selection: tuple[str, str] | None, user_home: Path, *, explicitly_selected: bool
+) -> HarborAuthentication:
+    if selection is None:
+        reason = (
             f" because {CLAUDE_FORCE_OAUTH_ENV}=true selected the subscription token"
             if explicitly_selected
             else ""
         )
         raise HarborAuthenticationError(
-            f"{CLAUDE_CODE_OAUTH_TOKEN_ENV} is missing or empty{selection}; run "
-            "'claude setup-token' to obtain one"
+            f"{CLAUDE_CODE_OAUTH_TOKEN_ENV} is missing or empty and no token file exists "
+            f"at {_claude_default_token_file(user_home)}{reason}; run "
+            f"'claude setup-token > {_claude_default_token_file(user_home)}' to obtain one"
         )
+    token, token_source = selection
     return HarborAuthentication(
         method="claude-oauth-token",
-        source=(CLAUDE_FORCE_OAUTH_ENV if explicitly_selected else CLAUDE_CODE_OAUTH_TOKEN_ENV),
+        source=(CLAUDE_FORCE_OAUTH_ENV if explicitly_selected else token_source),
         description="Claude Code subscription token",
         # CLAUDE_FORCE_OAUTH=1 makes Harbor's adapter use the token, and
         # both Anthropic key variables are dropped from the Harbor

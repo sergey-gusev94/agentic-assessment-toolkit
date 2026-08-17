@@ -217,10 +217,11 @@ CLAUDE_STRIPPED_ENVS = (
 )
 
 
-def test_claude_authentication_prefers_the_subscription_token() -> None:
+def test_claude_authentication_prefers_the_subscription_token(tmp_path: Path) -> None:
     authentication = harbor_mod.resolve_harbor_authentication(
         "claude-code",
         {"CLAUDE_CODE_OAUTH_TOKEN": "oauth-secret", "ANTHROPIC_API_KEY": "api-secret"},
+        home=tmp_path,
     )
 
     assert authentication is not None
@@ -237,14 +238,14 @@ def test_claude_authentication_prefers_the_subscription_token() -> None:
     }
 
 
-def test_claude_token_run_carries_no_api_key_into_harbor() -> None:
+def test_claude_token_run_carries_no_api_key_into_harbor(tmp_path: Path) -> None:
     """The key must not be present in Harbor's environment at all.
 
     Harbor's Claude adapter prefers ANTHROPIC_API_KEY over the token, so
     a key left in the environment would silently bill per token.
     """
     authentication = harbor_mod.resolve_harbor_authentication(
-        "claude-code", {"CLAUDE_CODE_OAUTH_TOKEN": "oauth-secret"}
+        "claude-code", {"CLAUDE_CODE_OAUTH_TOKEN": "oauth-secret"}, home=tmp_path
     )
     assert authentication is not None
 
@@ -271,7 +272,9 @@ def test_claude_token_run_carries_no_api_key_into_harbor() -> None:
     ],
     ids=["token", "api-key"],
 )
-def test_claude_run_carries_no_host_overrides_into_harbor(environ: dict[str, str]) -> None:
+def test_claude_run_carries_no_host_overrides_into_harbor(
+    environ: dict[str, str], tmp_path: Path
+) -> None:
     """Neither credential path lets the host redirect or reconfigure the run.
 
     Harbor's Claude adapter reads these names from its own environment,
@@ -279,7 +282,7 @@ def test_claude_run_carries_no_host_overrides_into_harbor(environ: dict[str, str
     route, or the agent's behavior without appearing in the run record or
     the config identity — on either path.
     """
-    authentication = harbor_mod.resolve_harbor_authentication("claude-code", environ)
+    authentication = harbor_mod.resolve_harbor_authentication("claude-code", environ, home=tmp_path)
     assert authentication is not None
 
     host = dict.fromkeys(harbor_mod.CLAUDE_HOST_OVERRIDE_ENVS, "host-value")
@@ -291,9 +294,9 @@ def test_claude_run_carries_no_host_overrides_into_harbor(environ: dict[str, str
     assert [name for name in CLAUDE_STRIPPED_ENVS if name in environment] == []
 
 
-def test_claude_api_key_is_the_fallback() -> None:
+def test_claude_api_key_is_the_fallback(tmp_path: Path) -> None:
     authentication = harbor_mod.resolve_harbor_authentication(
-        "claude-code", {"ANTHROPIC_API_KEY": "api-secret"}
+        "claude-code", {"ANTHROPIC_API_KEY": "api-secret"}, home=tmp_path
     )
 
     assert authentication is not None
@@ -309,7 +312,7 @@ def test_claude_api_key_is_the_fallback() -> None:
     }
 
 
-def test_claude_auth_token_is_not_a_credential() -> None:
+def test_claude_auth_token_is_not_a_credential(tmp_path: Path) -> None:
     """ANTHROPIC_AUTH_TOKEN never selects a credential; it is only removed.
 
     Harbor's adapter delivers whatever it selects in ANTHROPIC_API_KEY, so
@@ -319,11 +322,11 @@ def test_claude_auth_token_is_not_a_credential() -> None:
     """
     with pytest.raises(harbor_mod.HarborAuthenticationError, match="no Claude Code subscription"):
         harbor_mod.resolve_harbor_authentication(
-            "claude-code", {"ANTHROPIC_AUTH_TOKEN": "bearer-secret"}
+            "claude-code", {"ANTHROPIC_AUTH_TOKEN": "bearer-secret"}, home=tmp_path
         )
 
 
-def test_claude_force_oauth_false_selects_the_api_key() -> None:
+def test_claude_force_oauth_false_selects_the_api_key(tmp_path: Path) -> None:
     authentication = harbor_mod.resolve_harbor_authentication(
         "claude-code",
         {
@@ -331,6 +334,7 @@ def test_claude_force_oauth_false_selects_the_api_key() -> None:
             "CLAUDE_CODE_OAUTH_TOKEN": "oauth-secret",
             "ANTHROPIC_API_KEY": "api-secret",
         },
+        home=tmp_path,
     )
 
     assert authentication is not None
@@ -342,10 +346,11 @@ def test_claude_force_oauth_false_selects_the_api_key() -> None:
     assert authentication.environment_changes["CLAUDE_CODE_OAUTH_TOKEN"] is None
 
 
-def test_claude_force_oauth_true_selects_the_token() -> None:
+def test_claude_force_oauth_true_selects_the_token(tmp_path: Path) -> None:
     authentication = harbor_mod.resolve_harbor_authentication(
         "claude-code",
         {"CLAUDE_FORCE_OAUTH": "1", "CLAUDE_CODE_OAUTH_TOKEN": "oauth-secret"},
+        home=tmp_path,
     )
 
     assert authentication is not None
@@ -355,10 +360,138 @@ def test_claude_force_oauth_true_selects_the_token() -> None:
     }
 
 
+def _write_claude_token_file(home: Path, token: str = "file-secret\n") -> Path:
+    path = home / "aat-oauth-token"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(token, encoding="utf-8")
+    return path
+
+
+def test_claude_token_file_is_discovered_without_any_variable(tmp_path: Path) -> None:
+    """The cached-login counterpart: a launch needs nothing exported.
+
+    Harbor's Claude adapter reads environment variables only, so the file
+    is read here and delivered to the subprocess.
+    """
+    _write_claude_token_file(tmp_path / ".claude")
+
+    authentication = harbor_mod.resolve_harbor_authentication("claude-code", {}, home=tmp_path)
+
+    assert authentication is not None
+    assert authentication.provenance() == {
+        "method": "claude-oauth-token",
+        "source": "automatic-token-file",
+    }
+    assert authentication.environment_changes["CLAUDE_CODE_OAUTH_TOKEN"] == "file-secret"
+    assert authentication.environment_changes["ANTHROPIC_API_KEY"] is None
+
+
+def test_claude_token_file_outranks_an_api_key(tmp_path: Path) -> None:
+    """Discovery must win, or a stray key would silently bill per token."""
+    _write_claude_token_file(tmp_path / ".claude")
+
+    authentication = harbor_mod.resolve_harbor_authentication(
+        "claude-code", {"ANTHROPIC_API_KEY": "api-secret"}, home=tmp_path
+    )
+
+    assert authentication is not None
+    assert authentication.method == "claude-oauth-token"
+
+
+def test_claude_token_variable_outranks_the_discovered_file(tmp_path: Path) -> None:
+    _write_claude_token_file(tmp_path / ".claude")
+
+    authentication = harbor_mod.resolve_harbor_authentication(
+        "claude-code", {"CLAUDE_CODE_OAUTH_TOKEN": "env-secret"}, home=tmp_path
+    )
+
+    assert authentication is not None
+    assert authentication.provenance()["source"] == "CLAUDE_CODE_OAUTH_TOKEN"
+    assert authentication.environment_changes["CLAUDE_CODE_OAUTH_TOKEN"] == "env-secret"
+
+
+def test_explicit_claude_token_file_outranks_the_variable(tmp_path: Path) -> None:
+    """Naming a file is deliberate, exactly as CODEX_AUTH_JSON_PATH is."""
+    path = _write_claude_token_file(tmp_path / "elsewhere", "explicit-secret\n")
+
+    authentication = harbor_mod.resolve_harbor_authentication(
+        "claude-code",
+        {"AAT_CLAUDE_TOKEN_FILE": str(path), "CLAUDE_CODE_OAUTH_TOKEN": "env-secret"},
+        home=tmp_path,
+    )
+
+    assert authentication is not None
+    assert authentication.provenance() == {
+        "method": "claude-oauth-token",
+        "source": "AAT_CLAUDE_TOKEN_FILE",
+    }
+    assert authentication.environment_changes["CLAUDE_CODE_OAUTH_TOKEN"] == "explicit-secret"
+
+
+def test_claude_token_file_satisfies_forced_oauth(tmp_path: Path) -> None:
+    _write_claude_token_file(tmp_path / ".claude")
+
+    authentication = harbor_mod.resolve_harbor_authentication(
+        "claude-code", {"CLAUDE_FORCE_OAUTH": "1"}, home=tmp_path
+    )
+
+    assert authentication is not None
+    assert authentication.provenance() == {
+        "method": "claude-oauth-token",
+        "source": "CLAUDE_FORCE_OAUTH",
+    }
+
+
+def test_forced_api_key_never_reads_the_token_file(tmp_path: Path) -> None:
+    """A deliberate API-key launch must not fail on an unrelated bad file."""
+    _write_claude_token_file(tmp_path / "elsewhere", "one two\n")
+
+    authentication = harbor_mod.resolve_harbor_authentication(
+        "claude-code",
+        {
+            "CLAUDE_FORCE_OAUTH": "0",
+            "AAT_CLAUDE_TOKEN_FILE": str(tmp_path / "elsewhere" / "aat-oauth-token"),
+            "ANTHROPIC_API_KEY": "api-secret",
+        },
+        home=tmp_path,
+    )
+
+    assert authentication is not None
+    assert authentication.method == "anthropic-api-key"
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        ("", "empty Claude token file"),
+        ("   \n", "empty Claude token file"),
+        # `claude setup-token > file` in a session that printed more than
+        # the token: caught before a job directory exists, instead of
+        # reaching every trial as a provider rejection.
+        ("Your token is:\nsk-ant-oat01-secret\n", "more than the token"),
+    ],
+)
+def test_claude_token_file_must_hold_exactly_one_token(
+    content: str, message: str, tmp_path: Path
+) -> None:
+    _write_claude_token_file(tmp_path / ".claude", content)
+
+    with pytest.raises(harbor_mod.HarborAuthenticationError, match=message):
+        harbor_mod.resolve_harbor_authentication("claude-code", {}, home=tmp_path)
+
+
 @pytest.mark.parametrize(
     ("environment", "message"),
     [
         ({}, "no Claude Code subscription token"),
+        (
+            {"AAT_CLAUDE_TOKEN_FILE": "  "},
+            "AAT_CLAUDE_TOKEN_FILE is set but empty",
+        ),
+        (
+            {"AAT_CLAUDE_TOKEN_FILE": "/nonexistent/aat-oauth-token"},
+            "missing Claude token file",
+        ),
         # A blank token is skipped like an absent Codex auth file, but a
         # present-and-blank ANTHROPIC_API_KEY is the selected credential
         # and names itself, exactly as OPENAI_API_KEY does.
@@ -384,10 +517,10 @@ def test_claude_force_oauth_true_selects_the_token() -> None:
     ],
 )
 def test_claude_authentication_rejects_missing_or_invalid_configuration(
-    environment: dict[str, str], message: str
+    environment: dict[str, str], message: str, tmp_path: Path
 ) -> None:
     with pytest.raises(harbor_mod.HarborAuthenticationError, match=message):
-        harbor_mod.resolve_harbor_authentication("claude-code", environment)
+        harbor_mod.resolve_harbor_authentication("claude-code", environment, home=tmp_path)
 
 
 def test_harbor_environment_applies_authentication_changes() -> None:
@@ -432,7 +565,7 @@ def test_invoke_harbor_passes_resolved_authentication(
 
 
 def test_invoke_harbor_passes_resolved_claude_authentication(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """A Claude launch reaches the subprocess with one route and no overrides."""
     captured: dict[str, object] = {}
@@ -448,7 +581,7 @@ def test_invoke_harbor_passes_resolved_claude_authentication(
     monkeypatch.setenv("CLAUDE_CODE_EFFORT_LEVEL", "low")
     monkeypatch.setattr(subprocess, "run", fake_run)
     authentication = harbor_mod.resolve_harbor_authentication(
-        "claude-code", {"CLAUDE_CODE_OAUTH_TOKEN": "oauth-secret"}
+        "claude-code", {"CLAUDE_CODE_OAUTH_TOKEN": "oauth-secret"}, home=tmp_path
     )
     assert authentication is not None
 

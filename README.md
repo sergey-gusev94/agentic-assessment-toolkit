@@ -218,17 +218,44 @@ injection.
 #### Claude Code
 
 Live Claude Code runs use the subscription token from `claude
-setup-token`; export it once as `CLAUDE_CODE_OAUTH_TOKEN` and run `aat
-solve` or `aat grade` without exporting anything else. The host `claude`
-CLI is needed only to mint that token — the task images carry their own
-pinned copy. AAT resolves Claude authentication in this order:
+setup-token`. Write it once to `~/.claude/aat-oauth-token` and every
+later `aat solve` or `aat grade` finds it with nothing exported, the way
+Codex runs find `~/.codex/auth.json`:
+
+```bash
+claude setup-token > ~/.claude/aat-oauth-token
+chmod 600 ~/.claude/aat-oauth-token
+```
+
+Keep that file outside this repository and the data root; it is a
+credential like `auth.json`. The host `claude` CLI is needed only to
+mint the token — the task images carry their own pinned copy. Minting is
+the one interactive step, the counterpart of `codex login`.
+
+`~/.claude/.credentials.json`, the interactive login the `claude` CLI
+keeps, is deliberately not read: its access token lasts hours and only
+that CLI refreshes it, so a long run would lose its credential
+mid-flight. `claude setup-token` exists to mint the long-lived token for
+non-interactive use.
+
+AAT resolves Claude authentication in this order:
 
 1. `CLAUDE_FORCE_OAUTH` selects explicitly: `true`, `1`, or `yes` selects
-   `CLAUDE_CODE_OAUTH_TOKEN`, and `false`, `0`, or `no` selects
+   the subscription token, and `false`, `0`, or `no` selects
    `ANTHROPIC_API_KEY`.
-2. Otherwise, a non-empty `CLAUDE_CODE_OAUTH_TOKEN` is used.
-3. If there is none, `ANTHROPIC_API_KEY` is used; once it is set at all
+2. Otherwise, `AAT_CLAUDE_TOKEN_FILE`, when set, names the token file to
+   read; naming a file that is missing, empty, or holding more than the
+   token is an error, not a fallthrough.
+3. Otherwise, a non-empty `CLAUDE_CODE_OAUTH_TOKEN`.
+4. Otherwise, `~/.claude/aat-oauth-token` when it exists.
+5. If there is none, `ANTHROPIC_API_KEY` is used; once it is set at all
    it must be non-empty, and the error names it.
+
+Harbor's Claude Code adapter reads environment variables only, so a
+token file is read at launch and its contents travel to the Harbor
+subprocess in `CLAUDE_CODE_OAUTH_TOKEN`. Neither the token nor the path
+enters the run record, which keeps only the method
+(`claude-oauth-token`) and the selection source.
 
 `ANTHROPIC_AUTH_TOKEN` is not a credential source here. Harbor's adapter
 delivers whatever it selects in `ANTHROPIC_API_KEY`, so a bearer token

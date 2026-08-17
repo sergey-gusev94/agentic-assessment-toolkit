@@ -910,22 +910,42 @@ still fail after launch.
 
 For `claude-code` it uses the first applicable source:
 
-1. `CLAUDE_FORCE_OAUTH`: `true`, `1`, or `yes` selects
-   `CLAUDE_CODE_OAUTH_TOKEN` (the subscription token from
-   `claude setup-token`); `false`, `0`, or `no` selects
-   `ANTHROPIC_API_KEY`.
-2. A non-empty `CLAUDE_CODE_OAUTH_TOKEN`.
-3. `ANTHROPIC_API_KEY`, when it is set at all.
+1. `CLAUDE_FORCE_OAUTH`: `true`, `1`, or `yes` selects the subscription token
+   from `claude setup-token` (sources 2–4 below, in their own order);
+   `false`, `0`, or `no` selects `ANTHROPIC_API_KEY`.
+2. `AAT_CLAUDE_TOKEN_FILE`, when set, naming the file to read the token from.
+3. A non-empty `CLAUDE_CODE_OAUTH_TOKEN`.
+4. The file `~/.claude/aat-oauth-token`, when it exists.
+5. `ANTHROPIC_API_KEY`, when it is set at all.
+
+The token file is the Claude counterpart of the cached Codex login: written once
+with `claude setup-token > ~/.claude/aat-oauth-token`, it is then discovered
+automatically, so neither agent needs a credential exported per shell. Minting
+the token is the one interactive step, as `codex login` is for Codex. The
+interactive login the `claude` CLI keeps in `~/.claude/.credentials.json` is
+deliberately never read: its access token lasts hours and only that CLI can
+refresh it, so a run of any length would lose its credential mid-flight, one
+trial at a time, as a provider rejection indistinguishable from an agent
+failure. Harbor's Claude Code adapter reads environment variables only, so a
+selected file is read at launch and its contents are placed in
+`CLAUDE_CODE_OAUTH_TOKEN` for the Harbor subprocess alone.
 
 The subscription token therefore wins over an API key that happens to be present
 in the shell, and both spellings of the boolean and the failure behavior match
-the Codex list. A blank token is skipped exactly as an absent Codex auth file is,
-but the last-resort variable, once present, is the selected credential and must
-be non-empty — `ANTHROPIC_API_KEY` set to the empty string is a usage error
-naming it, just as `OPENAI_API_KEY` is. `CLAUDE_FORCE_OAUTH` must contain one of
-the listed boolean values, and having no credential at all exits with a usage
-error naming `claude setup-token`. Every one of these failures happens before
-durable run output is created.
+the Codex list. An explicitly named token file mirrors `CODEX_AUTH_JSON_PATH`:
+naming it is deliberate, so it outranks the variable, and a named file that is
+missing, unreadable, empty, or holding more than the token is a usage error
+rather than a fallthrough — the same treatment an explicitly named Codex auth
+file gets, and the reason a token file that captured more than the token cannot
+reach a trial. `CLAUDE_FORCE_OAUTH=false` never reads a token file at all, so a
+launch that deliberately selected the API key cannot fail on an unrelated
+credential. A blank token variable is skipped exactly as an absent Codex auth
+file is, but the last-resort variable, once present, is the selected credential
+and must be non-empty — `ANTHROPIC_API_KEY` set to the empty string is a usage
+error naming it, just as `OPENAI_API_KEY` is. `CLAUDE_FORCE_OAUTH` must contain
+one of the listed boolean values, and having no credential at all exits with a
+usage error naming `claude setup-token` and the token file path. Every one of
+these failures happens before durable run output is created.
 
 `ANTHROPIC_AUTH_TOKEN` is not a credential source. Harbor's adapter passes
 whatever it selects in `ANTHROPIC_API_KEY`, so a bearer token there would be sent
@@ -978,7 +998,11 @@ contains only the resolved method and the selection source. The four method
 values name the mechanism each credential arrives by: `codex-auth-json` (the
 cached login file), `openai-api-key`, `claude-oauth-token` (the subscription
 token from `claude setup-token`, named after the `CLAUDE_CODE_OAUTH_TOKEN`
-variable that supplies it), and `anthropic-api-key`.
+variable that carries it to Harbor whichever source supplied it), and
+`anthropic-api-key`. The selection source distinguishes the sources within a
+method: for `claude-oauth-token` it is `AAT_CLAUDE_TOKEN_FILE`,
+`CLAUDE_CODE_OAUTH_TOKEN`, `automatic-token-file`, or `CLAUDE_FORCE_OAUTH` when
+that variable made the choice.
 
 `--dry-run` and `--materialize-only` do not resolve authentication and remain
 credential-free. A user who manually runs the Harbor command printed by
