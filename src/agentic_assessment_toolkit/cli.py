@@ -331,6 +331,14 @@ def _run(args: argparse.Namespace) -> int:
     print(
         f"config: {config.name}@{config_identity[:8]} ({config.agent} {config.model}{rubric_note})"
     )
+    if config.agent not in config_mod.AGENT_TEMPLATE_SUFFIXES:
+        # A supported Harbor agent the toolkit ships no image for still
+        # runs; the cost is per trial, so it is said out loud rather than
+        # left to be inferred from a build log.
+        print(
+            f"note: no environment template ships for agent {config.agent!r}; tasks build "
+            "on the plain {flavor}.Dockerfile and Harbor installs that CLI in every trial"
+        )
     jobs_root = root / (SOLVE_JOBS_DIRNAME if stage == "solve" else GRADING_JOBS_DIRNAME)
     totals = harbor_mod.done_trial_totals(jobs_root, stage)
     if stage == "solve":
@@ -644,7 +652,9 @@ def _plan_solve(
                     "assignment resolves environment 'optimization'; "
                     f"{assignment.item_id!r} resolves {assignment.environment_flavor!r}"
                 )
-            template_bytes = config_mod.environment_path(assignment.environment_flavor).read_bytes()
+            template_bytes = config_mod.environment_path(
+                assignment.environment_flavor, config.agent
+            ).read_bytes()
             identity = config_mod.item_identity(config_identity, template_bytes)
             planned.append(
                 _PlannedItem(
@@ -669,6 +679,7 @@ def _solve_materializer(
             course_id=assignment.course_id,
             assignment_id=assignment.assignment_id,
             environment_flavor=assignment.environment_flavor,
+            agent=config.agent,
             prompt_name=config.prompt_name,
             tasks_dir=tasks_dir,
         )
@@ -712,7 +723,13 @@ def _plan_grade(
     """
     judge = _judge_context(root, config, args)
     sources = _grade_sources(root, args)
-    template_bytes = config_mod.environment_path(config_mod.GRADING_FLAVOR).read_bytes()
+    # This config's own image, for this run's item identities. A judge
+    # run's *lookup* of stored gradings uses the context config's
+    # template instead (_JudgeContext.template_bytes), which is a
+    # different image whenever the two configs name different agents.
+    template_bytes = config_mod.environment_path(
+        config_mod.GRADING_FLAVOR, config.agent
+    ).read_bytes()
     rubric_name = config.rubric_name
     if rubric_name is None:  # load_config defaults grading configs to "default"
         raise CliError(f"config {config.name!r} names no rubric")
@@ -757,7 +774,6 @@ def _plan_grade(
                 judge,
                 root,
                 source,
-                template_bytes,
                 assignment_hashes[assignment],
                 rubric_source_hash,
                 args,
@@ -805,10 +821,19 @@ def _plan_grade(
 
 @dataclass(frozen=True)
 class _JudgeContext:
-    """Resolved final-judge inputs: the initial config and its stored gradings."""
+    """Resolved final-judge inputs: the initial config and its stored gradings.
+
+    ``template_bytes`` is the grading environment template of the
+    *context* config's agent, not the judge's. Everything in the lookup
+    key of a stored grading has to be the context config's own resolved
+    input, or the key is one no stored grading was ever written under —
+    and the two agents' templates differ, so a Claude judge over Codex
+    gradings would otherwise match nothing.
+    """
 
     config: ExperimentConfig
     config_identity: str
+    template_bytes: bytes
     gradings: int
     pool: harbor_mod.PriorGradingPool
 
@@ -869,6 +894,9 @@ def _judge_context(
     return _JudgeContext(
         config=context_config,
         config_identity=config_mod.config_identity(context_config),
+        template_bytes=config_mod.environment_path(
+            config_mod.GRADING_FLAVOR, context_config.agent
+        ).read_bytes(),
         gradings=args.gradings,
         pool=harbor_mod.prior_gradings_by_key(root / GRADING_JOBS_DIRNAME),
     )
@@ -878,7 +906,6 @@ def _prior_gradings_for(
     judge: _JudgeContext,
     root: Path,
     source: _GradeSource,
-    template_bytes: bytes,
     assignment_hash: str,
     rubric_source_hash: str | None,
     args: argparse.Namespace,
@@ -886,11 +913,13 @@ def _prior_gradings_for(
     """The item's ``--gradings`` prior gradings, or None (reported) when too few.
 
     Prior gradings are looked up by the *context* config's per-item
-    identity — the same pooling key its own doneness uses — so the judge
-    consumes exactly the gradings that pool together under the frozen
-    initial config, and a context rubric that has since advanced
-    correctly matches nothing (the initial rounds under the new rubric
-    do not exist yet). Within a pool the gradings are exchangeable
+    identity — the same pooling key its own doneness uses — so every part
+    of the key is a context-config input, down to its agent's grading
+    environment template. The judge therefore consumes exactly the
+    gradings that pool together under the frozen initial config, and a
+    context rubric that has since advanced correctly matches nothing (the
+    initial rounds under the new rubric do not exist yet). Within a pool
+    the gradings are exchangeable
     repeats of one frozen experiment, so the selection is the first N
     in the pool's deterministic (job name, trial name) order: adding
     initial gradings later never changes what an existing judge item
@@ -905,7 +934,7 @@ def _prior_gradings_for(
     if context_rubric is not None:
         context_identity = config_mod.item_identity(
             judge.config_identity,
-            template_bytes,
+            judge.template_bytes,
             context_rubric.read_bytes(),
             assignment_hash,
             rubric_source_hash,
@@ -1000,6 +1029,7 @@ def _grade_materializer(
             rubric_source_dir=rubric_source,
             item_id=source.item_id,
             name_parts=source.name_parts,
+            agent=config.agent,
             prompt_name=config.prompt_name,
             tasks_dir=tasks_dir,
             prior_gradings=(
@@ -1447,7 +1477,7 @@ def _execute(
     if args.materialize_only:
         for flavor in flavors:
             print(
-                f"base image {base_images_mod.base_image_reference(flavor)} is built "
+                f"base image {base_images_mod.base_image_reference(flavor, config.agent)} is built "
                 "when aat launches harbor; a manual run must build it first from any "
                 "task's environment/base.Dockerfile"
             )
@@ -1456,7 +1486,7 @@ def _execute(
         return 0
     if authentication is not None:
         print(f"authentication: {authentication.description}")
-    base_images_mod.ensure_base_images(flavors)
+    base_images_mod.ensure_base_images(flavors, config.agent)
     harbor_status = 0
     for index, job in enumerate(launched):
         _write_job_record(

@@ -8,10 +8,11 @@ import pytest
 from agentic_assessment_toolkit import base_images as base_images_mod
 from agentic_assessment_toolkit import cli
 from agentic_assessment_toolkit import harbor as harbor_mod
+from agentic_assessment_toolkit.config import CLAUDE_CODE_AGENT, CODEX_AGENT, environment_path
 from agentic_assessment_toolkit.data_root import RUBRIC_ARCHIVE_DIRNAME
 from agentic_assessment_toolkit.report import REPORT_FILENAMES
 from tests.conftest import COURSE_ID, build_data_root
-from tests.test_config import GRADE_TOML, SOLVE_TOML, write_config
+from tests.test_config import CLAUDE_SOLVE_TOML, GRADE_TOML, SOLVE_TOML, write_config
 from tests.test_data_root import make_fake_toolkit_repo
 from tests.test_harbor import GRADED_REWARDS, write_trial
 
@@ -47,13 +48,18 @@ def no_harbor_invocation(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def base_image_calls(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+def base_image_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple[list[str], str]]:
     """Repository tests never run docker: base-image preparation is
-    recorded, not performed (its mechanics live in test_base_images.py)."""
-    calls: list[list[str]] = []
+    recorded, not performed (its mechanics live in test_base_images.py).
 
-    def record(flavors: list[str]) -> None:
-        calls.append(sorted(set(flavors)))
+    The agent is recorded with the flavors because it is what selects
+    which template of each flavor is built — a launch that dropped it
+    would build the wrong image and no assertion would notice.
+    """
+    calls: list[tuple[list[str], str]] = []
+
+    def record(flavors: list[str], agent: str) -> None:
+        calls.append((sorted(set(flavors)), agent))
 
     monkeypatch.setattr(base_images_mod, "ensure_base_images", record)
     return calls
@@ -671,7 +677,7 @@ def test_launch_prepares_base_images_before_harbor(
     monkeypatch.setattr(
         base_images_mod,
         "ensure_base_images",
-        lambda flavors: events.append(sorted(set(flavors))),
+        lambda flavors, agent: events.append((sorted(set(flavors)), agent)),
     )
 
     def fake_invoke(
@@ -682,9 +688,10 @@ def test_launch_prepares_base_images_before_harbor(
 
     monkeypatch.setattr(harbor_mod, "invoke_harbor", fake_invoke)
     cli.main(solve_args(data_root, solve_config, "--course", COURSE_ID))
-    # One preparation call covers every selected flavor, and it happens
-    # first: a trial cannot build FROM a base image that does not exist.
-    assert events == [["data-science", "scientific-python"], "harbor"]
+    # One preparation call covers every selected flavor and names the
+    # config's agent, and it happens first: a trial cannot build FROM a
+    # base image that does not exist.
+    assert events == [(["data-science", "scientific-python"], CODEX_AGENT), "harbor"]
 
 
 def test_configuration_change_rerun_is_explained(
@@ -2012,6 +2019,181 @@ def test_grade_presents_rubric_source_when_present(data_root: Path, grade_config
         (job_dirs(plain_root, "grading")[0] / "aat-run.json").read_text(encoding="utf-8")
     )
     assert plain_record["items"][0]["item_identity"] != item["item_identity"]
+
+
+CLAUDE_GRADE_TOML_CLI = """\
+stage = "grade"
+agent = "claude-code"
+model = "anthropic/claude-opus-5"
+reasoning_effort = "high"
+prompt = "grader"
+"""
+
+CLAUDE_JUDGE_TOML_CLI = """\
+stage = "grade"
+agent = "claude-code"
+model = "anthropic/claude-opus-5"
+reasoning_effort = "high"
+prompt = "judge"
+judge = true
+"""
+
+CLAUDE_AUTHENTICATION = harbor_mod.HarborAuthentication(
+    method="claude-oauth-token",
+    source="CLAUDE_CODE_OAUTH_TOKEN",
+    description="Claude Code subscription token",
+    environment_changes={"CLAUDE_CODE_OAUTH_TOKEN": "oauth-secret"},
+)
+
+
+def test_claude_solve_launch_uses_claude_images_and_records_its_authentication(
+    data_root: Path,
+    tmp_path: Path,
+    base_image_calls: list[tuple[list[str], str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Claude launch builds Claude images and records how it authenticated.
+
+    The agent has to travel from the config all the way to the image
+    build and the run record: the same wiring a Codex-only test suite
+    cannot see, because Codex is what every default resolves to.
+    """
+    config = write_config(tmp_path, CLAUDE_SOLVE_TOML, "claude-opus5-high")
+    monkeypatch.setattr(
+        harbor_mod, "resolve_harbor_authentication", lambda _agent: CLAUDE_AUTHENTICATION
+    )
+    monkeypatch.setattr(harbor_mod, "invoke_harbor", lambda _command, _authentication: 0)
+
+    # No trials exist behind the stubbed Harbor, so every item is
+    # reported failed and the run exits nonzero; the launch itself is
+    # what this test is about.
+    assert (
+        cli.main(solve_args(data_root, config, "--course", COURSE_ID, "--assignment", "HW1")) == 1
+    )
+    assert base_image_calls == [(["scientific-python"], CLAUDE_CODE_AGENT)]
+
+    job_dir = job_dirs(data_root, "solving")[0]
+    record = json.loads((job_dir / "aat-run.json").read_text(encoding="utf-8"))
+    assert record["config"]["agent"] == CLAUDE_CODE_AGENT
+    assert record["authentication"] == {
+        "method": "claude-oauth-token",
+        "source": "CLAUDE_CODE_OAUTH_TOKEN",
+    }
+    task_dir = data_root / "tasks" / job_dir.name / record["items"][0]["task_dir_name"]
+    assert (task_dir / "environment" / "base.Dockerfile").read_bytes() == environment_path(
+        "scientific-python", CLAUDE_CODE_AGENT
+    ).read_bytes()
+
+
+def test_agent_without_a_shipped_template_is_reported_at_plan_time(
+    data_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A Harbor agent with no image of its own still runs, and says so.
+
+    Its tasks build on the plain `<flavor>.Dockerfile`, where Harbor finds
+    no agent on PATH and installs one per trial — a cost worth one line
+    rather than a surprise in a build log.
+    """
+    config = write_config(
+        tmp_path,
+        CLAUDE_SOLVE_TOML.replace('agent = "claude-code"', 'agent = "gemini-cli"'),
+        "gemini-high",
+    )
+    assert cli.main(solve_args(data_root, config, "--course", COURSE_ID, "--dry-run")) == 0
+    out = capsys.readouterr().out
+    assert "note: no environment template ships for agent 'gemini-cli'" in out
+    assert "Harbor installs that CLI in every trial" in out
+
+
+def test_claude_grade_run_uses_the_claude_grading_image(
+    data_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = write_config(tmp_path, CLAUDE_GRADE_TOML_CLI, "claude-grader-opus5-high")
+    submission = str(data_root / "submissions" / COURSE_ID / "stu1" / "HW1")
+    assert (
+        cli.main(grade_args(data_root, config, "--submissions", submission, "--materialize-only"))
+        == 0
+    )
+    # The image a manual harbor run would have to build first is the
+    # Claude one, named by its content tag.
+    assert (
+        base_images_mod.base_image_reference("grading", CLAUDE_CODE_AGENT)
+        in capsys.readouterr().out
+    )
+
+    job_dir = job_dirs(data_root, "grading")[0]
+    record = json.loads((job_dir / "aat-run.json").read_text(encoding="utf-8"))
+    task_dir = data_root / "tasks" / job_dir.name / record["items"][0]["task_dir_name"]
+    assert (task_dir / "environment" / "base.Dockerfile").read_bytes() == environment_path(
+        "grading", CLAUDE_CODE_AGENT
+    ).read_bytes()
+
+    # Same submission, same rubric, different agent: a different image
+    # and therefore a different item — Codex gradings never pool with
+    # Claude ones.
+    codex = write_config(tmp_path, GRADE_TOML, "codex-grader-sol-high")
+    assert (
+        cli.main(grade_args(data_root, codex, "--submissions", submission, "--materialize-only"))
+        == 0
+    )
+    codex_record = json.loads(
+        (job_dirs(data_root, "grading")[1] / "aat-run.json").read_text(encoding="utf-8")
+    )
+    assert codex_record["items"][0]["item_id"] == record["items"][0]["item_id"]
+    assert codex_record["items"][0]["item_identity"] != record["items"][0]["item_identity"]
+
+
+def test_claude_judge_reads_gradings_stored_by_a_codex_grader(
+    data_root: Path,
+    grade_config: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A cross-agent judge finds its context config's stored gradings.
+
+    Every part of the lookup key must be a *context* config input. Using
+    the judge's own grading image instead made this exact command match
+    zero gradings and print a top-up hint that could never help, since
+    the gradings asked for already existed.
+    """
+    judge_config = write_config(tmp_path, CLAUDE_JUDGE_TOML_CLI, "claude-judge-opus5-high")
+    submission = str(data_root / "submissions" / COURSE_ID / "stu1" / "HW1")
+    grade_one_initial(data_root, grade_config, "graded__t1")
+
+    capsys.readouterr()
+    initial_jobs = set(job_dirs(data_root, "grading"))
+    assert (
+        cli.main(
+            grade_args(
+                data_root,
+                judge_config,
+                "--submissions",
+                submission,
+                "--context-from",
+                str(grade_config),
+                "--gradings",
+                "1",
+                "--materialize-only",
+            )
+        )
+        == 0
+    )
+    assert "skipping" not in capsys.readouterr().out
+
+    # Job directories are timestamped to the second, so the judge job is
+    # found by difference rather than by sort order.
+    judge_job = next(d for d in job_dirs(data_root, "grading") if d not in initial_jobs)
+    record = json.loads((judge_job / "aat-run.json").read_text(encoding="utf-8"))
+    item = record["items"][0]
+    assert record["config"]["agent"] == CLAUDE_CODE_AGENT
+    assert item["context_config_name"] == "codex-grader-sol-high"
+    assert [ref["trial_name"] for ref in item["prior_trials"]] == ["graded__t1"]
+    task_dir = data_root / "tasks" / judge_job.name / item["task_dir_name"]
+    assert (task_dir / "environment" / "prior_gradings" / "01" / "grading_result.json").is_file()
+    # The judge's own tasks still build on the judge agent's image.
+    assert (task_dir / "environment" / "base.Dockerfile").read_bytes() == environment_path(
+        "grading", CLAUDE_CODE_AGENT
+    ).read_bytes()
 
 
 def test_init_data_creates_and_reports(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

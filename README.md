@@ -13,11 +13,13 @@ student. It serves two workflows:
 
 The project is in its initial development stage.
 
-The implementation is **Codex-first**: the solving, grading, validation,
-and reporting pipeline is built for Codex; other agent stacks and
-cross-agent comparisons follow once the Codex pipeline is hardened. See
-the [design](docs/design.md) for the authoritative sequencing decision
-and the [roadmap](docs/roadmap.md) for planned work.
+Two agent stacks are implemented, **Codex and Claude Code**, each usable
+as solver and as grader. Solver and grader are separate jobs, so either
+agent can grade the other's work, and cross-agent comparison needs no
+new machinery. Everything downstream of the agent — prompts, verifiers,
+identities, results, statistics — is agent-agnostic. See the
+[design](docs/design.md) for the decisions and contracts, and the
+[roadmap](docs/roadmap.md) for planned work, including further agents.
 
 ## Documentation
 
@@ -127,6 +129,24 @@ model-and-reasoning matrix:
 | Luna, high | `codex-grader-luna-high` | `codex-judge-luna-high` |
 | Luna, max | `codex-grader-luna-max` | `codex-judge-luna-max` |
 | Terra, high | `codex-grader-terra-high` | `codex-judge-terra-high` |
+| Opus 5, high | `claude-grader-opus5-high` | `claude-judge-opus5-high` |
+| Opus 5, max | `claude-grader-opus5-max` | `claude-judge-opus5-max` |
+| Sonnet 5, high | `claude-grader-sonnet5-high` | `claude-judge-sonnet5-high` |
+
+Config names describe rather than define: what results are keyed by is
+the config identity. Grading configs read
+`<agent>-grader-<model>-<effort>` and `<agent>-judge-<model>-<effort>`.
+The solve configs do not share one pattern: `codex-high` names the agent
+and the effort, because it was written when Codex was the only stack,
+while `claude-opus5-high` and `claude-sonnet5-high` name the agent, the
+model, and the effort. `codex-high` keeps its name because the name is
+how stored results are selected afterwards — `aat grade --from-solve
+codex-high`, `--context-from`, `aat report --config` — so renaming it
+would leave every existing solve job unreachable by the name that
+selects it.
+
+Solver and grader are separate jobs, so any solver config can be graded
+by any grader config — including across agents.
 
 The judge model is independent of the initial grader model. Each judge
 run names the one initial-grader config whose stored results it consumes
@@ -134,6 +154,11 @@ with `--context-from`, plus the exact number of stored gradings each
 task presents with `--gradings`.
 
 ### Authentication for solving and grading
+
+AAT resolves the configured agent's credential before creating a job,
+preferring subscription-backed access over per-token API billing.
+
+#### Codex
 
 Live Codex runs automatically reuse the file-based login of the local
 Codex CLI. In normal use, authenticate once with `codex login`, then run
@@ -189,6 +214,54 @@ bypasses AAT's automatic injection; set `CODEX_AUTH_JSON_PATH` or
 `OPENAI_API_KEY` in that shell first. `aat intake` invokes the host Codex CLI
 directly, so it already uses the same local cached login without Harbor
 injection.
+
+#### Claude Code
+
+Live Claude Code runs use the subscription token from `claude
+setup-token`; export it once as `CLAUDE_CODE_OAUTH_TOKEN` and run `aat
+solve` or `aat grade` without exporting anything else. The host `claude`
+CLI is needed only to mint that token — the task images carry their own
+pinned copy. AAT resolves Claude authentication in this order:
+
+1. `CLAUDE_FORCE_OAUTH` selects explicitly: `true`, `1`, or `yes` selects
+   `CLAUDE_CODE_OAUTH_TOKEN`, and `false`, `0`, or `no` selects
+   `ANTHROPIC_API_KEY`.
+2. Otherwise, a non-empty `CLAUDE_CODE_OAUTH_TOKEN` is used.
+3. If there is none, `ANTHROPIC_API_KEY` is used; once it is set at all
+   it must be non-empty, and the error names it.
+
+`ANTHROPIC_AUTH_TOKEN` is not a credential source here. Harbor's adapter
+delivers whatever it selects in `ANTHROPIC_API_KEY`, so a bearer token
+would travel in the wrong header, and it is only meaningful against a
+gateway `ANTHROPIC_BASE_URL` — which AAT removes (below).
+
+The token deliberately wins when both it and `ANTHROPIC_API_KEY` are
+present. This matters more than for Codex: Harbor's Claude Code adapter
+prefers the API key over the token unless `CLAUDE_FORCE_OAUTH` is
+truthy, so AAT sets that variable *and* removes both
+`ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` from Harbor's
+environment — an unrelated shell API key can never turn a
+subscription-backed run into a usage-based bill. To choose usage-based
+API authentication deliberately:
+
+```bash
+CLAUDE_FORCE_OAUTH=0 ANTHROPIC_API_KEY=... \
+  aat grade --all --config claude-grader-opus5-high
+```
+
+Whichever credential is selected, AAT also removes the variables
+Harbor's adapter would otherwise read from the shell: `ANTHROPIC_BASE_URL`
+and `ANTHROPIC_MODEL` (which provider and model the run reaches),
+`CLAUDE_CODE_USE_BEDROCK` and `AWS_BEARER_TOKEN_BEDROCK` (either one puts
+the run on Bedrock, a third billing route this project does not use), and
+the behavior fallbacks `CLAUDE_CODE_MAX_TURNS`,
+`CLAUDE_CODE_EFFORT_LEVEL`, `MAX_THINKING_TOKENS`,
+`CLAUDE_CODE_MAX_OUTPUT_TOKENS`, and
+`CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING`. None of them can enter a config
+identity, so a value left in a shell would change every trial of a run
+without leaving any trace of having done so. Agent settings that should
+change a run belong in a config's `agent_args`, which is recorded and
+part of the identity.
 
 ### Gurobi WLS for optimization tasks
 
@@ -283,7 +356,13 @@ make check
 
 Harbor is the package's runtime-orchestration dependency; `numpy` and
 `pandas` back the statistics and reporting layer, and `pypdf` backs the
-submission-ingest PDF splitting. Running actual jobs
-additionally requires Docker and the agent CLIs (Codex CLI
-first), which are external tools packaging cannot provide; repository
-tests never invoke any of them.
+submission-ingest PDF splitting. Running actual jobs additionally
+requires Docker, which packaging cannot provide; repository tests never
+invoke it.
+
+The task images carry their own pinned copy of the agent CLI, so no
+agent CLI has to be installed on the host to run trials. The two stacks
+differ in what the host is needed for: Claude Code needs the `claude` CLI
+once, to mint the subscription token, and never again, while Codex needs
+its CLI installed and logged in, because AAT reads that cached login at
+every launch (and `aat intake` invokes the host Codex CLI directly).

@@ -1,0 +1,79 @@
+# Environment flavor: scientific-python (solve tasks)
+#
+# General scientific-Python baseline: numpy/scipy/pandas/matplotlib,
+# sympy, python-control (control-systems coursework), spreadsheet
+# reading, the notebook toolchain, PDF text extraction, and basic
+# file/JSON inspection utilities. slycot is deliberately omitted (it
+# needs a Fortran toolchain); python-control covers standard coursework
+# without it.
+
+FROM python:3.12.11-slim-bookworm
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    MPLBACKEND=Agg
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        file \
+        fonts-dejavu-core \
+        git \
+        jq \
+        pandoc \
+        poppler-data \
+        poppler-utils \
+        ripgrep \
+        tesseract-ocr \
+        unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Preinstalled agent runtime: pinned Node and Claude Code, so Harbor's
+# agent-install step finds `claude` on PATH and becomes a no-op. This
+# removes the per-trial network install (whose remote download can fail
+# a trial mid-run) and pins the agent version into the image bytes
+# instead of letting each trial resolve the newest release. procps is
+# what that install step would have added alongside: Claude Code shells
+# out to `ps` and `pgrep` to clean up process trees, and once `claude`
+# is on PATH the step that would have installed procps never runs.
+# linux-x64: images are built and run on x86_64.
+# DISABLE_AUTOUPDATER stops Claude Code from replacing itself inside the
+# container: the pinned version above is part of the image bytes, and so
+# of every item identity derived from them, which a CLI that updates
+# itself mid-run would quietly invalidate. Harbor also sets
+# CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1, which suppresses the
+# updater today, but that is Harbor's choice and not this pin's
+# guarantee.
+ENV DISABLE_AUTOUPDATER=1
+ENV NODE_VERSION=22.23.2 \
+    CLAUDE_CODE_VERSION=2.1.233
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends procps \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.gz" \
+    && curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt" \
+    && grep " node-v${NODE_VERSION}-linux-x64.tar.gz\$" SHASUMS256.txt | sha256sum -c - \
+    && tar -xzf "node-v${NODE_VERSION}-linux-x64.tar.gz" -C /usr/local --strip-components=1 --no-same-owner \
+    && rm "node-v${NODE_VERSION}-linux-x64.tar.gz" SHASUMS256.txt \
+    && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+    && npm cache clean --force \
+    && node --version \
+    && claude --version
+
+RUN pip install \
+        numpy==2.3.2 \
+        scipy==1.16.1 \
+        pandas==2.3.1 \
+        matplotlib==3.10.3 \
+        sympy==1.14.0 \
+        control==0.10.1 \
+        openpyxl==3.1.5 \
+        pypdf==5.7.0 \
+        ipykernel==6.29.5 \
+        nbclient==0.10.2 \
+        nbconvert==7.16.6 \
+        python-docx==1.2.0 \
+        python-pptx==1.0.2
+
+WORKDIR /app

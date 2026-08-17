@@ -33,9 +33,18 @@ def materialize_solve_task(
     course_id: str,
     assignment_id: str,
     environment_flavor: str,
+    agent: str,
     prompt_name: str,
     tasks_dir: Path,
 ) -> MaterializedSolveTask:
+    """Write one solve task; see the module docstring.
+
+    ``environment_flavor`` names the capability the assignment needs and
+    ``agent`` selects that flavor's per-agent template (the agent CLI is
+    baked into the image). The flavor name is never suffixed: it is
+    compared by value elsewhere — the ``grading`` flavor is rejected for
+    solve, and the Gurobi license mount requires ``optimization``.
+    """
     item_id = f"{course_id}/{assignment_id}"
     name = _common.task_dir_name([course_id, assignment_id], item_id)
     task_dir = _common.create_task_dir(tasks_dir, name)
@@ -45,8 +54,10 @@ def materialize_solve_task(
 
     (task_dir / "task.toml").write_text(config.rendered_task_toml("solve"), encoding="utf-8")
 
-    environment_template = config.environment_path(environment_flavor)
-    _common.write_dockerfile(task_dir, environment_flavor, ["COPY assignment /app/assignment"])
+    environment_template = config.environment_path(environment_flavor, agent)
+    _common.write_dockerfile(
+        task_dir, environment_flavor, agent, ["COPY assignment /app/assignment"]
+    )
     _common.copy_tree(assignment_dir, task_dir / "environment" / "assignment")
 
     _common.write_test_runner(task_dir, "solve_verifier.py")

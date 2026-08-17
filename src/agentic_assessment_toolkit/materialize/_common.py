@@ -65,7 +65,7 @@ def copy_tree(source: Path, destination: Path) -> None:
     shutil.copytree(source, destination)
 
 
-def write_dockerfile(task_dir: Path, flavor: str, copy_lines: list[str]) -> None:
+def write_dockerfile(task_dir: Path, flavor: str, agent: str, copy_lines: list[str]) -> None:
     """Write environment/Dockerfile and the flavor template it builds on.
 
     Harbor's Docker build context is the task's environment/ directory,
@@ -74,17 +74,20 @@ def write_dockerfile(task_dir: Path, flavor: str, copy_lines: list[str]) -> None
     local base image, which ``aat`` builds from the template before
     launching Harbor (base_images.py); base.Dockerfile is that template,
     verbatim, so the task directory alone can rebuild the image it ran
-    on.
+    on. The agent selects which of the flavor's templates is used — each
+    bakes in that agent's CLI.
     """
     environment_dir = task_dir / "environment"
     environment_dir.mkdir(parents=True, exist_ok=True)
-    (environment_dir / "base.Dockerfile").write_bytes(config.environment_path(flavor).read_bytes())
+    (environment_dir / "base.Dockerfile").write_bytes(
+        config.environment_path(flavor, agent).read_bytes()
+    )
     lines = [
         GENERATED_MARKER,
         "# The base image is base.Dockerfile (this task's environment flavor",
         "# template), built by aat under the local-only name below so this",
         "# build never contacts an image registry.",
-        f"FROM {base_images.base_image_reference(flavor)}",
+        f"FROM {base_images.base_image_reference(flavor, agent)}",
         "",
         *copy_lines,
     ]

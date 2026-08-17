@@ -38,30 +38,33 @@ class BaseImageError(Exception):
     """A required base image is missing and cannot be built."""
 
 
-def base_image_reference(flavor: str) -> str:
+def base_image_reference(flavor: str, agent: str) -> str:
     """The local image name for a flavor's template, pinned by content.
 
     The tag is the template's content hash, so a template edit yields a
-    fresh name and a stale image can never be reused. The name exists in
-    no registry namespace, so builds FROM it never contact one.
+    fresh name and a stale image can never be reused. Each agent has its
+    own template (its CLI is baked in), so the two agents' images differ
+    in the tag while sharing the flavor name. The name exists in no
+    registry namespace, so builds FROM it never contact one.
     """
-    digest = sha256_file(config.environment_path(flavor))
+    digest = sha256_file(config.environment_path(flavor, agent))
     return f"aat-env-{flavor}:{digest[:16]}"
 
 
-def ensure_base_images(flavors: Iterable[str]) -> None:
+def ensure_base_images(flavors: Iterable[str], agent: str) -> None:
     """Build each flavor's base image unless it already exists locally.
 
     Called once per launch, before Harbor: a base image that cannot be
     built would fail every trial of its flavor, so failing here — after
-    retries — is strictly better than starting the job.
+    retries — is strictly better than starting the job. The agent selects
+    which template of each flavor is built.
     """
     for flavor in sorted(set(flavors)):
-        reference = base_image_reference(flavor)
+        reference = base_image_reference(flavor, agent)
         try:
             if _image_exists(reference):
                 continue
-            _build_base_image(flavor, reference)
+            _build_base_image(flavor, agent, reference)
         except OSError as error:
             raise BaseImageError(
                 f"cannot run docker to prepare base image {reference}: {error}"
@@ -75,8 +78,8 @@ def _image_exists(reference: str) -> bool:
     return completed.returncode == 0
 
 
-def _build_base_image(flavor: str, reference: str) -> None:
-    template = config.environment_path(flavor)
+def _build_base_image(flavor: str, agent: str, reference: str) -> None:
+    template = config.environment_path(flavor, agent)
     attempts = len(BUILD_RETRY_DELAYS_SEC) + 1
     print(f"building base image {reference} (environment flavor {flavor!r})")
     for attempt in range(1, attempts + 1):

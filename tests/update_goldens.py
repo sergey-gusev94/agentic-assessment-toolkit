@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from agentic_assessment_toolkit.config import CODEX_AGENT
 from agentic_assessment_toolkit.materialize.grading import materialize_grading_task
 from agentic_assessment_toolkit.materialize.solve import materialize_solve_task
 from tests.conftest import COURSE_ID, FIXTURES_DIR, GOLDEN_DIR
@@ -35,6 +36,7 @@ def main() -> None:
         course_id=COURSE_ID,
         assignment_id="HW1",
         environment_flavor="scientific-python",
+        agent=CODEX_AGENT,
         prompt_name="solver",
         tasks_dir=solve_dir,
     )
@@ -48,6 +50,7 @@ def main() -> None:
         rubric_path=course_dir / "rubrics" / "HW1" / "default.md",
         item_id=f"{COURSE_ID}/stu1/HW1",
         name_parts=(COURSE_ID, "stu1", "HW1"),
+        agent=CODEX_AGENT,
         prompt_name="grader",
         tasks_dir=grading_dir,
     )
@@ -62,6 +65,7 @@ def main() -> None:
         rubric_path=course_dir / "rubrics" / "HW1" / "default.md",
         item_id=f"{COURSE_ID}/stu1/HW1",
         name_parts=(COURSE_ID, "stu1", "HW1"),
+        agent=CODEX_AGENT,
         prompt_name="judge",
         tasks_dir=judge_dir,
         prior_gradings=[

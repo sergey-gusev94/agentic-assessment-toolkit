@@ -20,7 +20,12 @@ from typing import Any
 
 import pytest
 
-from agentic_assessment_toolkit.config import environment_path, preflight_source_path
+from agentic_assessment_toolkit.config import (
+    CLAUDE_CODE_AGENT,
+    CODEX_AGENT,
+    environment_path,
+    preflight_source_path,
+)
 
 
 def _load_preflight() -> ModuleType:
@@ -41,13 +46,15 @@ requires_pipeline_tools = pytest.mark.skipif(
 )
 
 
-def test_dockerfile_embeds_canonical_script() -> None:
-    """The heredoc copy in grading.Dockerfile is byte-identical to the source.
+@pytest.mark.parametrize("agent", [CODEX_AGENT, CLAUDE_CODE_AGENT])
+def test_dockerfile_embeds_canonical_script(agent: str) -> None:
+    """Every grading template's heredoc copy is byte-identical to the source.
 
     The grading image builds from an empty context, so the script ships
-    as a heredoc; this test is what keeps that copy in sync.
+    as a heredoc; this test is what keeps those copies in sync — one per
+    agent, since each agent has its own rendered grading template.
     """
-    dockerfile = environment_path("grading").read_text(encoding="utf-8")
+    dockerfile = environment_path("grading", agent).read_text(encoding="utf-8")
     lines = dockerfile.splitlines(keepends=True)
     start = lines.index("COPY <<'PREFLIGHT_EOF' /opt/aat/preflight.py\n")
     end = lines.index("PREFLIGHT_EOF\n")

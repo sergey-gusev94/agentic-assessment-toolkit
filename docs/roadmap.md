@@ -9,10 +9,15 @@ and the condition that triggers building it. No dates, no history.
 
 ## Next
 
-- **Additional agent stacks** — integrate and validate Claude Code,
-  Gemini CLI, and other agents as solvers and graders, then add
-  cross-agent configurations and comparisons; after the complete Codex
-  pipeline is hardened (design decision 4).
+- **A third agent stack** — Gemini CLI, or any other agent Harbor
+  supports, as solver and grader. What it takes: an agent fragment under
+  `tools/environments/` so every flavor gets a rendered template with
+  that agent's CLI baked in, an entry in the agent-to-suffix mapping,
+  launch-time authentication for its subscription, and committed solve,
+  grader, and judge configs. Until then such an agent still runs — it
+  resolves the plain `<flavor>.Dockerfile` and Harbor installs the CLI
+  per trial, on Harbor's own authentication. Built when a comparison
+  needs that agent.
 
 ## Later, on demand
 

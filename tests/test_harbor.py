@@ -68,6 +68,9 @@ def test_authentication_defaults_to_cached_codex_login_over_api_key(tmp_path: Pa
         "CODEX_AUTH_JSON_PATH": str(auth_path),
         "CODEX_FORCE_AUTH_JSON": None,
         "OPENAI_API_KEY": None,
+        # Removed so no host value can redirect the run; see
+        # CODEX_HOST_OVERRIDE_ENVS.
+        "OPENAI_BASE_URL": None,
     }
 
 
@@ -176,7 +179,215 @@ def test_authentication_rejects_invalid_cached_file(tmp_path: Path) -> None:
 
 
 def test_other_agents_keep_harbor_authentication_behavior(tmp_path: Path) -> None:
-    assert harbor_mod.resolve_harbor_authentication("claude-code", {}, home=tmp_path) is None
+    assert harbor_mod.resolve_harbor_authentication("gemini-cli", {}, home=tmp_path) is None
+
+
+@pytest.mark.parametrize("force_auth_file", ["1", "0"])
+def test_codex_run_carries_no_host_overrides_into_harbor(
+    tmp_path: Path, force_auth_file: str
+) -> None:
+    """Neither Codex credential path lets the host redirect the run.
+
+    Harbor's Codex adapter copies ``OPENAI_BASE_URL`` from its own
+    environment into the container's Codex configuration, so a value left
+    in the shell would send every model call of the run to that host while
+    the run record still names the resolved login.
+    """
+    auth_path = tmp_path / ".codex" / "auth.json"
+    auth_path.parent.mkdir(parents=True)
+    auth_path.write_text('{"tokens": {"id_token": "x"}}', encoding="utf-8")
+    authentication = harbor_mod.resolve_harbor_authentication(
+        "codex",
+        {"CODEX_FORCE_AUTH_JSON": force_auth_file, "OPENAI_API_KEY": "api-secret"},
+        home=tmp_path,
+    )
+    assert authentication is not None
+
+    host = dict.fromkeys(harbor_mod.CODEX_HOST_OVERRIDE_ENVS, "host-value")
+    environment = harbor_subprocess_env(
+        {**host, "PATH": "/bin"}, authentication.environment_changes
+    )
+
+    assert [name for name in harbor_mod.CODEX_HOST_OVERRIDE_ENVS if name in environment] == []
+
+
+CLAUDE_STRIPPED_ENVS = (
+    "ANTHROPIC_AUTH_TOKEN",
+    *harbor_mod.CLAUDE_HOST_OVERRIDE_ENVS,
+)
+
+
+def test_claude_authentication_prefers_the_subscription_token() -> None:
+    authentication = harbor_mod.resolve_harbor_authentication(
+        "claude-code",
+        {"CLAUDE_CODE_OAUTH_TOKEN": "oauth-secret", "ANTHROPIC_API_KEY": "api-secret"},
+    )
+
+    assert authentication is not None
+    assert authentication.provenance() == {
+        "method": "claude-oauth-token",
+        "source": "CLAUDE_CODE_OAUTH_TOKEN",
+    }
+    assert authentication.description == "Claude Code subscription token"
+    assert authentication.environment_changes == {
+        "CLAUDE_FORCE_OAUTH": "1",
+        "CLAUDE_CODE_OAUTH_TOKEN": "oauth-secret",
+        "ANTHROPIC_API_KEY": None,
+        **dict.fromkeys(CLAUDE_STRIPPED_ENVS),
+    }
+
+
+def test_claude_token_run_carries_no_api_key_into_harbor() -> None:
+    """The key must not be present in Harbor's environment at all.
+
+    Harbor's Claude adapter prefers ANTHROPIC_API_KEY over the token, so
+    a key left in the environment would silently bill per token.
+    """
+    authentication = harbor_mod.resolve_harbor_authentication(
+        "claude-code", {"CLAUDE_CODE_OAUTH_TOKEN": "oauth-secret"}
+    )
+    assert authentication is not None
+
+    environment = harbor_subprocess_env(
+        {
+            "ANTHROPIC_API_KEY": "api-secret",
+            "ANTHROPIC_AUTH_TOKEN": "token-secret",
+            "PATH": "/bin",
+        },
+        authentication.environment_changes,
+    )
+
+    assert "ANTHROPIC_API_KEY" not in environment
+    assert "ANTHROPIC_AUTH_TOKEN" not in environment
+    assert environment["CLAUDE_FORCE_OAUTH"] == "1"
+    assert environment["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth-secret"
+
+
+@pytest.mark.parametrize(
+    "environ",
+    [
+        {"CLAUDE_CODE_OAUTH_TOKEN": "oauth-secret"},
+        {"ANTHROPIC_API_KEY": "api-secret"},
+    ],
+    ids=["token", "api-key"],
+)
+def test_claude_run_carries_no_host_overrides_into_harbor(environ: dict[str, str]) -> None:
+    """Neither credential path lets the host redirect or reconfigure the run.
+
+    Harbor's Claude adapter reads these names from its own environment,
+    so a value left in the shell would change the provider, the billing
+    route, or the agent's behavior without appearing in the run record or
+    the config identity — on either path.
+    """
+    authentication = harbor_mod.resolve_harbor_authentication("claude-code", environ)
+    assert authentication is not None
+
+    host = dict.fromkeys(harbor_mod.CLAUDE_HOST_OVERRIDE_ENVS, "host-value")
+    environment = harbor_subprocess_env(
+        {**host, "ANTHROPIC_AUTH_TOKEN": "bearer-secret", "PATH": "/bin"},
+        authentication.environment_changes,
+    )
+
+    assert [name for name in CLAUDE_STRIPPED_ENVS if name in environment] == []
+
+
+def test_claude_api_key_is_the_fallback() -> None:
+    authentication = harbor_mod.resolve_harbor_authentication(
+        "claude-code", {"ANTHROPIC_API_KEY": "api-secret"}
+    )
+
+    assert authentication is not None
+    assert authentication.provenance() == {
+        "method": "anthropic-api-key",
+        "source": "ANTHROPIC_API_KEY",
+    }
+    assert authentication.environment_changes == {
+        "CLAUDE_FORCE_OAUTH": "0",
+        "CLAUDE_CODE_OAUTH_TOKEN": None,
+        "ANTHROPIC_API_KEY": "api-secret",
+        **dict.fromkeys(CLAUDE_STRIPPED_ENVS),
+    }
+
+
+def test_claude_auth_token_is_not_a_credential() -> None:
+    """ANTHROPIC_AUTH_TOKEN never selects a credential; it is only removed.
+
+    Harbor's adapter delivers whatever it selects in ANTHROPIC_API_KEY, so
+    a bearer token would be sent in the wrong header, and a bearer token
+    is only meaningful against the gateway ANTHROPIC_BASE_URL names —
+    which a managed launch strips.
+    """
+    with pytest.raises(harbor_mod.HarborAuthenticationError, match="no Claude Code subscription"):
+        harbor_mod.resolve_harbor_authentication(
+            "claude-code", {"ANTHROPIC_AUTH_TOKEN": "bearer-secret"}
+        )
+
+
+def test_claude_force_oauth_false_selects_the_api_key() -> None:
+    authentication = harbor_mod.resolve_harbor_authentication(
+        "claude-code",
+        {
+            "CLAUDE_FORCE_OAUTH": "false",
+            "CLAUDE_CODE_OAUTH_TOKEN": "oauth-secret",
+            "ANTHROPIC_API_KEY": "api-secret",
+        },
+    )
+
+    assert authentication is not None
+    assert authentication.provenance() == {
+        "method": "anthropic-api-key",
+        "source": "CLAUDE_FORCE_OAUTH",
+    }
+    assert authentication.environment_changes["ANTHROPIC_API_KEY"] == "api-secret"
+    assert authentication.environment_changes["CLAUDE_CODE_OAUTH_TOKEN"] is None
+
+
+def test_claude_force_oauth_true_selects_the_token() -> None:
+    authentication = harbor_mod.resolve_harbor_authentication(
+        "claude-code",
+        {"CLAUDE_FORCE_OAUTH": "1", "CLAUDE_CODE_OAUTH_TOKEN": "oauth-secret"},
+    )
+
+    assert authentication is not None
+    assert authentication.provenance() == {
+        "method": "claude-oauth-token",
+        "source": "CLAUDE_FORCE_OAUTH",
+    }
+
+
+@pytest.mark.parametrize(
+    ("environment", "message"),
+    [
+        ({}, "no Claude Code subscription token"),
+        # A blank token is skipped like an absent Codex auth file, but a
+        # present-and-blank ANTHROPIC_API_KEY is the selected credential
+        # and names itself, exactly as OPENAI_API_KEY does.
+        ({"CLAUDE_CODE_OAUTH_TOKEN": ""}, "no Claude Code subscription token"),
+        (
+            {"CLAUDE_CODE_OAUTH_TOKEN": "", "ANTHROPIC_API_KEY": ""},
+            "ANTHROPIC_API_KEY is missing or empty",
+        ),
+        ({"ANTHROPIC_API_KEY": " "}, "ANTHROPIC_API_KEY is missing or empty"),
+        (
+            {"CLAUDE_FORCE_OAUTH": "true"},
+            "CLAUDE_CODE_OAUTH_TOKEN is missing or empty",
+        ),
+        (
+            {"CLAUDE_FORCE_OAUTH": "1", "CLAUDE_CODE_OAUTH_TOKEN": " "},
+            "selected the subscription token",
+        ),
+        (
+            {"CLAUDE_FORCE_OAUTH": "false", "CLAUDE_CODE_OAUTH_TOKEN": "oauth-secret"},
+            "selected API-key authentication",
+        ),
+        ({"CLAUDE_FORCE_OAUTH": "sometimes"}, "invalid CLAUDE_FORCE_OAUTH"),
+    ],
+)
+def test_claude_authentication_rejects_missing_or_invalid_configuration(
+    environment: dict[str, str], message: str
+) -> None:
+    with pytest.raises(harbor_mod.HarborAuthenticationError, match=message):
+        harbor_mod.resolve_harbor_authentication("claude-code", environment)
 
 
 def test_harbor_environment_applies_authentication_changes() -> None:
@@ -218,6 +429,37 @@ def test_invoke_harbor_passes_resolved_authentication(
     assert environment["CODEX_AUTH_JSON_PATH"] == "/auth.json"
     assert "OPENAI_API_KEY" not in environment
     assert environment["HARBOR_TELEMETRY"] == "0"
+
+
+def test_invoke_harbor_passes_resolved_claude_authentication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Claude launch reaches the subprocess with one route and no overrides."""
+    captured: dict[str, object] = {}
+
+    def fake_run(
+        command: list[str], *, env: dict[str, str], check: bool
+    ) -> subprocess.CompletedProcess[str]:
+        captured.update(command=command, environment=env, check=check)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "competing-key")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://gateway.example")
+    monkeypatch.setenv("CLAUDE_CODE_EFFORT_LEVEL", "low")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    authentication = harbor_mod.resolve_harbor_authentication(
+        "claude-code", {"CLAUDE_CODE_OAUTH_TOKEN": "oauth-secret"}
+    )
+    assert authentication is not None
+
+    assert harbor_mod.invoke_harbor(["harbor", "run"], authentication) == 0
+    environment = captured["environment"]
+    assert isinstance(environment, dict)
+    assert environment["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth-secret"
+    assert environment["CLAUDE_FORCE_OAUTH"] == "1"
+    assert environment["HARBOR_TELEMETRY"] == "0"
+    assert "ANTHROPIC_API_KEY" not in environment
+    assert [name for name in CLAUDE_STRIPPED_ENVS if name in environment] == []
 
 
 def test_job_dir_name_format() -> None:

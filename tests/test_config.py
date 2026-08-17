@@ -35,6 +35,16 @@ prompt = "judge"
 judge = true
 """
 
+CLAUDE_SOLVE_TOML = """\
+stage = "solve"
+agent = "claude-code"
+model = "anthropic/claude-opus-5"
+reasoning_effort = "high"
+prompt = "solver"
+"""
+
+CONFIGS_DIR = Path(__file__).parents[1] / "configs"
+
 
 def write_config(tmp_path: Path, text: str, name: str = "cfg") -> Path:
     path = tmp_path / f"{name}.toml"
@@ -64,25 +74,48 @@ def test_judge_config_loads(tmp_path: Path) -> None:
     assert load_config(write_config(tmp_path, GRADE_TOML)).judge is False
 
 
-@pytest.mark.parametrize(
-    ("grader_name", "judge_name"),
-    [
-        ("codex-grader-sol-high", "codex-judge-sol-high"),
-        ("codex-grader-luna-high", "codex-judge-luna-high"),
-        ("codex-grader-luna-max", "codex-judge-luna-max"),
-        ("codex-grader-terra-high", "codex-judge-terra-high"),
-    ],
-)
+COMMITTED_CONFIGS = sorted(CONFIGS_DIR.glob("*.toml"))
+# Every committed judge config with the initial grader it mirrors, paired
+# by filename so a config added without a test row is still compared.
+GRADER_JUDGE_PAIRS = [
+    (judge.name.replace("-judge-", "-grader-", 1).removesuffix(".toml"), judge.stem)
+    for judge in sorted(CONFIGS_DIR.glob("*-judge-*.toml"))
+]
+
+
+@pytest.mark.parametrize("path", COMMITTED_CONFIGS, ids=lambda path: path.stem)
+def test_committed_configs_load(path: Path) -> None:
+    """Every config in configs/ loads.
+
+    Without this, a malformed committed config — an agent name the toolkit
+    cannot resolve a template for, an effort level Harbor rejects — is
+    first noticed by the launch that was supposed to run it.
+    """
+    assert load_config(path).name == path.stem
+
+
+def test_committed_configs_are_found() -> None:
+    """The two checks above and below must not run over an empty glob."""
+    assert len(COMMITTED_CONFIGS) > 1
+    graders = {path.stem for path in CONFIGS_DIR.glob("*-grader-*.toml")}
+    assert graders
+    assert {grader for grader, _ in GRADER_JUDGE_PAIRS} == graders
+
+
+@pytest.mark.parametrize(("grader_name", "judge_name"), GRADER_JUDGE_PAIRS)
 def test_committed_judge_configs_match_initial_graders(grader_name: str, judge_name: str) -> None:
-    configs_dir = Path(__file__).parents[1] / "configs"
-    grader = load_config(configs_dir / f"{grader_name}.toml")
-    judge = load_config(configs_dir / f"{judge_name}.toml")
+    grader = load_config(CONFIGS_DIR / f"{grader_name}.toml")
+    judge = load_config(CONFIGS_DIR / f"{judge_name}.toml")
 
     assert judge.stage == grader.stage == "grade"
     assert judge.agent == grader.agent
     assert judge.model == grader.model
     assert judge.reasoning_effort == grader.reasoning_effort
     assert judge.rubric_name == grader.rubric_name
+    # agent_args is the remaining key that changes how the agent runs, so
+    # a judge must inherit it too, or it judges under a different setup
+    # than the gradings it reads.
+    assert judge.agent_args == grader.agent_args
     assert grader.prompt_name == "grader"
     assert grader.judge is False
     assert judge.prompt_name == "judge"
@@ -150,6 +183,38 @@ def test_agent_args_must_be_strings(tmp_path: Path) -> None:
         load_config(write_config(tmp_path, SOLVE_TOML + "agent_args = [1]\n"))
 
 
+@pytest.mark.parametrize("agent", ["claude", "claude_code", "Codex", "gpt-5"])
+def test_agent_must_be_a_harbor_agent_name(tmp_path: Path, agent: str) -> None:
+    """A near-miss agent name is worse than a typo, so it is caught here.
+
+    `claude` (the CLI's own name) would load, resolve the *Codex*
+    environment template, and skip Claude's launch-time authentication —
+    running on the wrong image against whichever credential Harbor
+    happened to prefer.
+    """
+    text = CLAUDE_SOLVE_TOML.replace('agent = "claude-code"', f'agent = "{agent}"')
+    with pytest.raises(ConfigError, match=f"agent '{agent}' is not a Harbor agent name"):
+        load_config(write_config(tmp_path, text))
+
+
+def test_claude_reasoning_effort_must_be_a_level_harbor_accepts(tmp_path: Path) -> None:
+    """Harbor's Claude adapter rejects an unknown level once per trial.
+
+    By then the job directory exists and the base image is built, so
+    every trial of the run fails on a typo; loading the config is where
+    that costs nothing.
+    """
+    text = CLAUDE_SOLVE_TOML.replace('reasoning_effort = "high"', 'reasoning_effort = "maximum"')
+    with pytest.raises(ConfigError, match="'reasoning_effort' 'maximum' is not one of"):
+        load_config(write_config(tmp_path, text))
+    for level in config_mod.CLAUDE_CODE_REASONING_EFFORTS:
+        accepted = CLAUDE_SOLVE_TOML.replace('"high"', f'"{level}"')
+        assert load_config(write_config(tmp_path, accepted)).reasoning_effort == level
+    # Harbor's Codex effort flag takes any string, so Codex is not checked.
+    codex = SOLVE_TOML.replace('reasoning_effort = "high"', 'reasoning_effort = "maximum"')
+    assert load_config(write_config(tmp_path, codex)).reasoning_effort == "maximum"
+
+
 def test_config_identity_tracks_config_bytes(tmp_path: Path) -> None:
     first = load_config(write_config(tmp_path, SOLVE_TOML, "a"))
     same = load_config(write_config(tmp_path, SOLVE_TOML, "b"))
@@ -181,18 +246,54 @@ def test_item_identity_folds_environment_rubric_and_assignment() -> None:
     assert item_identity(base, b"FROM x", b"# rubric", "a" * 64, "d" * 64) != with_source
 
 
+# The agents with a shipped template, from the mapping that resolves them.
+AGENTS = tuple(config_mod.AGENT_TEMPLATE_SUFFIXES)
+
+
 def test_environment_flavors_resolve() -> None:
     for flavor in config_mod.ENVIRONMENT_FLAVORS:
-        assert config_mod.environment_path(flavor).is_file()
+        for agent in AGENTS:
+            assert config_mod.environment_path(flavor, agent).is_file()
     with pytest.raises(ConfigError, match="unknown environment flavor"):
-        config_mod.environment_path("latex")
+        config_mod.environment_path("latex", config_mod.CODEX_AGENT)
+    with pytest.raises(ConfigError, match="unknown environment flavor"):
+        config_mod.require_environment_flavor("latex")
+
+
+def test_environment_template_is_per_agent() -> None:
+    """Each agent's template differs, and an unmanaged agent gets the plain one."""
+    for flavor in config_mod.ENVIRONMENT_FLAVORS:
+        codex = config_mod.environment_path(flavor, config_mod.CODEX_AGENT)
+        claude = config_mod.environment_path(flavor, config_mod.CLAUDE_CODE_AGENT)
+        assert codex.name == f"{flavor}.Dockerfile"
+        assert claude.name == f"{flavor}-claude.Dockerfile"
+        assert codex.read_bytes() != claude.read_bytes()
+        # Harbor installs an agent it does not find on PATH itself, so an
+        # agent with no shipped template resolves to the plain Dockerfile.
+        assert config_mod.environment_path(flavor, "gemini-cli") == codex
+
+
+def test_missing_environment_template_is_a_config_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A known flavor whose render is absent must say how to produce it.
+
+    The renders are generated files; forgetting to commit one would
+    otherwise surface as a bare FileNotFoundError from whichever caller
+    read the bytes first.
+    """
+    (tmp_path / "environments").mkdir()
+    monkeypatch.setattr(config_mod, "_template_root", lambda: tmp_path)
+    with pytest.raises(ConfigError, match="make environments"):
+        config_mod.environment_path(config_mod.GRADING_FLAVOR, config_mod.CLAUDE_CODE_AGENT)
 
 
 def test_environment_flavors_include_basic_inspection_tools() -> None:
     for flavor in config_mod.ENVIRONMENT_FLAVORS:
-        dockerfile = config_mod.environment_path(flavor).read_text(encoding="utf-8")
-        assert "\n        file \\" in dockerfile
-        assert "\n        jq \\" in dockerfile
+        for agent in AGENTS:
+            dockerfile = config_mod.environment_path(flavor, agent).read_text(encoding="utf-8")
+            assert "\n        file \\" in dockerfile
+            assert "\n        jq \\" in dockerfile
 
 
 def test_template_paths_exist() -> None:

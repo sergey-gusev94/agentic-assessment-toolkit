@@ -1,0 +1,12 @@
+# Pinned Claude Code solve configuration (docs/design.md, "Experiment
+# configs and config identity"). Experiment configuration only: what to
+# run on (selection) and mechanics (--repeats, --max-concurrent-trials,
+# --force, ...) are CLI flags and never appear here. Harbor strips the
+# provider prefix from the model name into ANTHROPIC_MODEL, and maps
+# reasoning_effort to the Claude CLI's --effort flag. The agent version
+# is baked into the environment image, not pinned here.
+stage = "solve"
+agent = "claude-code"
+model = "anthropic/claude-opus-5"
+reasoning_effort = "high"
+prompt = "solver"

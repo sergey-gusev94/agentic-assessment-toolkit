@@ -164,7 +164,9 @@ def _check_environment(
         )
         return
     try:
-        config.environment_path(flavor)
+        # The declared flavor is the capability the assignment needs; which
+        # agent's template of that flavor a run uses is not a course fact.
+        config.require_environment_flavor(flavor)
     except config.ConfigError as error:
         report.violations.append(f"assignments/{assignment_id}: {error}")
 

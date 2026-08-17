@@ -86,13 +86,13 @@ Initial scope is the existing corpus: Purdue chemical engineering courses
 analysis, LaTeX, and report assignments, as already exercised in
 `reference_repos/`.
 
-The initial implementation is **Codex-first**. Codex is the only required
-solver and rubric-judge stack for the benchmark core, grading assistant, and
-initial benchmark hardening. Solving and judging remain separate,
-independently configured stages even when both use Codex. Claude Code, Gemini
-CLI, other agent stacks, and cross-agent comparisons are explicitly deferred
-until the complete Codex pipeline has been implemented and exercised across
-the target corpus.
+Two agent stacks are in scope, **Codex and Claude Code**, each usable as
+solver and as rubric judge. Solving and judging remain separate,
+independently configured stages, whichever agent runs them: the same
+agent may do both, or one agent's solutions may be graded by the other,
+which is what makes cross-agent comparison available without new
+machinery. Gemini CLI and other stacks are not in scope; adding one is
+described in the [roadmap](roadmap.md).
 
 Deferred: MATLAB and proprietary desktop tools (Aspen Plus, HYSYS, COMSOL),
 handwritten or scanned submissions, and web/GUI assignment tracks.

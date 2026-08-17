@@ -21,12 +21,35 @@ from importlib import resources
 from pathlib import Path
 from typing import Literal
 
+from harbor.models.agent.name import AgentName
+
 from .hashing import sha256_parts
 
 Stage = Literal["solve", "grade"]
 
 ENVIRONMENT_FLAVORS = ("data-science", "grading", "optimization", "scientific-python")
 GRADING_FLAVOR = "grading"
+
+# The agents whose environment images the toolkit ships. Each flavor has
+# one rendered Dockerfile per agent (docs/design.md, "Environment
+# templates"): the agent's CLI is baked in, so the template — and every
+# item identity derived from it — differs per agent.
+CODEX_AGENT = "codex"
+CLAUDE_CODE_AGENT = "claude-code"
+# Rendered-filename suffix per agent; Codex has none, so its templates
+# and the item identities computed from them are unchanged. This mapping
+# is the one place the suffixes are written down: the generator
+# (tools/environments/generate.py) imports it to decide what to render,
+# so a new agent cannot be half-added.
+AGENT_TEMPLATE_SUFFIXES = {CODEX_AGENT: "", CLAUDE_CODE_AGENT: "-claude"}
+# The reasoning-effort levels Harbor's Claude Code adapter accepts,
+# mirroring the `reasoning_effort` CliFlag in
+# harbor.agents.installed.claude_code, which maps them to the Claude
+# CLI's --effort flag and rejects anything else. Mirrored so a typo
+# fails when the config is loaded instead of once per trial; update it
+# when Harbor adds a level. Codex effort is not checked because Harbor's
+# Codex flag takes any string.
+CLAUDE_CODE_REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultracode")
 # The final-judge prompt template; paired with the `judge` config key
 # (see load_config).
 JUDGE_PROMPT_NAME = "judge"
@@ -97,11 +120,35 @@ def load_config(path: Path) -> ExperimentConfig:
     model = _required_str(data, "stage-independent", "model", path)
     prompt_name = _required_str(data, "stage-independent", "prompt", path)
 
+    # Harbor runs the agent by this exact name, so a name it does not
+    # know fails at launch. A near miss is worse than a typo: `claude` or
+    # `claude_code` instead of `claude-code` would resolve the Codex
+    # environment template and skip Claude's launch-time authentication,
+    # running the config on the wrong image against the wrong billing
+    # route.
+    if agent not in AgentName.values():
+        raise ConfigError(
+            f"config {path}: agent {agent!r} is not a Harbor agent name (the two the "
+            f"toolkit ships environment templates and authentication for are "
+            f"{CODEX_AGENT!r} and {CLAUDE_CODE_AGENT!r}; the full list is "
+            "harbor.models.agent.name.AgentName)"
+        )
+
     reasoning_effort = data.get("reasoning_effort")
     if reasoning_effort is not None and (
         not isinstance(reasoning_effort, str) or not reasoning_effort
     ):
         raise ConfigError(f"config {path}: 'reasoning_effort' must be a non-empty string")
+    if (
+        agent == CLAUDE_CODE_AGENT
+        and reasoning_effort is not None
+        and reasoning_effort not in CLAUDE_CODE_REASONING_EFFORTS
+    ):
+        raise ConfigError(
+            f"config {path}: 'reasoning_effort' {reasoning_effort!r} is not one of "
+            f"{', '.join(CLAUDE_CODE_REASONING_EFFORTS)}, the levels Harbor's "
+            f"{CLAUDE_CODE_AGENT} adapter accepts"
+        )
 
     rubric_name = data.get("rubric")
     if stage == "solve" and rubric_name is not None:
@@ -173,21 +220,48 @@ def prompt_path(name: str) -> Path:
     return path
 
 
-def environment_path(flavor: str) -> Path:
+def require_environment_flavor(flavor: str) -> None:
+    """Reject a flavor name no template exists for."""
     if flavor not in ENVIRONMENT_FLAVORS:
         raise ConfigError(
             f"unknown environment flavor {flavor!r}; known flavors: "
             + ", ".join(ENVIRONMENT_FLAVORS)
         )
-    return _template_root() / "environments" / f"{flavor}.Dockerfile"
+
+
+def environment_path(flavor: str, agent: str) -> Path:
+    """The environment template one agent's tasks of this flavor build on.
+
+    Every flavor ships one Dockerfile per supported agent, differing only
+    in the agent CLI baked in. An agent the toolkit ships no template for
+    resolves to the plain ``<flavor>.Dockerfile``: Harbor installs an
+    agent it does not find on PATH itself, so that image still works —
+    the install just costs a per-trial network step.
+
+    The templates are rendered — one flavor source plus one agent
+    fragment per file, from ``tools/environments/`` (see "Environment
+    templates" in docs/design.md) — so a missing one means the renders
+    were never committed rather than that the flavor is unknown, which is
+    why it is reported as its own error.
+    """
+    require_environment_flavor(flavor)
+    suffix = AGENT_TEMPLATE_SUFFIXES.get(agent, "")
+    path = _template_root() / "environments" / f"{flavor}{suffix}.Dockerfile"
+    if not path.is_file():
+        raise ConfigError(
+            f"environment template for flavor {flavor!r} and agent {agent!r} is missing "
+            f"at {path}; render the templates from their sources with "
+            "'make environments' (python tools/environments/generate.py) and commit them"
+        )
+    return path
 
 
 def preflight_source_path() -> Path:
     """The canonical PDF-preflight script.
 
-    grading.Dockerfile embeds a verbatim copy of it as a heredoc (the
+    Every grading template embeds a verbatim copy of it as a heredoc (the
     image builds from an empty context, so nothing can be COPY'd in); a
-    repository test asserts the embedded copy matches this file.
+    repository test asserts the embedded copies match this file.
     """
     return _template_root() / "environments" / "preflight.py"
 

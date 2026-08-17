@@ -1,0 +1,14 @@
+# Pinned Claude Code final-judge configuration (docs/design.md,
+# decision 16 and "Experiment configs and config identity"). Run with
+# --context-from naming the initial grading config whose stored
+# gradings the judge consumes, plus --gradings N, the exact
+# number of stored gradings each task presents. Any edit
+# here, to the judge prompt template, or to the selected rubric is a
+# new config identity by construction.
+stage = "grade"
+agent = "claude-code"
+model = "anthropic/claude-sonnet-5"
+reasoning_effort = "high"
+prompt = "judge"
+rubric = "default"
+judge = true

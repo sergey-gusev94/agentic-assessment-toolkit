@@ -18,7 +18,7 @@ from importlib import metadata
 from pathlib import Path
 
 from . import __version__
-from .config import ExperimentConfig, Stage
+from .config import CLAUDE_CODE_AGENT, CODEX_AGENT, ExperimentConfig, Stage
 from .grading_schema import JUSTIFICATION_FILENAME, RESULT_FILENAME
 from .hashing import sha256_bytes
 
@@ -33,6 +33,56 @@ CODEX_AUTH_JSON_PATH_ENV = "CODEX_AUTH_JSON_PATH"
 CODEX_FORCE_AUTH_JSON_ENV = "CODEX_FORCE_AUTH_JSON"
 CODEX_HOME_ENV = "CODEX_HOME"
 OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
+
+# Host variables Harbor's Codex adapter reads on its own, removed on both
+# Codex credential paths for the same reason as the Claude list below.
+# `OPENAI_BASE_URL` is the whole list: the adapter copies it into the
+# container's Codex configuration, so every model call of the run would go
+# to that host while the run record still names the cached login. The Codex
+# adapter declares no behavior fallbacks, so nothing else needs removing.
+CODEX_HOST_OVERRIDE_ENVS = ("OPENAI_BASE_URL",)
+
+CLAUDE_FORCE_OAUTH_ENV = "CLAUDE_FORCE_OAUTH"
+CLAUDE_CODE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"
+ANTHROPIC_API_KEY_ENV = "ANTHROPIC_API_KEY"
+ANTHROPIC_AUTH_TOKEN_ENV = "ANTHROPIC_AUTH_TOKEN"
+
+# Host variables Harbor's Claude Code adapter reads on its own, which
+# every managed Claude launch removes on both credential paths. Two
+# kinds are here, and both would otherwise let the host redirect a run
+# without leaving a trace in the run record or the config identity:
+# variables that choose the provider or billing route, and variables the
+# adapter falls back to for agent behavior. Behavior belongs in a
+# config's `agent_args`, which is recorded in the run record and enters
+# the config identity.
+CLAUDE_HOST_OVERRIDE_ENVS = (
+    # Redirects the API calls to another host and, because the adapter
+    # then keeps the provider-prefixed model name, asks that host for
+    # "anthropic/claude-opus-5" — a name the official API rejects.
+    "ANTHROPIC_BASE_URL",
+    # Either one alone flips the adapter into Bedrock mode: a third
+    # billing route, taken while the run record still says the method was
+    # the subscription token. Stripping the two is enough, because every
+    # other AWS passthrough is gated on Bedrock mode being on.
+    "CLAUDE_CODE_USE_BEDROCK",
+    "AWS_BEARER_TOKEN_BEDROCK",
+    # Only read when the config names no model, which ours always do;
+    # removed anyway so no host value can decide what ran.
+    "ANTHROPIC_MODEL",
+    # Behavior fallbacks. CLAUDE_CODE_EFFORT_LEVEL is the sharpest: the
+    # config schema allows omitting reasoning_effort, and then the host
+    # value would silently set the effort of every trial.
+    "CLAUDE_CODE_MAX_TURNS",
+    "CLAUDE_CODE_EFFORT_LEVEL",
+    "MAX_THINKING_TOKENS",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+    "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING",
+)
+# ANTHROPIC_DEFAULT_SONNET_MODEL, ANTHROPIC_DEFAULT_OPUS_MODEL,
+# ANTHROPIC_DEFAULT_HAIKU_MODEL, and CLAUDE_CODE_SUBAGENT_MODEL are
+# deliberately absent: the adapter only ever writes them (from the model
+# it already resolved) and never reads the host's values, so removing
+# them would suggest a protection that is not needed.
 
 _TRUE_ENV_VALUES = frozenset({"true", "1", "yes"})
 _FALSE_ENV_VALUES = frozenset({"false", "0", "no"})
@@ -102,17 +152,31 @@ def resolve_harbor_authentication(
 ) -> HarborAuthentication | None:
     """Resolve authentication before a live Harbor job is materialized.
 
-    Codex runs prefer the same file-based cached login used by the local
-    Codex CLI. Explicit Harbor overrides retain precedence, and an API key
-    is used only when explicitly selected or no cached login exists.
-    Other agents retain Harbor's own authentication behavior.
+    Both managed agents prefer subscription-backed execution (design
+    decision 3) and fall back to an API key only when explicitly selected
+    or when no subscription credential exists. Codex runs prefer the same
+    file-based cached login used by the local Codex CLI; Claude Code runs
+    prefer the subscription token from ``claude setup-token``. Explicit
+    Harbor overrides retain precedence in both cases. Other agents retain
+    Harbor's own authentication behavior.
+
+    Bedrock-backed Claude is deliberately out of scope: it is a third
+    billing route this project does not use, so rather than manage it,
+    Claude launches remove the variables that would select it (see
+    ``CLAUDE_HOST_OVERRIDE_ENVS``) — a run must not take a route its own
+    record does not name.
     """
-    if agent != "codex":
-        return None
-
     environment = os.environ if environ is None else environ
-    user_home = Path.home() if home is None else home
+    if agent == CODEX_AGENT:
+        return _resolve_codex_authentication(environment, Path.home() if home is None else home)
+    if agent == CLAUDE_CODE_AGENT:
+        return _resolve_claude_code_authentication(environment)
+    return None
 
+
+def _resolve_codex_authentication(
+    environment: Mapping[str, str], user_home: Path
+) -> HarborAuthentication:
     if CODEX_AUTH_JSON_PATH_ENV in environment:
         raw_path = environment[CODEX_AUTH_JSON_PATH_ENV]
         if not raw_path.strip():
@@ -200,6 +264,7 @@ def _auth_file_authentication(path: Path, *, source: str) -> HarborAuthenticatio
             CODEX_AUTH_JSON_PATH_ENV: str(path),
             CODEX_FORCE_AUTH_JSON_ENV: None,
             OPENAI_API_KEY_ENV: None,
+            **dict.fromkeys(CODEX_HOST_OVERRIDE_ENVS),
         },
     )
 
@@ -223,6 +288,114 @@ def _api_key_authentication(
             CODEX_AUTH_JSON_PATH_ENV: None,
             CODEX_FORCE_AUTH_JSON_ENV: "0",
             OPENAI_API_KEY_ENV: api_key,
+            **dict.fromkeys(CODEX_HOST_OVERRIDE_ENVS),
+        },
+    )
+
+
+def _resolve_claude_code_authentication(
+    environment: Mapping[str, str],
+) -> HarborAuthentication:
+    """Select the Claude Code credential, subscription token first.
+
+    Harbor's Claude Code adapter prefers ``ANTHROPIC_API_KEY`` over the
+    subscription token unless ``CLAUDE_FORCE_OAUTH`` is truthy, so a run
+    the user believes is subscription-backed would silently bill per
+    token whenever a key happens to sit in the shell. Resolving here
+    makes the choice explicit and one-way.
+
+    ``ANTHROPIC_AUTH_TOKEN`` is not a credential source here, and neither
+    is it left in place (see ``_claude_token_authentication``): the
+    adapter passes whatever it selects in ``ANTHROPIC_API_KEY``, so a
+    bearer token would travel in the wrong header, and a bearer token is
+    only meaningful against the gateway ``ANTHROPIC_BASE_URL`` names —
+    which a managed launch removes.
+
+    Precedence on failure mirrors Codex: a candidate that is absent is
+    skipped, while the last-resort variable, once present, is selected
+    and must be non-empty.
+    """
+    if CLAUDE_FORCE_OAUTH_ENV in environment:
+        force_token = _parse_env_bool(
+            environment[CLAUDE_FORCE_OAUTH_ENV], name=CLAUDE_FORCE_OAUTH_ENV
+        )
+        if force_token:
+            return _claude_token_authentication(environment, explicitly_selected=True)
+        return _anthropic_api_key_authentication(environment, explicitly_selected=True)
+
+    token = environment.get(CLAUDE_CODE_OAUTH_TOKEN_ENV)
+    if token is not None and token.strip():
+        return _claude_token_authentication(environment, explicitly_selected=False)
+
+    if ANTHROPIC_API_KEY_ENV in environment:
+        return _anthropic_api_key_authentication(environment, explicitly_selected=False)
+
+    raise HarborAuthenticationError(
+        "no Claude Code subscription token or Anthropic API key is available; run "
+        f"'claude setup-token' and export {CLAUDE_CODE_OAUTH_TOKEN_ENV}, or set "
+        f"{ANTHROPIC_API_KEY_ENV}"
+    )
+
+
+def _claude_token_authentication(
+    environment: Mapping[str, str], *, explicitly_selected: bool
+) -> HarborAuthentication:
+    token = environment.get(CLAUDE_CODE_OAUTH_TOKEN_ENV)
+    if token is None or not token.strip():
+        selection = (
+            f" because {CLAUDE_FORCE_OAUTH_ENV}=true selected the subscription token"
+            if explicitly_selected
+            else ""
+        )
+        raise HarborAuthenticationError(
+            f"{CLAUDE_CODE_OAUTH_TOKEN_ENV} is missing or empty{selection}; run "
+            "'claude setup-token' to obtain one"
+        )
+    return HarborAuthentication(
+        method="claude-oauth-token",
+        source=(CLAUDE_FORCE_OAUTH_ENV if explicitly_selected else CLAUDE_CODE_OAUTH_TOKEN_ENV),
+        description="Claude Code subscription token",
+        # CLAUDE_FORCE_OAUTH=1 makes Harbor's adapter use the token, and
+        # both Anthropic key variables are dropped from the Harbor
+        # subprocess environment entirely: an API key the adapter cannot
+        # see is an API key the run cannot silently bill against. The
+        # host-override variables go with them, so nothing left in the
+        # shell can change the provider, the route, or the agent's
+        # behavior.
+        environment_changes={
+            CLAUDE_FORCE_OAUTH_ENV: "1",
+            CLAUDE_CODE_OAUTH_TOKEN_ENV: token,
+            ANTHROPIC_API_KEY_ENV: None,
+            ANTHROPIC_AUTH_TOKEN_ENV: None,
+            **dict.fromkeys(CLAUDE_HOST_OVERRIDE_ENVS),
+        },
+    )
+
+
+def _anthropic_api_key_authentication(
+    environment: Mapping[str, str], *, explicitly_selected: bool
+) -> HarborAuthentication:
+    api_key = environment.get(ANTHROPIC_API_KEY_ENV)
+    if api_key is None or not api_key.strip():
+        selection = (
+            f" because {CLAUDE_FORCE_OAUTH_ENV}=false selected API-key authentication"
+            if explicitly_selected
+            else ""
+        )
+        raise HarborAuthenticationError(f"{ANTHROPIC_API_KEY_ENV} is missing or empty{selection}")
+    return HarborAuthentication(
+        method="anthropic-api-key",
+        source=(CLAUDE_FORCE_OAUTH_ENV if explicitly_selected else ANTHROPIC_API_KEY_ENV),
+        description="Anthropic API key",
+        # The selected key is passed through; the subscription token, the
+        # unused bearer-token variable, and the host overrides are
+        # dropped, so exactly one route with one model reaches Harbor.
+        environment_changes={
+            CLAUDE_FORCE_OAUTH_ENV: "0",
+            CLAUDE_CODE_OAUTH_TOKEN_ENV: None,
+            ANTHROPIC_API_KEY_ENV: api_key,
+            ANTHROPIC_AUTH_TOKEN_ENV: None,
+            **dict.fromkeys(CLAUDE_HOST_OVERRIDE_ENVS),
         },
     )
 

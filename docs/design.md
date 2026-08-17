@@ -39,18 +39,26 @@ analysis are in research.md.
    budget.
 3. **Subscription-backed execution.** Agents and graders run through existing
    Codex CLI / Claude Code / Gemini CLI subscriptions, not per-token API
-   billing. Harbor supports this natively. Before a live Codex solve or grading
-   job is materialized, the toolkit finds and validates the same file-based
-   cached login used by the local Codex CLI and explicitly passes it to Harbor;
-   the mechanism is identical for both stages. API-key authentication remains
-   available as an explicit override or a fallback when no cached login exists.
-4. **Codex-first implementation.** The first complete benchmark and
-   grading-assistant pipelines use Codex for both assignment solving and
-   grading. Benchmark core, grading, validation, reporting, and hardening
-   are completed for the Codex stack before Claude Code, Gemini CLI, or
-   other agents are integrated. Solver and grader remain separate,
-   independently configured jobs. Multi-agent comparison is a long-term
-   goal ([roadmap.md](roadmap.md)).
+   billing. Harbor supports this natively. Before a live solve or grading
+   job is materialized, the toolkit finds and validates the subscription
+   credential of the configured agent — the file-based cached login of the
+   local Codex CLI, or Claude Code's subscription token — and explicitly
+   passes it to Harbor; the mechanism is identical for both stages.
+   API-key authentication remains available as an explicit override or a
+   fallback when no subscription credential exists.
+4. **Two supported agent stacks: Codex and Claude Code.** Both run as
+   solvers and as graders, and solver and grader are separate,
+   independently configured jobs — so a Codex solver can be graded by a
+   Claude grader, or either agent can grade the other's work. Each agent
+   has its own environment images (its CLI is baked in) and its own
+   launch-time authentication; everything downstream — prompts,
+   verifiers, identities, results, statistics — is agent-agnostic, and
+   the agent is recorded in every run record, so results are segregated
+   and labeled by config identity as usual. Cross-agent comparison is
+   therefore available; it runs on images that differ in the baked-in
+   agent CLI rather than on byte-identical ones (see environment
+   templates). Further agents are integrated when a comparison needs them
+   ([roadmap.md](roadmap.md)).
 5. **One grading pipeline, two submission sources.** Grading is a Harbor job
    whose tasks are "grade this submission directory against this reference
    solution and rubric, with the assignment handout alongside." A submission directory can be a Harbor solve
@@ -245,6 +253,8 @@ identically in code, documentation, and output.
   of the same submission, matched by that config's own pooling key.
 - **Environment flavor** — a capability-named Dockerfile template:
   `data-science`, `optimization`, `scientific-python`, or `grading`.
+  Each flavor ships one rendered template per supported agent (the
+  agent's CLI is baked in); the flavor name is the same either way.
 - **Base criteria** — the non-bonus rubric criteria; `base_points` and
   `base_max` are their sums, the denominator of every percentage.
 - **Sidecar** — the optional `<assignment_id>.toml` beside an
@@ -563,6 +573,18 @@ grading configs — the `judge` flag marking a final-judge config
 (decision 16). Selection
 and mechanics never appear in configs (see CLI design).
 
+Loading a config checks what it can before anything costs money. `agent`
+must be a name Harbor knows (`harbor.models.agent.name.AgentName`),
+because a near miss like `claude` instead of `claude-code` would
+otherwise load, resolve the *Codex* environment template, and skip
+Claude's launch-time authentication. For `claude-code`, `reasoning_effort`
+must be one of the levels Harbor's adapter accepts — `low`, `medium`,
+`high`, `xhigh`, `max`, `ultracode` — which it maps to the Claude CLI's
+`--effort` flag and otherwise rejects once per trial, after job
+directories and image builds already exist. Codex effort is not checked,
+because Harbor's Codex flag takes any string. The prompt template must
+exist, and the `judge` flag and the judge prompt must travel together.
+
 Materialized solve and grading tasks each give the agent 7,200 seconds.
 They give environment startup 1,800 seconds and verification 600
 seconds. Harbor applies these as separate phase limits, not as one
@@ -648,9 +670,9 @@ derived from the packages the reference corpus actually uses:
   them. The image carries the PDF preflight script at
   `/opt/aat/preflight.py`, embedded in the Dockerfile as a heredoc
   because environment templates build from an empty context; a
-  repository test keeps the embedded copy byte-identical to
-  `templates/environments/preflight.py`. The template ends with a
-  build-time smoke test exercising the advertised inspection tools —
+  repository test keeps the embedded copy in every grading template
+  byte-identical to `templates/environments/preflight.py`. The template
+  ends with a build-time smoke test exercising the advertised tools —
   contact sheets, annotation, OCR, PDF rasterization and structure
   inspection, the Python readers, and the preflight's self-test,
   which authors four synthetic PDFs (an overflowed-bounding-box
@@ -664,14 +686,65 @@ derived from the packages the reference corpus actually uses:
   image creates `/app/grading_output/`.
 
 Every environment includes `file` and `jq` for basic file-type and JSON
-inspection, plus a pinned Node and a pinned Codex CLI: Harbor's
-agent-install step checks for `codex` on PATH and skips its own
-network install (nvm, a remote Node-version lookup, `npm install
-@latest`) when it is present, so preinstalling turns a per-trial
+inspection, plus a pinned Node and a pinned agent CLI: Harbor's
+agent-install step checks for the agent's command on PATH and skips its
+own network install (a remote version lookup and an install of the
+newest release) when it is present, so preinstalling turns a per-trial
 network dependency — one transient lookup failure cost a trial
 mid-run — into a build-time one, and pins the agent version into the
 image bytes, and therefore into item identity, instead of letting each
-trial resolve `@latest`.
+trial resolve the newest release. Skipping that step also skips whatever
+else it would have installed, so each image installs that itself. For
+Codex the step would have added `ripgrep`, which every flavor already
+installs for all agents; for Claude Code it would have added `procps`,
+which the Claude templates install and the Codex ones do not need
+(Claude Code shells out to `ps` and `pgrep` to clean up process trees).
+The Claude templates also set `DISABLE_AUTOUPDATER=1`, because a CLI
+that replaces itself inside the container would break the version pin
+the image bytes — and every identity derived from them — rest on.
+
+Because the agent CLI is baked in, each flavor has one template per
+supported agent: `<flavor>.Dockerfile` for Codex and
+`<flavor>-claude.Dockerfile` for Claude Code, differing only in that
+block. The templates are rendered, not maintained twice.
+`tools/environments/` holds a **flavor source** per flavor
+(`<flavor>.Dockerfile.in`, the whole image with a single
+`{agent_runtime}` placeholder line), an **agent fragment** per agent
+(`agent-<agent>.part`, the lines that install one agent's CLI), and
+`generate.py`, which substitutes each fragment into each source and
+writes every (flavor, agent) pair into the package. The two extensions
+mark files that are not themselves Dockerfiles and are never built. The
+sources live outside the package because nothing at run time reads
+them. Regeneration is deliberate and its diff is reviewed as a contract
+change — a rendered template's bytes are item identity, so an edit forks
+the doneness and pooling key of every item that used the old bytes; a
+repository test verifies that the committed renders match their sources
+and that the template directory holds no other Dockerfile, and `make
+check` never regenerates. The rendered files carry no "generated" header
+for the same reason: adding a line would change their bytes and fork
+every existing item identity, so the notice lives in the sources.
+
+The flavor name itself never carries the agent. It is compared by value
+elsewhere — `grading` is rejected for solve tasks, and the Gurobi
+license mount requires `optimization` — so a suffixed flavor name would
+silently defeat both checks. The agent is a separate argument to
+template resolution, and because the base image tag is a content hash,
+the two agents' images of one flavor get distinct tags automatically.
+
+An agent for which no template is shipped resolves to the plain
+`<flavor>.Dockerfile`: Harbor installs an agent it does not find on PATH
+itself, so the image still works — the install just costs a per-trial
+network step. `aat` prints one line at plan time when that happens, so
+the per-trial cost is never silent. A missing template for an agent that
+should have one — a render that was not committed — is a usage error
+naming the path and the command that produces it.
+
+A Codex-versus-Claude comparison therefore does not run on
+byte-identical environments: the images differ in the baked-in agent CLI
+and in the packages its install step would have added. The two stacks'
+environments are equivalent in the capabilities the flavor promises, not
+identical in bytes; every other input — prompt, verifier, task layout,
+rubric — is the same file.
 
 Every environment also carries one document-reading baseline, because
 course material routinely arrives as more than PDFs (the corpus holds
@@ -711,8 +784,9 @@ digest-pinned ([roadmap.md](roadmap.md)). Solver licenses (Gurobi WLS) are
 credentials: never baked into images, never committed, always injected
 at run time.
 
-The flavor set changes only by editing the templates in this
-repository — a reviewed code change. Intake never writes Dockerfiles:
+The flavor set changes only by editing the flavor sources in this
+repository and re-rendering — a reviewed code change. Intake never
+writes Dockerfiles:
 when a course clearly needs packages no flavor carries, the intake
 agent picks the closest flavor and records the missing packages in
 `intake-notes.md` as an environment gap for the maintainer to fold
@@ -721,11 +795,14 @@ Until the template is updated, the solver's run-time install
 permission (below) covers the gap: a missing package costs the agent
 an install command, not a failed run.
 
-Template resolution for a solve task: the per-assignment sidecar's
-`environment` key when present, else the course default in
-`course.toml`, else a clear error. Grading tasks always resolve to
-`grading`; the `grading` flavor is reserved for grading tasks, and a
-solve task that resolves to it fails at materialization. Layout
+Template resolution for a solve task: the flavor comes from the
+per-assignment sidecar's `environment` key when present, else the course
+default in `course.toml`, else a clear error; the agent comes from the
+experiment config. Grading tasks always resolve to the `grading`
+flavor; that flavor is reserved for grading tasks, and a solve task that
+resolves to it fails at materialization. A course declares only the
+flavor — which agent's template of it a run uses is not a course fact,
+and `aat check-course` validates the declared flavor alone. Layout
 details are in [data-conventions.md](data-conventions.md).
 
 ### Prompt templates
@@ -800,9 +877,14 @@ details are never copied into prompt text.
 ### Authentication at launch
 
 Authentication is run-time host configuration, not experiment identity. For a
-live job whose configured agent is `codex`, `aat` resolves authentication before
-creating either the job directory or its materialized task directory. It uses
-the first applicable source:
+live job whose configured agent is one the toolkit manages — `codex` or
+`claude-code` — `aat` resolves authentication before
+creating either the job directory or its materialized task directory. Both
+resolutions prefer the subscription credential (decision 3), remove the
+competing variables from the Harbor subprocess environment, and record only the
+resolved method and selection source.
+
+For `codex` it uses the first applicable source:
 
 1. A non-empty `CODEX_AUTH_JSON_PATH`, which selects that file.
 2. `CODEX_FORCE_AUTH_JSON`: `true`, `1`, or `yes` selects
@@ -813,14 +895,77 @@ the first applicable source:
 The automatically discovered cached file therefore wins over an API key that
 happens to be present in the shell. Once a source is selected, its competing
 authentication variables are removed from the Harbor subprocess environment;
-the run never silently falls back to another billing route. A selected auth file
+the run never silently falls back to another billing route. Both Codex paths
+also remove `OPENAI_BASE_URL`, which Harbor's Codex adapter copies into the
+container's Codex configuration: a value left in the shell would send every
+model call of the run to that host while the run record still names the
+resolved login. That is the whole Codex list — its adapter reads no host
+fallbacks for agent behavior, unlike the Claude Code adapter below. A selected auth file
 must exist, be readable, and contain a non-empty JSON object. A selected API key
 must be non-empty, and `CODEX_FORCE_AUTH_JSON` must contain one of the listed
 boolean values. Any violation exits with a usage error before durable run output
 is created. This is a local structural preflight, not a provider call: a revoked
 login, an unrefreshable expired credential, or an account without access can
-still fail after launch. Agents other than Codex retain Harbor's own
-authentication behavior.
+still fail after launch.
+
+For `claude-code` it uses the first applicable source:
+
+1. `CLAUDE_FORCE_OAUTH`: `true`, `1`, or `yes` selects
+   `CLAUDE_CODE_OAUTH_TOKEN` (the subscription token from
+   `claude setup-token`); `false`, `0`, or `no` selects
+   `ANTHROPIC_API_KEY`.
+2. A non-empty `CLAUDE_CODE_OAUTH_TOKEN`.
+3. `ANTHROPIC_API_KEY`, when it is set at all.
+
+The subscription token therefore wins over an API key that happens to be present
+in the shell, and both spellings of the boolean and the failure behavior match
+the Codex list. A blank token is skipped exactly as an absent Codex auth file is,
+but the last-resort variable, once present, is the selected credential and must
+be non-empty — `ANTHROPIC_API_KEY` set to the empty string is a usage error
+naming it, just as `OPENAI_API_KEY` is. `CLAUDE_FORCE_OAUTH` must contain one of
+the listed boolean values, and having no credential at all exits with a usage
+error naming `claude setup-token`. Every one of these failures happens before
+durable run output is created.
+
+`ANTHROPIC_AUTH_TOKEN` is not a credential source. Harbor's adapter passes
+whatever it selects in `ANTHROPIC_API_KEY`, so a bearer token there would be sent
+in the wrong header, and a bearer token is only meaningful against the gateway
+`ANTHROPIC_BASE_URL` names — which a managed launch removes.
+
+On the token path the API key is not merely deselected: `ANTHROPIC_API_KEY` and
+`ANTHROPIC_AUTH_TOKEN` are removed from the Harbor subprocess environment
+entirely, and `CLAUDE_FORCE_OAUTH=1` is set. Both halves are load-bearing —
+Harbor's Claude Code adapter prefers `ANTHROPIC_API_KEY` over the token unless
+that variable is truthy, so a key left in the environment would turn a run the
+user believes is subscription-backed into a per-token bill, silently. On the
+API-key path the selected key is passed through, `CLAUDE_FORCE_OAUTH=0` is set,
+and the token is removed instead.
+
+Removing the competing credential is not enough by itself, because Harbor's
+Claude Code adapter reads more names straight from its own environment. Both
+paths therefore also remove:
+
+- `ANTHROPIC_BASE_URL` — it redirects the calls to another host, and the adapter
+  then keeps the provider-prefixed model name, asking that host for
+  `anthropic/claude-opus-5`.
+- `CLAUDE_CODE_USE_BEDROCK` and `AWS_BEARER_TOKEN_BEDROCK` — either one alone
+  puts the adapter on Bedrock. Bedrock-backed Claude is deliberately out of
+  scope: it is a third billing route this project does not use, and a run must
+  never take a route its own record does not name. Removing these two is
+  sufficient, because the adapter gates every other AWS variable on Bedrock mode
+  being on.
+- `ANTHROPIC_MODEL` — read only when the config names no model, which the
+  committed configs always do; removed so that can never matter.
+- `CLAUDE_CODE_MAX_TURNS`, `CLAUDE_CODE_EFFORT_LEVEL`, `MAX_THINKING_TOKENS`,
+  `CLAUDE_CODE_MAX_OUTPUT_TOKENS`, and
+  `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING` — host fallbacks for how the agent
+  runs. `CLAUDE_CODE_EFFORT_LEVEL` is the sharpest: a config may omit
+  `reasoning_effort`, and the host value would then set the effort of every
+  trial. None of these can enter a config identity, so a value left in a shell
+  would change a whole run invisibly. Settings that should change a run belong in
+  a config's `agent_args`, which is recorded and part of the identity.
+
+Agents other than these two retain Harbor's own authentication behavior.
 
 File-based Codex credentials may represent either ChatGPT subscription access or
 an API-key login. If the local Codex installation stores its cached login only in
@@ -829,8 +974,11 @@ an operating-system keyring, the user selects file storage with
 Harbor needs a host file that it can copy into the container. The credential is
 treated as secret: it is held only in the subprocess environment or selected
 file, and neither its value nor its path enters the run record. The run record
-contains only the resolved method (`codex-auth-json` or `openai-api-key`) and
-selection source.
+contains only the resolved method and the selection source. The four method
+values name the mechanism each credential arrives by: `codex-auth-json` (the
+cached login file), `openai-api-key`, `claude-oauth-token` (the subscription
+token from `claude setup-token`, named after the `CLAUDE_CODE_OAUTH_TOKEN`
+variable that supplies it), and `anthropic-api-key`.
 
 `--dry-run` and `--materialize-only` do not resolve authentication and remain
 credential-free. A user who manually runs the Harbor command printed by
@@ -1240,11 +1388,26 @@ src/agentic_assessment_toolkit/
 └── templates/             # package data (importlib.resources)
     ├── prompts/           # solver.md, grader.md, intake.md
     ├── verifiers/         # two standalone scripts
-    ├── environments/      # one Dockerfile per flavor, plus
+    ├── environments/      # one Dockerfile per (flavor, agent), plus
     │                      #   preflight.py (canonical source of the
-    │                      #   grading image's embedded copy)
+    │                      #   grading images' embedded copy)
     └── task/              # task.toml template
 ```
+
+Repository-only tooling, never shipped and never read at run time:
+
+```text
+tools/
+└── environments/          # what the shipped Dockerfiles are rendered from
+    ├── <flavor>.Dockerfile.in   # flavor source: one flavor's whole image,
+    │                            #   with one {agent_runtime} placeholder line
+    ├── agent-<agent>.part       # agent fragment: the lines that install
+    │                            #   one agent's CLI
+    └── generate.py              # renders every (flavor, agent) pair
+```
+
+Neither extension is a Dockerfile: `.Dockerfile.in` and `.part` mark
+files that are only ever inputs to `generate.py`.
 
 Experiment configs live at the repository root under `configs/`,
 committed and versioned with the code (see the contracts section).
@@ -1529,8 +1692,10 @@ Item
 selection is unchanged — any submission source, `--sample` included —
 and for each selected item the prior gradings are looked up by the
 *context* config's own per-item identity (its config identity plus the
-item's resolved inputs, including the context config's rubric), so the
-judge consumes exactly the gradings that pool together under the
+item's resolved inputs — the context config's rubric, and the grading
+environment template of the context config's agent, which differs from
+the judge's whenever the two name different agents), so the judge
+consumes exactly the gradings that pool together under the
 frozen initial config; a context rubric that has since advanced
 matches nothing, which is correct — the initial rounds under the new
 rubric do not exist yet. Each task presents exactly N prior gradings:

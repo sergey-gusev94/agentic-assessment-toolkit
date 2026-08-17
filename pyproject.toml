@@ -52,6 +52,7 @@ include = [
   "/pyproject.toml",
   "/src",
   "/tests",
+  "/tools",
 ]
 
 [tool.ruff]
@@ -92,7 +93,7 @@ testpaths = ["tests"]
 python_version = "3.12"
 strict = true
 mypy_path = "src"
-files = ["src", "tests"]
+files = ["src", "tests", "tools"]
 warn_return_any = true
 warn_unused_ignores = true
 # Template scripts (the verifiers and the PDF preflight) are standalone
@@ -103,3 +104,10 @@ exclude = [
   "src/agentic_assessment_toolkit/templates/",
   "tests/fixtures/",
 ]
+
+# Harbor ships no py.typed marker, so its modules cannot be analyzed.
+# Only one is imported: the agent-name enum a config's `agent` key is
+# validated against.
+[[tool.mypy.overrides]]
+module = ["harbor.*"]
+ignore_missing_imports = true

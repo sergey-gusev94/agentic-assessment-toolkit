@@ -71,11 +71,15 @@ def materialize_grading_task(
     rubric_source_dir: Path | None = None,
     item_id: str,
     name_parts: Sequence[str],
+    agent: str,
     prompt_name: str,
     tasks_dir: Path,
     prior_gradings: Sequence[tuple[Path, Path]] | None = None,
 ) -> MaterializedGradingTask:
     """Write one grading task; see the module docstring.
+
+    ``agent`` selects which of the grading flavor's per-agent templates
+    the task builds on — each bakes in that agent's CLI.
 
     ``prior_gradings`` — (grading_result.json path, justification.md
     path) pairs in presentation order — makes this a final-judge task:
@@ -98,7 +102,7 @@ def materialize_grading_task(
 
     (task_dir / "task.toml").write_text(config.rendered_task_toml("grade"), encoding="utf-8")
 
-    environment_template = config.environment_path(config.GRADING_FLAVOR)
+    environment_template = config.environment_path(config.GRADING_FLAVOR, agent)
     copy_lines = [
         "COPY assignment /app/assignment",
         "COPY submission /app/submission",
@@ -109,7 +113,7 @@ def materialize_grading_task(
         copy_lines.append("COPY rubric_source /app/rubric_source")
     if prior_gradings:
         copy_lines.append("COPY prior_gradings /app/prior_gradings")
-    _common.write_dockerfile(task_dir, config.GRADING_FLAVOR, copy_lines)
+    _common.write_dockerfile(task_dir, config.GRADING_FLAVOR, agent, copy_lines)
 
     environment_dir = task_dir / "environment"
     _common.copy_tree(assignment_dir, environment_dir / "assignment")

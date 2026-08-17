@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 
 from agentic_assessment_toolkit.base_images import base_image_reference
-from agentic_assessment_toolkit.config import environment_path
+from agentic_assessment_toolkit.config import CLAUDE_CODE_AGENT, CODEX_AGENT, environment_path
+from agentic_assessment_toolkit.hashing import sha256_file
 from agentic_assessment_toolkit.materialize._common import MaterializeError, slugify, task_dir_name
 from agentic_assessment_toolkit.materialize.grading import (
     MaterializedGradingTask,
@@ -71,6 +72,7 @@ def test_solve_task_matches_golden(tmp_path: Path) -> None:
         course_id=COURSE_ID,
         assignment_id="HW1",
         environment_flavor="scientific-python",
+        agent=CODEX_AGENT,
         prompt_name="solver",
         tasks_dir=tmp_path,
     )
@@ -85,6 +87,7 @@ def test_grading_task_matches_golden(tmp_path: Path) -> None:
         rubric_path=COURSE_DIR / "rubrics" / "HW1" / "default.md",
         item_id=f"{COURSE_ID}/stu1/HW1",
         name_parts=(COURSE_ID, "stu1", "HW1"),
+        agent=CODEX_AGENT,
         prompt_name="grader",
         tasks_dir=tmp_path,
     )
@@ -110,6 +113,7 @@ def materialize_judge_task(
         rubric_path=COURSE_DIR / "rubrics" / "HW1" / "default.md",
         item_id=f"{COURSE_ID}/stu1/HW1",
         name_parts=(COURSE_ID, "stu1", "HW1"),
+        agent=CODEX_AGENT,
         prompt_name="judge",
         tasks_dir=tasks_dir,
         prior_gradings=prior if prior is not None else PRIOR_GRADINGS,
@@ -157,6 +161,7 @@ def test_plain_grading_task_declares_no_required_files(tmp_path: Path) -> None:
         rubric_path=COURSE_DIR / "rubrics" / "HW1" / "default.md",
         item_id=f"{COURSE_ID}/stu1/HW1",
         name_parts=(COURSE_ID, "stu1", "HW1"),
+        agent=CODEX_AGENT,
         prompt_name="grader",
         tasks_dir=tmp_path,
     )
@@ -171,6 +176,7 @@ def test_solve_task_structure(tmp_path: Path) -> None:
         course_id=COURSE_ID,
         assignment_id="HW1",
         environment_flavor="scientific-python",
+        agent=CODEX_AGENT,
         prompt_name="solver",
         tasks_dir=tmp_path,
     )
@@ -184,9 +190,9 @@ def test_solve_task_structure(tmp_path: Path) -> None:
     assert dockerfile.endswith("COPY assignment /app/assignment\n")
     # The Dockerfile builds FROM the flavor's shared base image, and the
     # task carries the base recipe verbatim (docs/design.md).
-    assert f"FROM {base_image_reference('scientific-python')}\n" in dockerfile
+    assert f"FROM {base_image_reference('scientific-python', CODEX_AGENT)}\n" in dockerfile
     base = (task_dir / "environment" / "base.Dockerfile").read_bytes()
-    assert base == environment_path("scientific-python").read_bytes()
+    assert base == environment_path("scientific-python", CODEX_AGENT).read_bytes()
     assert (task_dir / "environment" / "assignment" / "statement.md").is_file()
     assert (task_dir / "tests" / "solve_verifier.py").is_file()
     assert (task_dir / "tests" / "input_manifest.json").is_file()
@@ -203,6 +209,7 @@ def test_grading_task_structure(tmp_path: Path) -> None:
         rubric_path=COURSE_DIR / "rubrics" / "HW1" / "default.md",
         item_id=f"{COURSE_ID}/stu1/HW1",
         name_parts=(COURSE_ID, "stu1", "HW1"),
+        agent=CODEX_AGENT,
         prompt_name="grader",
         tasks_dir=tmp_path,
     )
@@ -210,9 +217,9 @@ def test_grading_task_structure(tmp_path: Path) -> None:
     dockerfile = (task_dir / "environment" / "Dockerfile").read_text(encoding="utf-8")
     assert "COPY assignment /app/assignment" in dockerfile
     assert "COPY rubric.md /app/rubric.md" in dockerfile
-    assert f"FROM {base_image_reference('grading')}\n" in dockerfile
+    assert f"FROM {base_image_reference('grading', CODEX_AGENT)}\n" in dockerfile
     base = (task_dir / "environment" / "base.Dockerfile").read_bytes()
-    assert base == environment_path("grading").read_bytes()
+    assert base == environment_path("grading", CODEX_AGENT).read_bytes()
     assert (task_dir / "environment" / "assignment" / "statement.md").is_file()
     assert (task_dir / "environment" / "rubric.md").is_file()
     assert set(task.input_hashes) == {
@@ -232,6 +239,56 @@ def test_grading_task_structure(tmp_path: Path) -> None:
     assert 'artifacts = ["/app/grading_output"]' in task_toml
 
 
+def test_claude_task_builds_on_the_claude_template(tmp_path: Path) -> None:
+    """A Claude-configured task uses the flavor's Claude template.
+
+    A targeted assertion rather than a second full golden tree: the only
+    thing that differs from the Codex tasks is which environment template
+    the task carries and which base image it names, and a second golden
+    tree would duplicate every input file to say it.
+    """
+    task = materialize_solve_task(
+        assignment_dir=COURSE_DIR / "assignments" / "HW1",
+        course_id=COURSE_ID,
+        assignment_id="HW1",
+        environment_flavor="scientific-python",
+        agent=CLAUDE_CODE_AGENT,
+        prompt_name="solver",
+        tasks_dir=tmp_path / "solve",
+    )
+    dockerfile = (task.task_dir / "environment" / "Dockerfile").read_text(encoding="utf-8")
+    claude_template = environment_path("scientific-python", CLAUDE_CODE_AGENT)
+    assert f"FROM {base_image_reference('scientific-python', CLAUDE_CODE_AGENT)}\n" in dockerfile
+    assert (task.task_dir / "environment" / "base.Dockerfile").read_bytes() == (
+        claude_template.read_bytes()
+    )
+    assert task.input_hashes["environment"] == sha256_file(claude_template)
+
+    grading_task = materialize_grading_task(
+        assignment_dir=COURSE_DIR / "assignments" / "HW1",
+        submission_dir=FIXTURES_DIR / "submission",
+        reference_solution_dir=COURSE_DIR / "reference_solutions" / "HW1",
+        rubric_path=COURSE_DIR / "rubrics" / "HW1" / "default.md",
+        item_id=f"{COURSE_ID}/stu1/HW1",
+        name_parts=(COURSE_ID, "stu1", "HW1"),
+        agent=CLAUDE_CODE_AGENT,
+        prompt_name="grader",
+        tasks_dir=tmp_path / "grade",
+    )
+    grading_dockerfile = (grading_task.task_dir / "environment" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
+    claude_grading_template = environment_path("grading", CLAUDE_CODE_AGENT)
+    assert f"FROM {base_image_reference('grading', CLAUDE_CODE_AGENT)}\n" in grading_dockerfile
+    assert (grading_task.task_dir / "environment" / "base.Dockerfile").read_bytes() == (
+        claude_grading_template.read_bytes()
+    )
+    # Same flavor, different bytes: the Codex image is never reused.
+    assert base_image_reference("grading", CLAUDE_CODE_AGENT) != base_image_reference(
+        "grading", CODEX_AGENT
+    )
+
+
 def test_grading_task_expected_criteria_match_the_rubric(tmp_path: Path) -> None:
     """The expected-criteria file is the parsed rubric, in rubric order."""
     task = materialize_grading_task(
@@ -241,6 +298,7 @@ def test_grading_task_expected_criteria_match_the_rubric(tmp_path: Path) -> None
         rubric_path=COURSE_DIR / "rubrics" / "HW1" / "default.md",
         item_id=f"{COURSE_ID}/stu1/HW1",
         name_parts=(COURSE_ID, "stu1", "HW1"),
+        agent=CODEX_AGENT,
         prompt_name="grader",
         tasks_dir=tmp_path,
     )
@@ -264,6 +322,7 @@ def test_grading_task_missing_rubric_is_an_error(tmp_path: Path) -> None:
             rubric_path=COURSE_DIR / "rubrics" / "HW2" / "default.md",
             item_id=f"{COURSE_ID}/stu1/HW2",
             name_parts=(COURSE_ID, "stu1", "HW2"),
+            agent=CODEX_AGENT,
             prompt_name="grader",
             tasks_dir=tmp_path,
         )
@@ -283,6 +342,7 @@ def test_grading_task_unparseable_rubric_is_an_error(tmp_path: Path) -> None:
             rubric_path=rubric,
             item_id="x",
             name_parts=("x",),
+            agent=CODEX_AGENT,
             prompt_name="grader",
             tasks_dir=tasks_dir,
         )
@@ -299,6 +359,7 @@ def test_grading_schema_copy_is_verbatim(tmp_path: Path) -> None:
         rubric_path=COURSE_DIR / "rubrics" / "HW1" / "default.md",
         item_id="x",
         name_parts=("x",),
+        agent=CODEX_AGENT,
         prompt_name="grader",
         tasks_dir=tmp_path,
     )
@@ -313,6 +374,7 @@ def test_existing_task_dir_is_an_error(tmp_path: Path) -> None:
             course_id=COURSE_ID,
             assignment_id="HW1",
             environment_flavor="scientific-python",
+            agent=CODEX_AGENT,
             prompt_name="solver",
             tasks_dir=tmp_path,
         )
@@ -331,6 +393,7 @@ def test_missing_submission_dir_is_an_error(tmp_path: Path) -> None:
             rubric_path=COURSE_DIR / "rubrics" / "HW1" / "default.md",
             item_id="x",
             name_parts=("x",),
+            agent=CODEX_AGENT,
             prompt_name="grader",
             tasks_dir=tmp_path,
         )
@@ -350,6 +413,7 @@ def test_grading_task_with_rubric_source(tmp_path: Path) -> None:
         rubric_source_dir=source,
         item_id="x",
         name_parts=("x",),
+        agent=CODEX_AGENT,
         prompt_name="grader",
         tasks_dir=tasks_dir,
     )
@@ -367,6 +431,7 @@ def test_grading_task_without_rubric_source(tmp_path: Path) -> None:
         rubric_path=COURSE_DIR / "rubrics" / "HW1" / "default.md",
         item_id="x",
         name_parts=("x",),
+        agent=CODEX_AGENT,
         prompt_name="grader",
         tasks_dir=tmp_path,
     )
