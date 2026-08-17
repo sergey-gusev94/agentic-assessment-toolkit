@@ -45,6 +45,9 @@ handful of commands (plus one-time setup):
 
 ```bash
 aat init-data                                # one-time: create the ~/aat-data layout
+# one-time per agent: `codex login` for Codex, a token file for Claude Code
+# (see Authentication below); `aat check-auth --config NAME` reports which
+# credential a config would use, without launching anything.
 aat intake --all                             # build courses/ from dumps under raw/
 aat check-course --course PU_CHE597DS_S2026  # per course: re-run until clean
 aat ingest-submissions --all                 # build submissions/ from LMS exports
@@ -155,8 +158,26 @@ task presents with `--gradings`.
 
 ### Authentication for solving and grading
 
-AAT resolves the configured agent's credential before creating a job,
+AAT resolves the configured agent's credential before it plans a run,
 preferring subscription-backed access over per-token API billing.
+Resolution comes first because planning hashes every selected
+submission: a credential that is missing or malformed then fails in a
+second, above the selection output rather than beneath it. An executing
+run prints the method and source it resolved (`auth: claude-oauth-token
+(source: automatic-token-file)`) and records both in `aat-run.json`.
+
+To check a credential without launching anything — worth doing before a
+run that will take hours — ask for the resolution alone:
+
+```bash
+aat check-auth --config claude-grader-sonnet5-high
+```
+
+It prints the method and the selection source, never the credential
+itself or the path of a file holding one, and exits nonzero with the
+same message a launch would give. `--dry-run` and `--materialize-only`
+resolve nothing at all, so a selection can always be inspected without
+any credential present.
 
 #### Codex
 
@@ -218,9 +239,15 @@ injection.
 #### Claude Code
 
 Live Claude Code runs use the subscription token from `claude
-setup-token`. Write it once to `~/.claude/aat-oauth-token` and every
-later `aat solve` or `aat grade` finds it with nothing exported, the way
-Codex runs find `~/.codex/auth.json`.
+setup-token`, which needs a Claude plan that includes Claude Code (Pro
+or Max); Anthropic's
+[Claude Code setup documentation](https://docs.claude.com/en/docs/claude-code/setup)
+describes the plans and the login. Without such a plan, use
+`ANTHROPIC_API_KEY` instead and accept usage-based billing (below).
+
+Write the token once to `~/.claude/aat-oauth-token` and every later `aat
+solve` or `aat grade` finds it with nothing exported, the way Codex runs
+find `~/.codex/auth.json`.
 
 Run `claude setup-token` on its own and finish the browser sign-in; it
 prints the token, `sk-ant-oat…`, and the date it expires. Do not
@@ -276,6 +303,26 @@ token file is read at launch and its contents travel to the Harbor
 subprocess in `CLAUDE_CODE_OAUTH_TOKEN`. Neither the token nor the path
 enters the run record, which keeps only the method
 (`claude-oauth-token`) and the selection source.
+
+To run different jobs on different Claude accounts, keep one token file
+per account and name the one a run should use. Nothing is renamed, so
+two terminals can run two accounts at once:
+
+```bash
+# one file per account, each minted while that account was signed in
+chmod 600 ~/.claude/aat-oauth-token.*
+
+AAT_CLAUDE_TOKEN_FILE=~/.claude/aat-oauth-token.other \
+  aat grade --all --config claude-grader-sonnet5-high
+```
+
+A run that names its file records `source: AAT_CLAUDE_TOKEN_FILE`, while
+one that took the default records `automatic-token-file` — the account
+itself is never recorded. Which account is the default is a property of
+one path, so make `~/.claude/aat-oauth-token` a symlink to the file you
+want by default (`ln -sfn`, and `ls -l` then answers "which account am I
+about to use"). The account never enters config identity, so trials
+pool by item regardless of which one paid for them.
 
 `ANTHROPIC_AUTH_TOKEN` is not a credential source here. Harbor's adapter
 delivers whatever it selects in `ANTHROPIC_API_KEY`, so a bearer token

@@ -316,6 +316,10 @@ export CLAUDE_FORCE_OAUTH=1
 Harbor then removes any competing API-key authentication and invokes the
 official Claude CLI noninteractively with streaming JSON output.
 
+As built, the toolkit sets `CLAUDE_FORCE_OAUTH` itself and reads the token
+from a file it discovers, so neither variable is exported by hand: see
+README, "Claude Code", for the setup that supersedes this snippet.
+
 Official references:
 
 - [Claude Code CLI reference](https://docs.anthropic.com/en/docs/claude-code/cli-usage)

@@ -253,6 +253,17 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     ingest.add_argument("--dry-run", action="store_true", help="list what would run, then exit")
 
+    check_auth = subparsers.add_parser(
+        "check-auth",
+        help="report the credential a config's agent would use, without launching (read-only)",
+    )
+    check_auth.add_argument(
+        "--config",
+        required=True,
+        metavar="NAME",
+        help="experiment config name (configs/NAME.toml) or path",
+    )
+
     check = subparsers.add_parser(
         "check-course",
         help="report a course tree's contract violations, gaps, and intake notes (read-only)",
@@ -309,6 +320,8 @@ def _run(args: argparse.Namespace) -> int:
         return _run_init_data(args)
     if args.command == "report":
         return _run_report(args)
+    if args.command == "check-auth":
+        return _run_check_auth(args)
     if args.command == "check-course":
         return _run_check_course(args)
     if args.command == "intake":
@@ -339,6 +352,19 @@ def _run(args: argparse.Namespace) -> int:
             f"note: no environment template ships for agent {config.agent!r}; tasks build "
             "on the plain {flavor}.Dockerfile and Harbor installs that CLI in every trial"
         )
+    # Resolved before planning, which hashes every selected submission:
+    # a missing or malformed credential is setup, not selection, and
+    # burying its error under a page of selection output is what makes a
+    # first Claude run feel broken rather than unconfigured. The offline
+    # modes stay credential-free, so `--dry-run` inspects any selection
+    # without one.
+    authentication = (
+        None
+        if args.dry_run or args.materialize_only
+        else harbor_mod.resolve_harbor_authentication(config.agent)
+    )
+    if authentication is not None:
+        print(f"auth: {authentication.method} (source: {authentication.source})")
     jobs_root = root / (SOLVE_JOBS_DIRNAME if stage == "solve" else GRADING_JOBS_DIRNAME)
     totals = harbor_mod.done_trial_totals(jobs_root, stage)
     if stage == "solve":
@@ -370,6 +396,7 @@ def _run(args: argparse.Namespace) -> int:
         planned,
         args,
         gurobi_license_file=gurobi_license_file,
+        authentication=authentication,
     )
     if n_judge_skipped and not args.dry_run:
         # "Run outcomes are loud": a judge run that skipped items did
@@ -579,6 +606,30 @@ def _run_ingest_submissions(args: argparse.Namespace) -> int:
             "conflicts, then re-run"
         )
         return 1
+    return 0
+
+
+def _run_check_auth(args: argparse.Namespace) -> int:
+    """Report which credential a launch of this config would select.
+
+    The same resolution a live run performs, with nothing launched and
+    no data root touched — so a long run can be preceded by one cheap
+    command instead of by its own first failure. Only the method and the
+    selection source are printed, the two fields a run record keeps;
+    the credential itself is never displayed, and neither is the path of
+    a file that holds one.
+    """
+    config = config_mod.load_config(_config_path(args.config))
+    authentication = harbor_mod.resolve_harbor_authentication(config.agent)
+    if authentication is None:
+        print(
+            f"{config.name}: agent {config.agent!r} keeps Harbor's own authentication; "
+            "aat resolves no credential for it"
+        )
+        return 0
+    print(f"{config.name}: {authentication.description}")
+    print(f"  method: {authentication.method}")
+    print(f"  source: {authentication.source}")
     return 0
 
 
@@ -1379,6 +1430,7 @@ def _execute(
     args: argparse.Namespace,
     *,
     gurobi_license_file: Path | None,
+    authentication: harbor_mod.HarborAuthentication | None,
 ) -> int:
     groups = _deficit_groups(planned, args)
     to_run = [item for group in groups.values() for item in group]
@@ -1417,9 +1469,6 @@ def _execute(
         )
         return 0
 
-    authentication = (
-        None if args.materialize_only else harbor_mod.resolve_harbor_authentication(config.agent)
-    )
     # Executing runs record the version of the harbor binary that will
     # actually be invoked; materialize-only stays offline and records the
     # package metadata version instead.
@@ -1484,8 +1533,6 @@ def _execute(
         for job in launched:
             print(f"materialize-only; harbor not invoked. command: {shlex.join(job.command)}")
         return 0
-    if authentication is not None:
-        print(f"authentication: {authentication.description}")
     base_images_mod.ensure_base_images(flavors, config.agent)
     harbor_status = 0
     for index, job in enumerate(launched):

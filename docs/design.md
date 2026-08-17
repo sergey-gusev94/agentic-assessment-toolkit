@@ -30,8 +30,8 @@ analysis are in research.md.
    conventions with their intake brief and checker, the
    submission-ingest adapters and identity tables, and the thin
    `aat solve` / `aat grade` / `aat report` / `aat check-course` /
-   `aat intake` / `aat ingest-submissions` / `aat init-data`
-   commands. It does not
+   `aat check-auth` / `aat intake` / `aat ingest-submissions` /
+   `aat init-data` commands. It does not
    implement an agent runner, sandbox framework, run orchestrator, model
    abstraction, transcript schema, experiment database, or results viewer:
    Harbor does all orchestration; the toolkit constructs one command line
@@ -878,11 +878,21 @@ details are never copied into prompt text.
 
 Authentication is run-time host configuration, not experiment identity. For a
 live job whose configured agent is one the toolkit manages — `codex` or
-`claude-code` — `aat` resolves authentication before
-creating either the job directory or its materialized task directory. Both
-resolutions prefer the subscription credential (decision 3), remove the
+`claude-code` — `aat` resolves authentication before it plans the run, and so
+before creating either the job directory or its materialized task directory.
+Both resolutions prefer the subscription credential (decision 3), remove the
 competing variables from the Harbor subprocess environment, and record only the
 resolved method and selection source.
+
+Resolution precedes planning because planning hashes every selected
+submission: an absent or malformed credential is host setup, not selection, and
+resolving afterwards would print its error under a page of selection output —
+the difference between a first run that reads as unconfigured and one that
+reads as broken. The cost is that a selection already at its target still needs
+a credential to report "nothing to do"; `--dry-run` covers that case, since the
+offline modes resolve nothing. An executing run prints the method and source it
+resolved before any job directory exists, which is also what distinguishes two
+accounts of the same provider from each other while the run is starting.
 
 For `codex` it uses the first applicable source:
 
@@ -1412,8 +1422,8 @@ src/agentic_assessment_toolkit/
 ├── report.py              # report rendering behind `aat report`
 ├── cli.py                 # argparse: `aat solve` / `aat grade` /
 │                          #   `aat report` / `aat check-course` /
-│                          #   `aat intake` / `aat ingest-submissions` /
-│                          #   `aat init-data`
+│                          #   `aat check-auth` / `aat intake` /
+│                          #   `aat ingest-submissions` / `aat init-data`
 └── templates/             # package data (importlib.resources)
     ├── prompts/           # solver.md, grader.md, intake.md
     ├── verifiers/         # two standalone scripts
@@ -1636,6 +1646,8 @@ aat report [--course ID] [--assignment ID] [--config NAME]...
 
 aat check-course --course ID [--data-root PATH]
 
+aat check-auth --config NAME
+
 aat intake (--course ID | --all) [--data-root PATH]
            [--model NAME] [--reasoning-effort LEVEL]
            [--force] [--dry-run] [--print-prompt]
@@ -1645,6 +1657,14 @@ aat ingest-submissions (--course ID | --all) [--data-root PATH]
 
 aat init-data [--data-root PATH] [--git]
 ```
+
+`aat check-auth` is read-only and touches no data root: it performs the
+same credential resolution a launch of the named config would, and
+prints the resolved method and selection source — the two fields a run
+record keeps — so a run that will take hours can be preceded by a cheap
+check instead of by its own first failure. It prints neither the
+credential nor the path of a file holding one, and a failure exits
+nonzero with the message a launch would have given.
 
 `aat check-course` is read-only and writes nothing: it renders one
 course's contract violations (nonzero exit until fixed), completeness

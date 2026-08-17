@@ -10,6 +10,9 @@ from agentic_assessment_toolkit import cli
 from agentic_assessment_toolkit import harbor as harbor_mod
 from agentic_assessment_toolkit.config import CLAUDE_CODE_AGENT, CODEX_AGENT, environment_path
 from agentic_assessment_toolkit.data_root import RUBRIC_ARCHIVE_DIRNAME
+from agentic_assessment_toolkit.harbor import (
+    resolve_harbor_authentication as real_resolve_authentication,
+)
 from agentic_assessment_toolkit.report import REPORT_FILENAMES
 from tests.conftest import COURSE_ID, build_data_root
 from tests.test_config import CLAUDE_SOLVE_TOML, GRADE_TOML, SOLVE_TOML, write_config
@@ -140,6 +143,145 @@ def test_offline_run_modes_do_not_resolve_authentication(
         )
         == 0
     )
+
+
+CLAUDE_ENVS = (
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "AAT_CLAUDE_TOKEN_FILE",
+    "CLAUDE_FORCE_OAUTH",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+)
+
+
+def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A home with no credentials and a shell that carries none either."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    for name in CLAUDE_ENVS:
+        monkeypatch.delenv(name, raising=False)
+    # check-auth resolves for real; the autouse stub would hide what it reports.
+    monkeypatch.setattr(harbor_mod, "resolve_harbor_authentication", real_resolve_authentication)
+    return home
+
+
+def test_check_auth_reports_the_credential_without_revealing_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    home = isolated_home(tmp_path, monkeypatch)
+    token_file = home / ".claude" / "aat-oauth-token"
+    token_file.parent.mkdir()
+    token_file.write_text("sk-ant-oat01-secret\n", encoding="utf-8")
+    config = write_config(tmp_path, CLAUDE_SOLVE_TOML, "claude-opus5-high")
+
+    assert run_cli("check-auth", "--config", str(config)) == 0
+
+    out = capsys.readouterr().out
+    assert "method: claude-oauth-token" in out
+    assert "source: automatic-token-file" in out
+    # The two things a run record also withholds: the credential and the
+    # path of the file holding it.
+    assert "sk-ant-oat01-secret" not in out
+    assert str(token_file) not in out
+
+
+def test_check_auth_reports_a_missing_credential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    isolated_home(tmp_path, monkeypatch)
+    config = write_config(tmp_path, CLAUDE_SOLVE_TOML, "claude-opus5-high")
+
+    assert run_cli("check-auth", "--config", str(config)) == 2
+    assert "no Claude Code subscription token" in capsys.readouterr().err
+
+
+def test_check_auth_writes_nothing_and_needs_no_data_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = isolated_home(tmp_path, monkeypatch)
+    (home / ".claude").mkdir()
+    (home / ".claude" / "aat-oauth-token").write_text("sk-ant-oat01-secret\n", encoding="utf-8")
+    config = write_config(tmp_path, CLAUDE_SOLVE_TOML, "claude-opus5-high")
+    before = sorted(p.name for p in tmp_path.iterdir())
+
+    assert run_cli("check-auth", "--config", str(config)) == 0
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == before
+
+
+def test_missing_authentication_fails_before_any_selection_work(
+    data_root: Path,
+    grade_config: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Setup errors must not arrive under a page of selection output.
+
+    Planning hashes every selected submission, so resolving afterwards
+    would make an unconfigured first run look like a selection problem.
+    """
+
+    def fail(_agent: str) -> harbor_mod.HarborAuthentication:
+        raise harbor_mod.HarborAuthenticationError("login unavailable")
+
+    monkeypatch.setattr(harbor_mod, "resolve_harbor_authentication", fail)
+
+    assert (
+        cli.main(grade_args(data_root, grade_config, "--course", COURSE_ID, "--sample", "1")) == 2
+    )
+
+    captured = capsys.readouterr()
+    assert "error: login unavailable" in captured.err
+    assert "sample:" not in captured.out
+    assert job_dirs(data_root, "grading") == []
+
+
+def test_launch_names_the_resolved_credential(
+    data_root: Path,
+    solve_config: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Which credential a run took is visible while it launches, not only afterwards."""
+    monkeypatch.setattr(
+        harbor_mod,
+        "invoke_harbor",
+        lambda _command, _authentication: 0,
+    )
+    # The exit status reflects trial verification, which this stub never
+    # produces; the credential line is what this test is about, and it
+    # appears before the job directory exists.
+    cli.main(solve_args(data_root, solve_config, "--course", COURSE_ID, "--assignment", "HW1"))
+    out = capsys.readouterr().out
+    assert "auth: codex-auth-json (source: automatic-cache)" in out
+    assert out.index("auth:") < out.index("job directory:")
+
+    assert (
+        cli.main(
+            solve_args(
+                data_root, solve_config, "--course", COURSE_ID, "--assignment", "HW1", "--dry-run"
+            )
+        )
+        == 0
+    )
+    assert "auth:" not in capsys.readouterr().out  # offline modes resolve nothing
+
+    assert (
+        cli.main(
+            solve_args(
+                data_root,
+                solve_config,
+                "--course",
+                COURSE_ID,
+                "--assignment",
+                "HW1",
+                "--materialize-only",
+            )
+        )
+        == 0
+    )
+    assert "auth:" not in capsys.readouterr().out
 
 
 def test_missing_authentication_fails_before_job_or_task_creation(
