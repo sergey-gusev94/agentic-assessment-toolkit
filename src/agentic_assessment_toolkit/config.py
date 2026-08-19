@@ -7,7 +7,10 @@ run on or mechanics. The config identity hashes the config bytes, the
 referenced prompt template bytes, and the stage's generic verifier
 bytes; per-item identities additionally fold in each item's resolved
 inputs (environment template bytes; for grading also rubric bytes and
-the assignment directory hash).
+the assignment directory hash). `aat grade --rubric NAME` replaces a
+grading config's rubric name after loading (apply_rubric_override); the
+override is then one more identity part, so it never pools with the
+config as written.
 """
 
 from __future__ import annotations
@@ -16,7 +19,7 @@ import atexit
 import contextlib
 import functools
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib import resources
 from pathlib import Path
 from typing import Literal
@@ -96,6 +99,41 @@ class ExperimentConfig:
     # student-facing feedback deliverable (docs/design.md, "Final
     # judge").
     judge: bool = False
+    # Set when `aat grade --rubric NAME` replaced the file's rubric name
+    # (see apply_rubric_override): the name that then also folds into
+    # the config identity. None for a config used as written.
+    rubric_override: str | None = None
+
+
+def apply_rubric_override(config: ExperimentConfig, rubric_name: str) -> ExperimentConfig:
+    """The config as run with ``--rubric NAME`` in place of its own rubric.
+
+    The override is the one experiment setting that a flag may change
+    (docs/design.md, "Experiment configs and config identity"): rubric
+    variants of one assignment are experiment conditions, and one config
+    file per variant would multiply files that differ in a single line.
+    The returned config keeps the file's bytes — the identity of the
+    unmodified config is unchanged, so runs made without the flag stay
+    done — and differs in three ways: its rubric name is the override,
+    ``rubric_override`` records it, and its name carries a ``+NAME``
+    suffix so job directories, run records, and reports say which
+    rubric ran without decoding a hash. config_identity() folds the
+    override in as one more part, so a config run with the flag never
+    pools with the same config run without it.
+    """
+    if config.stage != "grade":
+        raise ConfigError(
+            f"config {config.name!r} has stage {config.stage!r}; --rubric applies to "
+            "grading configs only"
+        )
+    if not rubric_name:
+        raise ConfigError("--rubric needs a non-empty rubric name")
+    return replace(
+        config,
+        name=f"{config.name}+{rubric_name}",
+        rubric_name=rubric_name,
+        rubric_override=rubric_name,
+    )
 
 
 def load_config(path: Path) -> ExperimentConfig:
@@ -314,6 +352,10 @@ def config_identity(config: ExperimentConfig) -> str:
         *verifier_parts(config.stage),
         ("task-toml", rendered_task_toml(config.stage).encode("utf-8")),
     ]
+    if config.rubric_override is not None:
+        # Appended, never present for a config used as written, so every
+        # identity computed before the flag existed is unchanged.
+        parts.append(("rubric-override", config.rubric_override.encode("utf-8")))
     return sha256_parts(parts)
 
 

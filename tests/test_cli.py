@@ -1641,7 +1641,7 @@ def write_grading_artifacts(trial_dir: Path) -> None:
     (output_dir / "justification.md").write_text("# Round justification", encoding="utf-8")
 
 
-def grade_one_initial(data_root: Path, grade_config: Path, trial_name: str) -> Path:
+def grade_one_initial(data_root: Path, grade_config: Path, trial_name: str, *extra: str) -> Path:
     """One valid initial grading of stu1/HW1 with stored artifacts."""
     submission = str(data_root / "submissions" / COURSE_ID / "stu1" / "HW1")
     existing = set(job_dirs(data_root, "grading"))
@@ -1654,6 +1654,7 @@ def grade_one_initial(data_root: Path, grade_config: Path, trial_name: str) -> P
                 submission,
                 "--force",
                 "--materialize-only",
+                *extra,
             )
         )
         == 0
@@ -2379,3 +2380,145 @@ def test_grade_refuses_to_orphan_a_superseded_rubric(
     archive.mkdir()
     (archive / "old.md").write_bytes(superseded)
     assert cli.main(args) == 0
+
+
+def test_grade_rubric_flag_is_a_distinct_labeled_condition(
+    data_root: Path, grade_config: Path
+) -> None:
+    rubric_dir = data_root / "courses" / COURSE_ID / "rubrics" / "HW1"
+    variant = rubric_dir / "variant.md"
+    variant.write_text(
+        (rubric_dir / "default.md").read_text(encoding="utf-8").replace("# ", "# variant: ", 1),
+        encoding="utf-8",
+    )
+    assert (
+        cli.main(grade_args(data_root, grade_config, "--course", COURSE_ID, "--materialize-only"))
+        == 0
+    )
+    assert (
+        cli.main(
+            grade_args(
+                data_root,
+                grade_config,
+                "--course",
+                COURSE_ID,
+                "--rubric",
+                "variant",
+                "--materialize-only",
+            )
+        )
+        == 0
+    )
+    jobs = job_dirs(data_root, "grading")
+    assert len(jobs) == 2
+    overridden = next(job for job in jobs if "__codex-grader-sol-high+variant__" in job.name)
+    plain = next(job for job in jobs if "__codex-grader-sol-high__" in job.name)
+    plain_record = json.loads((plain / "aat-run.json").read_text(encoding="utf-8"))
+    over_record = json.loads((overridden / "aat-run.json").read_text(encoding="utf-8"))
+    # The config as written records exactly what it did before the flag existed.
+    assert plain_record["config"]["name"] == "codex-grader-sol-high"
+    assert plain_record["config"]["rubric"] == "default"
+    assert plain_record["config"]["rubric_override"] is None
+    # The override is labeled and keyed apart: name, identity, rubric bytes.
+    assert over_record["config"]["name"] == "codex-grader-sol-high+variant"
+    assert over_record["config"]["rubric"] == "variant"
+    assert over_record["config"]["rubric_override"] == "variant"
+    assert over_record["config"]["sha256"] == plain_record["config"]["sha256"]
+    assert over_record["config_identity"] != plain_record["config_identity"]
+    hw1_plain = next(i for i in plain_record["items"] if i["assignment_id"] == "HW1")
+    hw1_over = next(i for i in over_record["items"] if i["assignment_id"] == "HW1")
+    assert hw1_over["input_hashes"]["rubric"] != hw1_plain["input_hashes"]["rubric"]
+    assert hw1_over["item_identity"] != hw1_plain["item_identity"]
+    task_dir = data_root / "tasks" / overridden.name / hw1_over["task_dir_name"]
+    assert (
+        (task_dir / "environment" / "rubric.md")
+        .read_text(encoding="utf-8")
+        .startswith("# variant: ")
+    )
+
+
+def test_grade_rubric_flag_needs_the_variant_to_exist(
+    data_root: Path, grade_config: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = cli.main(
+        grade_args(data_root, grade_config, "--course", COURSE_ID, "--rubric", "nope", "--dry-run")
+    )
+    assert code != 0
+    assert "no rubric 'nope'" in capsys.readouterr().err
+
+
+def test_judge_rubric_flag_selects_the_matching_context_pool(
+    data_root: Path,
+    grade_config: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """One --rubric governs the judge and its --context-from gradings."""
+    from tests.test_config import write_config
+
+    rubric_dir = data_root / "courses" / COURSE_ID / "rubrics" / "HW1"
+    (rubric_dir / "variant.md").write_text(
+        (rubric_dir / "default.md").read_text(encoding="utf-8").replace("# ", "# variant: ", 1),
+        encoding="utf-8",
+    )
+    judge_config = write_config(tmp_path, JUDGE_TOML_CLI, "codex-judge")
+    submission = str(data_root / "submissions" / COURSE_ID / "stu1" / "HW1")
+    grade_one_initial(data_root, grade_config, "graded__default")
+    grade_one_initial(data_root, grade_config, "graded__variant", "--rubric", "variant")
+
+    def judge(*extra: str) -> int:
+        return cli.main(
+            grade_args(
+                data_root,
+                judge_config,
+                "--submissions",
+                submission,
+                "--context-from",
+                str(grade_config),
+                "--gradings",
+                "1",
+                "--materialize-only",
+                *extra,
+            )
+        )
+
+    n_before = len(job_dirs(data_root, "grading"))
+    assert judge("--rubric", "variant") == 0
+    judge_job = job_dirs(data_root, "grading")[n_before:]
+    assert len(judge_job) == 1
+    record = json.loads((judge_job[0] / "aat-run.json").read_text(encoding="utf-8"))
+    item = record["items"][0]
+    # The judge is the override condition, and its context is the pool
+    # graded under the same override — not the default-rubric grading.
+    assert record["config"]["name"] == "codex-judge+variant"
+    assert record["config"]["rubric"] == "variant"
+    assert record["config"]["rubric_override"] == "variant"
+    assert item["context_config_name"] == "codex-grader-sol-high+variant"
+    assert [ref["trial_name"] for ref in item["prior_trials"]] == ["graded__variant"]
+    assert (
+        (
+            data_root
+            / "tasks"
+            / judge_job[0].name
+            / item["task_dir_name"]
+            / "environment"
+            / "rubric.md"
+        )
+        .read_text(encoding="utf-8")
+        .startswith("# variant: ")
+    )
+
+    # Without the flag the judge sees only the default-rubric pool.
+    n_before = len(job_dirs(data_root, "grading"))
+    assert judge() == 0
+    plain_job = job_dirs(data_root, "grading")[n_before:]
+    plain_item = json.loads((plain_job[0] / "aat-run.json").read_text(encoding="utf-8"))["items"][0]
+    assert plain_item["context_config_name"] == "codex-grader-sol-high"
+    assert [ref["trial_name"] for ref in plain_item["prior_trials"]] == ["graded__default"]
+
+    # A short override pool prints a top-up command that carries the flag.
+    capsys.readouterr()
+    assert judge("--rubric", "variant", "--gradings", "2") == 1
+    out = capsys.readouterr().out
+    assert "under config 'codex-grader-sol-high+variant'" in out
+    assert "--rubric variant" in out

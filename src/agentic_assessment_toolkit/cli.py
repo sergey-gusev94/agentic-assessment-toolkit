@@ -180,6 +180,17 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     grade.add_argument(
+        "--rubric",
+        metavar="NAME",
+        help=(
+            "grade against rubrics/<assignment_id>/NAME.md instead of the rubric the "
+            "config names; the run is a distinct experiment condition (the config "
+            "identity folds NAME in and the recorded config name gains a +NAME "
+            "suffix). For a final-judge run the same NAME also selects the "
+            "--context-from gradings"
+        ),
+    )
+    grade.add_argument(
         "--context-from",
         metavar="NAME",
         help=(
@@ -335,6 +346,9 @@ def _run(args: argparse.Namespace) -> int:
         raise CliError(
             f"config {config.name!r} has stage {config.stage!r}; `aat {args.command}` needs a {stage!r} config"
         )
+    rubric_override = getattr(args, "rubric", None)
+    if rubric_override is not None:
+        config = config_mod.apply_rubric_override(config, rubric_override)
     config_identity = config_mod.config_identity(config)
     # The name is a label; the identity is what the results are keyed by,
     # and it moves whenever the config, prompt, verifier, or task
@@ -921,6 +935,12 @@ def _judge_context(
         return None
 
     context_config = config_mod.load_config(_config_path(args.context_from))
+    if config.rubric_override is not None and context_config.stage == "grade":
+        # One --rubric governs both legs: the judge grades against the
+        # override, so its context must be the initial gradings made
+        # against the same override — a distinct pool from the context
+        # config's own rubric.
+        context_config = config_mod.apply_rubric_override(context_config, config.rubric_override)
     if context_config.stage != "grade":
         raise CliError(
             f"--context-from config {context_config.name!r} has stage "
@@ -1024,6 +1044,8 @@ def _top_up_command(
     shortfall instead.
     """
     command = ["aat", "grade", "--config", args.context_from]
+    if judge.config.rubric_override is not None:
+        command += ["--rubric", judge.config.rubric_override]
     if source.submission_source == "student" and source.student_id is not None:
         submission = root / "submissions" / source.course_id / source.student_id
         command += ["--submissions", str(submission / source.assignment_id)]

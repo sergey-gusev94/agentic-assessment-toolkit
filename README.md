@@ -139,6 +139,15 @@ model-and-reasoning matrix:
 Config names describe rather than define: what results are keyed by is
 the config identity. Grading configs read
 `<agent>-grader-<model>-<effort>` and `<agent>-judge-<model>-<effort>`.
+One experiment setting can be changed from the command line:
+`aat grade --rubric NAME` grades against
+`rubrics/<assignment_id>/NAME.md` instead of the rubric the config
+names. The run is its own condition — the config identity folds the
+name in and the recorded config name becomes `<config>+NAME` — so a
+config run with the flag never pools with the same config run without
+it, and runs made without the flag are unaffected. For a final-judge
+run the same `--rubric` also selects the `--context-from` gradings made
+against that rubric.
 The solve configs do not share one pattern: `codex-high` names the agent
 and the effort, because it was written when Codex was the only stack,
 while `claude-opus5-high` and `claude-sonnet5-high` name the agent, the

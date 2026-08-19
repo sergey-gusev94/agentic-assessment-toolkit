@@ -303,3 +303,40 @@ def test_template_paths_exist() -> None:
     assert config_mod.verifier_path("grade").is_file()
     assert config_mod.task_template_path().is_file()
     assert config_mod.grading_schema_source_path().is_file()
+
+
+def test_rubric_override_changes_identity_name_and_rubric_only_when_applied(
+    tmp_path: Path,
+) -> None:
+    config = load_config(write_config(tmp_path, GRADE_TOML, "codex-grader-sol-high"))
+    overridden = config_mod.apply_rubric_override(config, "criteria-only")
+    # The config as written is untouched: its identity, name, and rubric
+    # are what every earlier run recorded, so those runs stay done.
+    assert config.rubric_override is None
+    assert config.rubric_name == "default"
+    assert config_identity(config) == config_identity(
+        load_config(write_config(tmp_path, GRADE_TOML, "again"))
+    )
+    # The override is a distinct condition, labeled by name.
+    assert overridden.rubric_name == "criteria-only"
+    assert overridden.rubric_override == "criteria-only"
+    assert overridden.name == "codex-grader-sol-high+criteria-only"
+    assert overridden.raw_bytes == config.raw_bytes
+    assert config_identity(overridden) != config_identity(config)
+    # Two overrides differ from each other and are stable across loads.
+    other = config_mod.apply_rubric_override(config, "menu")
+    assert config_identity(other) != config_identity(overridden)
+    assert config_identity(overridden) == config_identity(
+        config_mod.apply_rubric_override(
+            load_config(write_config(tmp_path, GRADE_TOML, "third")), "criteria-only"
+        )
+    )
+
+
+def test_rubric_override_rejects_solve_configs_and_empty_names(tmp_path: Path) -> None:
+    solve = load_config(write_config(tmp_path, SOLVE_TOML, "s"))
+    with pytest.raises(ConfigError, match="grading configs only"):
+        config_mod.apply_rubric_override(solve, "criteria-only")
+    grade = load_config(write_config(tmp_path, GRADE_TOML, "g"))
+    with pytest.raises(ConfigError, match="non-empty"):
+        config_mod.apply_rubric_override(grade, "")

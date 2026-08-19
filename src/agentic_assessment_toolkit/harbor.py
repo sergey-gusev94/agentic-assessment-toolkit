@@ -614,6 +614,10 @@ def write_run_record(
             "reasoning_effort": config.reasoning_effort,
             "prompt": config.prompt_name,
             "rubric": config.rubric_name,
+            # The --rubric override that produced `rubric` and the +NAME
+            # suffix on `name`, or None when the file's rubric ran
+            # (docs/design.md, "Experiment configs and config identity").
+            "rubric_override": config.rubric_override,
             "agent_args": list(config.agent_args),
             "judge": config.judge,
         },

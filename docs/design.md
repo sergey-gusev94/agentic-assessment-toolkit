@@ -620,6 +620,28 @@ prior results keep their own identity. Mechanics such as `--repeats` and
 `--max-concurrent-trials`, and all selection flags, never enter the
 identity.
 
+One experiment setting may come from the command line: `aat grade
+--rubric NAME` replaces the rubric name the config file gives. Rubric
+variants of one assignment (`neutral`, `criteria-only`, `menu`, and so
+on beside `default.md`) are experiment conditions, and one config file
+per variant would multiply files that differ in a single line. The
+override is applied when the config is loaded, and the run is a
+distinct condition by construction: the config identity gains one more
+hashed part, `("rubric-override", NAME)`, appended only when the flag
+is given, so every identity computed for a config used as written is
+unchanged and every run made without the flag stays done; the
+config's recorded name becomes `<config>+NAME`, so job directories
+(`<utc>__<config>+NAME__<hash8>/`), run records, and report rows say
+which rubric ran without decoding a hash; and the run record's config
+block carries `rubric` (the effective name) and `rubric_override`
+(the flag's value, `null` when absent). The per-item identity folds in
+the variant's bytes exactly as it does for any rubric. For a
+final-judge run the same `--rubric` governs both legs: the judge
+grades against the override and its `--context-from` config is
+resolved with the same override, so the prior gradings come from the
+pool made against that rubric, and the printed top-up command carries
+the flag. `--rubric` is grade-only; a solve config rejects it.
+
 ### Environment templates
 
 Environment templates are Dockerfiles shipped as package data, one per
@@ -1032,7 +1054,8 @@ usually one; see the CLI design for how target-count `--repeats`
 groups items by how many trials each still needs, because Harbor's
 `n_attempts` is job-wide. Job directories are named
 `<utc>__<config>__<hash8>/`, where the hash is the first eight
-characters of the config identity, under `solving/`
+characters of the config identity and `<config>` is the recorded config
+name (`<file stem>+<rubric>` when `--rubric` overrode the rubric), under `solving/`
 (solve) or `grading/` (grading) in the data root. The AAT job directory
 **is** the Harbor job directory: `aat` passes the stage parent as
 Harbor's jobs directory and the AAT directory name as the Harbor job
@@ -1527,15 +1550,19 @@ handled differently:
    `--gradings N` select which stored gradings each judge task
    presents (decision 16). Selection is not
    an experimental variable, so convenience wins.
-2. **Experiment configuration — how to run** (named config files, never
-   flags): agent, model, reasoning effort, solver/grader prompt version,
+2. **Experiment configuration — how to run** (named config files):
+   agent, model, reasoning effort, solver/grader prompt version,
    rubric version, and any agent-argument passthrough live in versioned
    config files selected with `--config NAME`. The hash of this
    configuration is the **config identity**: it labels results, is the
    frozen judge configuration of decision 8, and is recorded in every run
    record. Comparing models or efforts means separate invocations with
    different named configs, so results are segregated and labeled by
-   construction.
+   construction. The one flag on this axis is `aat grade --rubric NAME`,
+   which replaces the config's rubric name and folds itself into the
+   identity and the recorded config name (see "Experiment configs and
+   config identity"), so it segregates results exactly as a separate
+   config would.
 3. **Mechanics** (CLI flags): `--repeats N` (the target trial count
    per item — ensure N valid trials exist, launching only each item's
    deficit; default 1, see below), `--max-concurrent-trials N`
