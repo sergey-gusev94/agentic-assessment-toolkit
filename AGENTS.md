@@ -39,9 +39,10 @@ who has not followed this work understands it on the first read.
   something, use that word everywhere; do not introduce synonyms.
 - Plain wording never drops substance. Keep every decision, caveat, and exact
   identifier; simplify the sentences, not the information.
-- Do not use em dashes in replies, comments, documentation, prompts, code, or
-  any other file. Rephrase the sentence or use commas, parentheses, colons, or
-  semicolons instead.
+- Do not use em dashes or en dashes in replies, comments, documentation,
+  prompts, code, or any other file. This includes the LaTeX double-hyphen and
+  triple-hyphen forms. Rephrase the sentence or use commas, parentheses,
+  colons, or semicolons instead.
 
 ## Validation
 
