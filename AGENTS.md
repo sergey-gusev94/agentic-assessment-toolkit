@@ -17,7 +17,7 @@ decisions are rewritten, not preserved as history.
 implemented, in present tense; `docs/roadmap.md` holds only planned
 work, each item with the condition that triggers it. When work lands,
 delete its roadmap entry and document the built behavior in the
-appropriate document — rewritten as a description of what exists, not a
+appropriate document, rewritten as a description of what exists rather than a
 relocation of the planning text.
 
 ## Development
@@ -39,6 +39,9 @@ who has not followed this work understands it on the first read.
   something, use that word everywhere; do not introduce synonyms.
 - Plain wording never drops substance. Keep every decision, caveat, and exact
   identifier; simplify the sentences, not the information.
+- Do not use em dashes in replies, comments, documentation, prompts, code, or
+  any other file. Rephrase the sentence or use commas, parentheses, colons, or
+  semicolons instead.
 
 ## Validation
 
@@ -47,7 +50,7 @@ strict type checking, and tests. Run `make format` to apply formatting.
 
 Normal tests must be deterministic, local, offline, and credential-free.
 
-Live execution — Harbor runs, Docker, subscription-authenticated agent or
-model calls, network access to model providers — is out of scope for
+Live execution, including Harbor runs, Docker, subscription-authenticated agent
+or model calls, and network access to model providers, is out of scope for
 repository work. Do not attempt it or make any deliverable depend on it; the
 maintainer performs all live validation outside the repository.
