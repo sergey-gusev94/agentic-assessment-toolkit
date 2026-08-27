@@ -1,10 +1,10 @@
-# Code–Data Separation Conventions
+# Code and Data Separation Conventions
 
-This document specifies the concrete conventions behind the "strict code–data
-separation" constraint in [brief.md](brief.md). The repository must always be
-safe to publish; all real data lives outside it. Both the repository-side
-guards and the data-root resolution and refusal rules below are implemented
-(`src/agentic_assessment_toolkit/data_root.py`).
+This document specifies the concrete conventions behind design decision 10,
+strict separation between code and data. The repository must always be safe to
+publish; all real data lives outside it. Both the repository-side guards and
+the data-root resolution and refusal rules below are implemented in
+`src/agentic_assessment_toolkit/data_root.py`.
 
 ## Data root
 
@@ -23,13 +23,13 @@ override mechanisms, and `aat init-data`. This keeps the usual
 single-user setup free of repeated path arguments while alternate
 corpora and installations remain explicit.
 
-Creation is a separate, explicit command: `aat init-data` makes the
-resolved data root — the directory, the top-level layout below, and a
-short README — and is idempotent, so it also fills in missing top-level
-directories of an existing root. With `--git` it additionally runs
+Creation is a separate, explicit command. `aat init-data` makes the resolved
+data root, its top-level layout, and a short README. It is idempotent, so it
+also fills in missing top-level directories of an existing root. With `--git`,
+it additionally runs
 `git init` and writes a `.gitignore` covering the regenerable
 directories (`tasks/`, `analysis/`, `scratch/`); versioning the data
-root is optional and always private — see the refusal rule below for
+root is optional and always private, see the refusal rule below for
 the only git constraint the toolkit enforces.
 
 The toolkit refuses a data root inside its own repository. Precisely:
@@ -40,7 +40,7 @@ check is applied to the git root of the installed package location
 working directory, and to the git root of the resolved data root
 itself (which catches pointing `AAT_DATA_DIR` into any other checkout
 of the toolkit). A data root may itself be a separate private git
-repository — only the toolkit's own tree is refused.
+repository, only the toolkit's own tree is refused.
 
 ## Data root layout
 
@@ -89,18 +89,18 @@ $AAT_DATA_DIR/
 
 Notes:
 
-- `raw/<course_id>/` is the course's materials exactly as collected —
-  any shape, any format. It is read-only from the moment it is dumped:
+- `raw/<course_id>/` is the course's materials exactly as collected, in any
+  shape or format. It is read-only from the moment it is dumped:
   intake reads it and writes `courses/<course_id>/`, and keeping the
   dump means every extracted fact has a checkable source and intake can
   be re-run. The intake procedure is
   [course-intake.md](course-intake.md).
 - `intake-record.json` is the receipt `aat intake` writes after a
-  successful agent run — never written by the agent itself. Its
+  successful agent run. The agent never writes it. Its
   `raw_sha256` (the hash of the raw dump at processing time) is
   intake's doneness: a dump whose current hash differs is unprocessed
-  again, so new material triggers an incremental pass. The rest —
-  prompt hash, model, effort, command, log path — is provenance only:
+  again, so new material triggers an incremental pass. The remaining fields
+  (prompt hash, model, effort, command, and log path) are provenance only:
   intake output is human-reviewed, so a prompt or model change never
   invalidates a processed course. A course tree without a receipt is
   treated as hand-built and skipped unless forced; a receipt that
@@ -113,7 +113,7 @@ Notes:
   reference solution) becomes
   immutable once its hash is recorded in any job's run record, because
   results reference it by that hash. Until then it is a draft and may
-  be edited freely — intake output is reviewed and corrected before
+  be edited freely. Intake output is reviewed and corrected before
   anything runs against it. Rubrics are the one artifact with a
   documented way forward from there: the bytes stay immutable, but the
   name may advance to a corrected version once the superseded bytes are
@@ -124,12 +124,12 @@ Notes:
   per-item identities only through the resolved Dockerfile template it
   selects.
 - `raw-submissions/<course_id>/` holds the LMS submission export zips
-  exactly as downloaded — read-only from the moment they are dumped,
+  exactly as downloaded, read-only from the moment they are dumped,
   like `raw/`. `aat ingest-submissions` reads them and writes the
   normalized `submissions/<course_id>/` tree and the
   `tables/<course_id>/` bookkeeping (the "Submission ingest" section
-  below). Keeping the zips verbatim means every ingested file has a
-  checkable source, superseded uploads stay recoverable, and ingest can
+  below). Keeping the zips verbatim gives every ingested file a checkable
+  source, keeps superseded uploads recoverable, and lets ingest
   be re-run.
 - Transcripts and trajectories under `solving/` and `grading/` are data, not
   logs: they embed full assignment content and possibly student text.
@@ -186,14 +186,14 @@ Notes:
   environment default; every other field is informational until a
   consumer is deliberately added. The pipeline still loads
   `course.toml` through the same strict parser, so a schema-invalid
-  file fails `aat solve` and `aat grade` planning immediately — one
+  file fails `aat solve` and `aat grade` planning immediately, one
   parser, one set of rules; `aat check-course` gives the detailed
   report. A fact the materials do not state is
-  left **absent** — never a sentinel value — and noted in
+  left **absent**, never a sentinel value, and noted in
   `intake-notes.md`.
 
   The `[course]` table: `title`, `institution`, `term`, and
-  `environment` — the default environment template flavor (e.g.
+  `environment`, the default environment template flavor (e.g.
   `data-science`, `optimization`). The sidecar overrides the
   environment per assignment; if neither names one, materialization
   fails with a clear error. The course id is the directory name alone
@@ -201,36 +201,36 @@ Notes:
   `PU_CHE456_F2025`); no consumer ever parses it, which is why
   `institution` and `term` are explicit fields.
 
-  The `[[assessments]]` registry: one entry per syllabus assessment —
+  The `[[assessments]]` registry: one entry per syllabus assessment,
   including exams, presentations, and attendance that never get an
-  assignment directory — so weights sum to 100 and the coverage of the
+  assignment directory, so weights sum to 100 and the coverage of the
   final grade is computable. Fields, all optional except `id`:
 
-  - `id` — unique, no whitespace or `/`; for assessments with
+  - `id`, unique, no whitespace or `/`; for assessments with
     materials it equals the assignment directory name. Recommended
     style: uppercase with zero-padded numbers (`HW01`, `PSO03`,
     `EXAM1`, `MIDTERM`, `FINAL`, `PROJECT`), so listings sort
     naturally.
-  - `title` — the human label from the source materials (`"HW 4 —
+  - `title`, the human label from the source materials (`"HW 4:
     Regression"`).
-  - `type` — `homework | exam | practice | project | attendance |
+  - `type`, `homework | exam | practice | project | attendance |
     other`.
-  - `scope` — `take_home | online_exam | in_person_exam | presentation
+  - `scope`, `take_home | online_exam | in_person_exam | presentation
     | in_person`.
-  - `weight_pct` — this assessment's percent of the final grade
+  - `weight_pct`, this assessment's percent of the final grade
     (>= 0). When every entry has one, the sum must be 100 (checked
     with tolerance 0.01); how a category rule was split into
     per-assessment numbers is recorded in `intake-notes.md`, and the
     syllabus under `syllabus/` remains the authority.
-  - `category` — free label tying entries to the syllabus's grading
+  - `category`, free label tying entries to the syllabus's grading
     category (`"homework"`).
-  - `ai_policy` — what the course permits: `allowed | not_allowed |
+  - `ai_policy`, what the course permits: `allowed | not_allowed |
     not_applicable`.
-  - `ai_use_possible` — boolean: whether AI use was physically
+  - `ai_use_possible`, boolean: whether AI use was physically
     feasible, independent of permission (an online exam may forbid AI
     without preventing it; an in-person exam prevents it).
-  - `due` — TOML date.
-  - `rubric_provenance` — `applied_scheme | professor_rubric | handout
+  - `due`, TOML date.
+  - `rubric_provenance`, `applied_scheme | professor_rubric | handout
     | authored`: which source `rubrics/<id>/default.md` took its point
     split from, in the precedence order under "Course content contract"
     below. Recording the source, not just whether one existed, is what
@@ -240,26 +240,26 @@ Notes:
     is anything but `professor_rubric` alongside a
     `rubrics/<id>/source/` professor rubric; a rubric without the field
     is a completeness gap.
-  - `excluded` — non-empty reason why this assessment has no
+  - `excluded`, non-empty reason why this assessment has no
     assignment directory and never will (not codeable, materials
     lost). An entry with both an `excluded` reason and a directory is
     a contract violation; an entry with neither is a completeness gap.
 - `syllabus/` holds the syllabus file(s) copied verbatim from the raw
-  dump — the stored source for every registry fact, at a fixed
+  dump, the stored source for every registry fact, at a fixed
   location so no pointer field is needed. The solve materializer reads
   only `assignments/`, so syllabus content never reaches a solver or
   grader.
 - `intake-notes.md` is intake's review aid, surfaced by
   `aat check-course`: the sources used, every judgment call (id
-  assignment, file association, weight arithmetic, environment choice
-  and any environment gap — packages the course needs that no flavor
-  carries, left for the maintainer to fold into the templates, rubric
-  transcription), everything intake looked for and could not find, and
+  assignment, file association, weight arithmetic, environment choice,
+  any environment gap, packages the course needs that no flavor carries and
+  the maintainer must add to the templates, and rubric transcription),
+  everything intake looked for and could not find, and
   open questions. It is read by the maintainer, never by the pipeline,
   and is not a source of truth.
 - `reference_solutions/<assignment_id>/` and
   `rubrics/<assignment_id>/` share the assignment's id. Keeping them in
-  separate top-level trees — never inside the assignment directory —
+  separate top-level trees, never inside the assignment directory,
   makes it structurally impossible for the solve-task materializer to
   leak grading material to the solver, which only ever reads
   `assignments/`.
@@ -280,7 +280,7 @@ Notes:
   lines are parsed; the prose is read by the grader.
 
   What the prose does *not* carry is the grading policy every
-  assignment shares — equivalent answers, error follow-through, one
+  assignment shares: equivalent answers, error follow-through, one
   deduction per omission, awarding a listed level rather than a value
   between them, rounding and reading tolerance. Those live once in the
   grader prompt template ("Grading policy"), so a rubric states only
@@ -312,7 +312,7 @@ Notes:
   any grading run record references must exist on disk. `aat grade`
   refuses to plan an assignment whose stored results have lost their
   rubric version, and `aat check-course` reports the same condition as
-  a contract violation. Both name the recovery — the materialized task
+  a contract violation. Both name the recovery: the materialized task
   under `tasks/<job>/` holds the rubric bytes that job used, so a
   version can be restored even when nobody archived it before
   overwriting.
@@ -330,7 +330,7 @@ Notes:
 - **Where a point split comes from** decides which source wins when
   sources disagree, in this order:
 
-  1. **The scheme the course actually applied** — an LMS rubric export
+  1. **The scheme the course actually applied**: an LMS rubric export
      or the per-question grade summaries a graded-copy export carries.
      This is the assignment's real point structure: it is what produced
      the grades of record.
@@ -346,7 +346,7 @@ Notes:
   and the conflict is recorded in `intake-notes.md`. The registry field
   `rubric_provenance` records which of the four a rubric used.
 
-  Only the *structure* transfers from a source — item ids, maxima, and
+  Only the *structure* transfers from a source: item ids, maxima, and
   bonus flags. What earns credit within an item is authored from the
   assignment and the reference solution. Score levels a scheme states
   are evidence for where its full-credit and zero boundaries sat, but
@@ -365,8 +365,8 @@ Notes:
   stability condition by any valid route"), never by a step of the
   reference solution's method ("the real/imaginary split"), so that
   equivalent derivations are gradable. A criterion's permissible scores
-  are enumerated — a small ladder of defined states or a per-element
-  tally — and the grader never awards an unenumerated value; fine
+  are enumerated, a small ladder of defined states or a per-element
+  tally, and the grader never awards an unenumerated value; fine
   gradations come from summing components, not from discretion inside
   one. And the enumerated states must partition every possible
   submission: each level says what it covers, decidable yes-or-no, and
@@ -374,14 +374,14 @@ Notes:
   falls between descriptions.
 - A rubric covers the **whole assignment**. A rubric with criteria for
   some problems and none for others does not grade the assignment
-  leniently — it grades a different, smaller assignment, and its score
+  leniently. It grades a different, smaller assignment, and its score
   is reported as if it were the whole. When part of an assignment has
   no stated point values, the split for that part is authored like any
   other (provenance `authored`), never omitted. Which parts a rubric
   covers, and on what evidence, belongs in `intake-notes.md`.
 - `rubrics/<assignment_id>/source/`, when present, holds the
   professor's standalone rubric document(s) verbatim (a rubric PDF or
-  grading-scheme handout — distinct from schemes embedded in the
+  grading-scheme handout, distinct from schemes embedded in the
   assignment or reference files, which already reach the grader
   through those directories). The grading task presents it at
   `/app/rubric_source` as transcription context; `rubric.md` remains
@@ -390,9 +390,9 @@ Notes:
   rubric document.
 - Every assignment that will be graded must have a rubric; grading
   fails at materialization without one (docs/design.md, decision 5).
-  A rubric enumerates its criteria, each with a stable id, a title,
-  its max points, and an explicit bonus marking — ordinary
-  human-readable Markdown, but each criterion is one bullet line in a
+  A rubric enumerates its criteria in ordinary, human-readable Markdown. Each
+  criterion has a stable id, a title, its max points, and an explicit bonus
+  marking. Each criterion is one bullet line in a
   fixed format, parsed and enforced at materialization
   (`src/agentic_assessment_toolkit/rubric.py`):
 
@@ -420,27 +420,27 @@ Notes:
   integer points, no bonus criteria, following the handout's own
   problem structure. The registry records the source
   (`rubric_provenance`, above), and the intake audit table carries the
-  same label with the evidence — for an authored split, the evidence
-  that no source states one — so the reviewer knows which parts are the
+  same label with the evidence, for an authored split, the evidence
+  that no source states one, so the reviewer knows which parts are the
   agent's judgment. A rubric for anything intake did not cover is
-  drafted the same way — with an agent (any interface) from the
-  assignment and reference solution — then reviewed. The grader
+  drafted the same way, with an agent (any interface) from the
+  assignment and reference solution, then reviewed. The grader
   checks (reference near full marks, irrelevant near zero) double as a
   sanity check on the rubric itself.
 - Rubrics enumerate academic content only. Administrative
-  requirements — a name or identifier on the work, signatures, honor
+  requirements, a name or identifier on the work, signatures, honor
   affirmations or integrity statements, submission formalities such as
   boxing final answers, lateness penalties, escalation to the
-  instructor — become neither criteria nor rubric prose, even when the
+  instructor, become neither criteria nor rubric prose, even when the
   professor's materials assign them points or withhold grading over
   them ("an unnamed page is not graded"). The professor's statement
   stays available verbatim in the handout and in `source/`, and each
   exclusion is recorded with its citation in `intake-notes.md`. The
   grader mirrors this split: it never scores administrative
   compliance, and notes visible non-compliance in its overall comment
-  so course staff can apply course policy. Requirements about the
-  academic work itself — shown work, stated assumptions, required
-  derivations — are not administrative and stay in the rubric.
+  so course staff can apply course policy. Requirements about the academic work
+  itself are not administrative and stay in the rubric. Examples include shown
+  work, stated assumptions, and required derivations.
 
 ## Submission ingest
 
@@ -448,20 +448,20 @@ Notes:
 the normalized submissions tree and identity tables. It is
 deterministic code, never an agent: LMS exports are uniformly
 structured, and real student identities must be pseudonymized before
-anything reaches an LLM — grading tasks and their stored transcripts
+anything reaches an LLM. Grading tasks and their stored transcripts
 must only ever see pseudonym ids. The command is naturally incremental:
 its receipt (`submissions/<course_id>/ingest-record.json`) records the
-hash of the whole raw dump directory — export zips, the optional
-`manifest.toml`, and any other files kept beside them — and a course
+hash of the whole raw dump directory, including export zips, the optional
+`manifest.toml`, and any other files kept beside them. A course
 whose current hash differs is unprocessed again, so new exports or a
 manifest fix trigger a re-run that recomputes the course from the raw
 zips.
 
 **Zip-to-assignment matching.** Each export zip maps to one assignment
-id. The zip filename is parsed for a known series word — `homework`
-(or `hw`), `pso` (or `problem set`), `exam` — plus a number, and
+id. The zip filename is parsed for a known series word (`homework`
+or `hw`, `pso` or `problem set`, or `exam`) plus a number, and
 matched against the course's known assignment ids (assignment
-directories and registry entries), ignoring zero padding — `hw5.zip`
+directories and registry entries), ignoring zero padding. `hw5.zip`
 matches `HW05`. Anything unparseable or ambiguous, including series
 words the parser does not know (`Lab 3.zip`), is a hard error naming
 the zip; the fix is one line in `manifest.toml`. Non-zip files in the
@@ -481,32 +481,32 @@ the course pending again:
 **Adapters.** The zip's internal layout selects the adapter; an
 unrecognized layout is a hard error, never a guess.
 
-- **Brightspace** — top-level folders named
+- **Brightspace**, top-level folders named
   `<person>-<assignment> - <username> <Display Name> - <date time>`,
   one per upload. All of a student's uploads for an assignment merge
   into one effective submission: the union of all uploads keyed by
   relative path, where a later upload's file with exactly the same
-  path supersedes the earlier version. Nothing else is ever discarded
-  — same file type never means same role, so a later supplementary PDF
+  path supersedes the earlier version. Nothing else is ever discarded. File
+  type alone never means same role, so a later supplementary PDF
   must never erase an earlier solution PDF. Any multi-upload merge is
   flagged `merged_uploads`; every supersession is additionally
   recorded (`replaced_files`, with the superseded upload's timestamp),
   byte-identical re-uploads deduplicate (`duplicate_reupload`), and a
   merged submission holding same-type solution files (`.pdf`,
   `.ipynb`) from different uploads gets the advisory
-  `possible_stale_solution` flag — a renamed re-upload a human should
-  eyeball. A student whose latest upload carries a different username
+  `possible_stale_solution` flag for a renamed re-upload a human should
+  inspect. A student whose latest upload carries a different username
   or display name than the students table is flagged
   `identity_changed` (the table keeps the first-seen identity).
   Root-level export bookkeeping files (e.g. `index.html`) are
   ignored.
-- **Gradescope** — `assignment_<n>_export/` holding one graded-copy
+- **Gradescope**: `assignment_<n>_export/` holds one graded-copy
   PDF per submission, named by numeric submission id. Each PDF is
-  grade-summary pages followed by submission pages, every submission
-  page headed by a question-assignment banner line; the PDF is split
+  grade-summary pages followed by submission pages. Every submission
+  page is headed by a question-assignment banner line. The PDF is split
   at the first banner page, and only the submission pages are written
-  (as `submission.pdf`) into the submissions tree — the grader must
-  never see the professor's scores. The summary pages are stored under
+  as `submission.pdf` into the submissions tree. The grader must never
+  see the professor's scores. The summary pages are stored under
   `tables/<course_id>/gradescope-summaries/<assignment_id>/<student_id>.pdf`:
   they carry the professor's per-question grading and feed the planned
   professor-grade comparison ([roadmap](roadmap.md)). A PDF with no
@@ -521,7 +521,7 @@ unrecognized layout is a hard error, never a guess.
 **Identity.** `tables/<course_id>/students.csv` is the pseudonym
 table: the mapping between real identities and pseudonym ids (real
 names also remain inside the raw export zips and the stored Gradescope
-grade summaries — which is part of why `tables/` and
+grade summaries, which is part of why `tables/` and
 `raw-submissions/` never leave the data root). Brightspace students
 are keyed by their LMS person id; Gradescope PDFs carry only a display
 name on the first summary page, matched case-insensitively against
@@ -529,13 +529,13 @@ the table, with `manifest.toml` `[identities]` as the explicit
 override (also the fix for the occasional PDF with no extractable
 name, flagged `identity_unresolved`, and for ambiguous names, flagged
 `ambiguous_identity`). An S-id override resolves to that student
-directly — it works even when several students share a name, which is
-exactly the ambiguity it exists to settle — and is flagged
+directly. It works even when several students share a name, which is
+exactly the ambiguity it exists to settle, and is flagged
 `identity_from_manifest`; an override naming a nonexistent S-id is
 skipped as `unknown_student_id`. Unmatched names become new students.
 Ids are `S001`-style, assigned deterministically and never renumbered:
-re-running ingest extends the table, it never rewrites existing rows.
-Unresolved submissions are skipped — listed for review, never guessed.
+re-running ingest extends the table but never rewrites existing rows.
+Unresolved submissions are skipped and listed for review, never guessed.
 One accepted limitation of name matching: two different people who
 share a display name and appear only in Gradescope exports are merged
 into one pseudonym when they never collide on the same assignment
@@ -549,19 +549,19 @@ the submission bytes (the submission is the measured object, not part
 of the judge), so a silent rewrite would never trigger a regrade.
 When re-ingest computes different content for a frozen directory, the
 directory is left untouched and the row is flagged
-(`frozen_submission_changed`, status `frozen`); the human decides — to
-accept the new content, delete the submission directory and re-run
+(`frozen_submission_changed`, status `frozen`). The human decides whether to
+accept the new content. To accept it, delete the submission directory and re-run
 with `--force` (the raw dump is unchanged, so a plain re-run would
 skip the course), then regrade: the item still counts as done, so
 regrading the new bytes takes `aat grade --force`.
 
 **Review.** `tables/<course_id>/submissions.csv` records every
-(assignment, student) pair — status `ready`, `skipped`, `frozen`, or
+(assignment, student) pair with status `ready`, `skipped`, `frozen`, or
 `missing` (a known student with no submission for an ingested
-assignment) — with upload counts, timestamps where the source provides
+assignment), with upload counts, timestamps where the source provides
 them, flags, and superseded files. The command prints the flagged rows
 after each course and exits nonzero while any submission is skipped or
-frozen — including on later runs that skip an unchanged course: the
+frozen. This includes later runs that skip an unchanged course: the
 receipt records the outcome counts, and unresolved rows are reported
 (and keep the exit nonzero) until a fix changes the dump or `--force`
 reprocesses it. The review loop is: read the summary, fix
@@ -573,17 +573,17 @@ merge kept a stale version.
 ## Job directories and run records
 
 Each `aat solve` or `aat grade` invocation creates one job directory
-per deficit group — usually one; `--repeats` is a target count, and
+per deficit group (usually one). `--repeats` is a target count, and
 items needing different numbers of additional trials go into separate
 Harbor jobs (docs/design.md, "CLI design"). Job directories are named
 `<utc>__<config>__<hash8>/` (with a `-N` suffix on same-second
-collisions — routine for a multi-group invocation, whose jobs share
+collisions, routine for a multi-group invocation, whose jobs share
 one second) and live under `solving/` (solve jobs) or
 `grading/` (grading jobs, whether the submissions are benchmark
 artifacts or real student folders). The AAT job directory is itself the
 Harbor job directory: Harbor's `config.json`, `lock.json`,
 `result.json`, `job.log`, and per-trial directories live directly
-inside it, beside exactly two AAT files — `aat-run.json` (the run
+inside it, beside exactly two AAT files: `aat-run.json` (the run
 record) and `harbor-job.json` (the generated Harbor job config).
 Materialized tasks live under `tasks/<job-name>/` (see above), so
 re-running the recorded command safely resumes an interrupted job. The
@@ -598,9 +598,9 @@ lineage (submission source, student id for student grading items, solve
 job and trial for solve-derived grading items, context config and
 prior trials for final-judge items), config identity, and
 input hashes (assignment, prompt, environment template, verifier,
-rubric, rubric source, submission, reference solution, grading schema,
-prior gradings —
-as applicable), and the non-secret authentication method and selection
+rubric, rubric source, submission, reference solution, grading schema, and
+prior gradings, as applicable), plus the non-secret authentication method and
+selection
 source for a live AAT-managed login. Authentication is `null` for
 materialize-only runs or agents whose login AAT does not manage; credential
 values and auth-file paths are never recorded. When present,
@@ -608,10 +608,11 @@ values and auth-file paths are never recorded. When present,
 license's host path and read-only container mount. Doneness of an item
 under a config is derived from these
 directories and Harbor's per-trial result files; there is no separate
-bookkeeping state. A solve item is done when a verified trial — one
-whose verifier recorded a reward — exists (a 0-reward contract failure
-is a countable outcome); a grading item is done only when such a trial produced a valid
-grading result — failed gradings are regraded by the next incremental
+bookkeeping state. A solve item is done when a verified trial (one
+whose verifier recorded a reward) exists. A 0-reward contract failure
+is a countable outcome. A grading item is done only when such a trial produced
+a valid
+grading result. Failed gradings are regraded by the next incremental
 run.
 
 Because the layout is flat, `harbor view` works on the shared `solving/`
@@ -634,9 +635,7 @@ authorized for disclosure or has been sanitized.
 | Environment (Dockerfile) templates | Grading outputs for real submissions |
 | Small fully synthetic example assignments and fixtures | Credentials and auth files |
 
-The research document's sketch layout places `benchmarks/.../tasks/` inside
-the repository; this convention supersedes that detail. Real course
-assignments are course-owned content and belong in the data root. The
+Real course assignments are course-owned content and belong in the data root. The
 repository may contain only synthetic example tasks created for tests,
 documentation, and demos.
 

@@ -7,26 +7,26 @@ human and checked by a deterministic command (docs/design.md, decision
 content, and the work is one-time authoring with a review gate, not a
 measured experiment.
 
-The agent's instructions live in one place — the
+The agent's instructions live in one place, the
 `templates/prompts/intake.md` package template, rendered per course by
 `aat intake` (and printable with `--print-prompt`). This document is
 the maintainer's procedure around it.
 
-**Scope: course materials only.** Ingesting student submissions (LMS
-exports into `submissions/`, rosters and pseudonym tables under
-`tables/`) is a separate planned procedure with its own privacy stakes
-([roadmap.md](roadmap.md)); intake never touches those trees.
+**Scope: course materials only.** Ingesting student submissions (LMS exports
+into `submissions/`, rosters and pseudonym tables under `tables/`) is the
+separate deterministic `aat ingest-submissions` procedure described in
+[data-conventions.md](data-conventions.md). Intake never touches those trees.
 
 ## Procedure
 
 1. **Dump.** Create `raw/<course_id>/` in the data root and copy in
-   everything collected for the course — syllabus, handouts, solution
-   files, schedule pages — in whatever shape it arrived. Pick the
+   everything collected for the course, syllabus, handouts, solution
+   files, schedule pages, in whatever shape it arrived. Pick the
    course id once (`<institution>_<course>_<term>`, e.g.
    `PU_CHE456_F2025`); `raw/` is read-only from here on. Dump several
    courses at once if you have them.
 2. **Run.** `aat intake --all` (or `--course ID`) launches the Codex
-   CLI once per unprocessed dump — sequentially, in a workspace-write
+   CLI once per unprocessed dump, sequentially, in a workspace-write
    sandbox scoped to the data root, with pinned defaults
    (`gpt-5.6-sol`, high reasoning effort; override with `--model` /
    `--reasoning-effort`). Ten dumps means ten top-level runs. Within
@@ -36,12 +36,12 @@ exports into `submissions/`, rosters and pseudonym tables under
    streams to the console and to
    `scratch/intake/<stamp>__<course>.log`; after each successful run the
    command writes the course's `intake-record.json` receipt and prints
-   its `aat check-course` report. A failed run writes no receipt —
-   re-running `aat intake` is the retry. `--dry-run` lists what would
+   its `aat check-course` report. A failed run writes no receipt.
+   Re-running `aat intake` is the retry. `--dry-run` lists what would
    run.
 3. **Review and fill.** Fix violations, fill what the materials could
-   not answer, and review every judgment call in `intake-notes.md` —
-   rubric drafts most carefully, because a rubric is the frozen judge
+   not answer, and review every judgment call in `intake-notes.md`.
+   Review rubric drafts most carefully because a rubric is the frozen judge
    of every grade produced under it. Every material-backed assignment
    gets a rubric, its point split taken from the highest-precedence
    source available and its source recorded per assessment
@@ -64,16 +64,16 @@ exports into `submissions/`, rosters and pseudonym tables under
    Re-run `aat check-course` until clean.
 4. **Use.** Everything stays an editable draft until a job first
    records its hash; from that point the artifact is frozen
-   (docs/data-conventions.md) — except that a rubric found to be wrong
+   (docs/data-conventions.md), except that a rubric found to be wrong
    is corrected in place once its superseded bytes are archived, which
    `aat grade` and `aat check-course` both enforce. Dropping
    later-arriving material into
    `raw/<course_id>/` changes the dump's hash, so the course counts as
    unprocessed again and the next `aat intake` performs an incremental
-   pass — the brief forbids the agent from modifying existing
+   pass. The intake prompt forbids the agent from modifying existing
    artifacts, so it only adds.
 
-For a first course — or any course where you expect questions — run
+For a first course, or any course where you expect questions, run
 the brief interactively instead: `aat intake --course ID
 --print-prompt` renders it; paste it into a normal `codex` session in
 the data root and answer the agent as it works. Write no receipt by

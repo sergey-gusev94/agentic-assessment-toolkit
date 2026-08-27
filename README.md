@@ -1,130 +1,176 @@
 # Agentic Assessment Toolkit
 
-A Python toolkit built around one assignment-and-grading pipeline in which a
-"submission" can come either from an autonomous coding agent or from a real
-student. It serves two workflows:
+Agentic Assessment Toolkit is a Python command-line tool for two related
+workflows:
 
-1. **Benchmarking** coding agents (Codex CLI, Claude Code, Gemini CLI, and
-   others, running on existing user subscriptions) on real chemical
-   engineering coursework.
-2. **Grading assistance** for professors and teaching assistants: an
-   independent grade with per-criterion explanations, produced by the same
-   machinery, as an information tool.
+1. Benchmarking coding agents on university coursework.
+2. Producing rubric-based grading assistance for student submissions.
 
-The project is in its initial development stage.
+Both workflows use the same assignment, reference solution, rubric, task
+materialization, grading schema, and reporting machinery. A benchmark
+submission comes from a coding agent. A student submission comes from an LMS
+export. The toolkit is a thin layer over
+[Harbor](https://github.com/harbor-framework/harbor), which runs the agents in
+containers and stores their artifacts and trajectories.
 
-Two agent stacks are implemented, **Codex and Claude Code**, each usable
-as solver and as grader. Solver and grader are separate jobs, so either
-agent can grade the other's work, and cross-agent comparison needs no
-new machinery. Everything downstream of the agent — prompts, verifiers,
-identities, results, statistics — is agent-agnostic. See the
-[design](docs/design.md) for the decisions and contracts, and the
-[roadmap](docs/roadmap.md) for planned work, including further agents.
+Codex and Claude Code are supported as solvers, initial graders, and final
+judges. Solving and grading are separate jobs, so either agent can grade the
+other agent's work.
 
-## Documentation
+## Status and limitations
 
-- [Project brief](docs/brief.md) — vision, use cases, scope, and constraints.
-- [Design](docs/design.md) — decisions, contracts, and how the
-  implemented pipelines work.
-- [Course intake](docs/course-intake.md) — how raw course materials
-  become a structured course in the data root.
-- [Roadmap](docs/roadmap.md) — planned work, each item with the
-  condition that triggers it.
-- [Research](docs/research.md) — frozen research snapshot: alternatives
-  considered, methodology, security model.
-- [Data conventions](docs/data-conventions.md) — strict code–data separation:
-  this repository is always safe to publish; all real course and student data
-  lives in an external data root and is never committed.
+This is an actively developed research tool. Its command-line and data
+contracts are documented and tested, but they may still change between
+revisions.
 
-## Usage
+The current security model is suitable for the author's research over trusted
+historical coursework. Grading reads untrusted submission content inside a
+networked container that holds a model-provider credential. The grader is
+instructed to inspect submissions without executing them, but that rule is not
+enforced by a separate security boundary. Do not use the toolkit for
+adversarial or institution-wide deployment without reviewing the security and
+privacy model in [the design](docs/design.md).
 
-The `aat` command materializes Harbor tasks from a data root (external
-to this repository, see [data conventions](docs/data-conventions.md))
-and launches `harbor run`. The normal flow processes everything in a
-handful of commands (plus one-time setup):
+This repository contains the toolkit only. Course materials, reference
+solutions, student submissions, identity tables, credentials, and experimental
+results are not included because they contain protected or institution-owned
+data. The files under `tests/fixtures/` are synthetic and exist only to test the
+software.
+
+## Requirements
+
+- A Linux x86_64 host, or an equivalent Docker environment. The shipped task
+  images currently install x86_64 agent binaries.
+- Python 3.12 or later. The installation commands below use Conda to create
+  the Python environment.
+- Git.
+- Docker for live solve and grading jobs. Repository tests do not use Docker.
+- A supported agent credential for live jobs. See
+  [Authentication](docs/authentication.md).
+- The host Codex CLI for course intake. Claude Code needs its host CLI only to
+  create a subscription token.
+
+## Installation
+
+Create a Conda environment, clone the repository, and install the package in
+editable mode:
 
 ```bash
-aat init-data                                # one-time: create the ~/aat-data layout
-# one-time per agent: `codex login` for Codex, a token file for Claude Code
-# (see Authentication below); `aat check-auth --config NAME` reports which
-# credential a config would use, without launching anything.
-aat intake --all                             # build courses/ from dumps under raw/
-aat check-course --course PU_CHE597DS_S2026  # per course: re-run until clean
-aat ingest-submissions --all                 # build submissions/ from LMS exports
-aat solve --all --config codex-high          # solve every assignment of every course
-aat grade --from-solve codex-high --config codex-grader-sol-high  # grade the agent's solutions
-aat grade --all --config codex-grader-sol-high   # grade every student submission
-aat report                                   # tables + report.md under analysis/
+conda create --name aat python=3.12 pip
+conda activate aat
+
+git clone https://github.com/sergey-gusev94/agentic-assessment-toolkit.git
+cd agentic-assessment-toolkit
+python -m pip install -e .
 ```
 
-The two `aat grade` commands cover disjoint submissions: `--from-solve`
-grades the verified solver trials that `aat solve` left under
-`solving/`, while `--all` grades the student folders under
-`submissions/`. If one side is empty — no student submissions yet, say
-— its command finds nothing and is simply unnecessary.
+Run commands from the repository root. A bare configuration name resolves to
+`configs/<name>.toml` relative to the current directory. An explicit config
+path works from any directory.
 
-This sequence is safe to re-run verbatim: every command skips work
-that is already done, so after a new dump lands in `raw/`, a new
-assignment appears in a course, or a new LMS export lands in
-`raw-submissions/`, the same commands do only the missing work. Narrow
-any run with `--course ID` (and `--assignment ID`) instead of `--all`.
+For development, install the optional tools and run the full local check:
 
-Student submissions enter the data root through ingest: drop the LMS
-export zips (Brightspace download folders or Gradescope graded-copy
-PDFs) into `raw-submissions/<course_id>/`, then
-`aat ingest-submissions --all` normalizes them into pseudonymized
-per-student folders under `submissions/` and identity tables under
-`tables/` — deterministic code, no agent. Gradescope grade-summary
-pages are split off so the grader never sees the professor's scores.
-The command prints a review summary and exits nonzero while anything
-needs attention (an unmatched zip name, an unresolvable identity);
-fixes are one-line entries in `raw-submissions/<course_id>/manifest.toml`,
-then re-run. The full contract is in
-[data conventions](docs/data-conventions.md), "Submission ingest".
+```bash
+python -m pip install -e ".[dev]"
+make check
+```
 
-A course enters the data root through intake: copy everything
-collected for it into `raw/<course_id>/`, then `aat intake --all` (or
-`--course ID`) launches the Codex CLI once per unprocessed dump to
-author the structured course tree under `courses/`, including a rubric
-draft per assignment. Review the drafts and the agent's
-`intake-notes.md`, fix what `aat check-course` flags, and re-run it
-until clean. Intake needs the `codex` CLI on PATH; alternatively,
-`aat intake --course ID --print-prompt` renders the brief to paste
-into an interactive `codex` session. The full procedure, including the
-review checklist, is in [course intake](docs/course-intake.md).
+## Data root
 
-Grading never starts without a rubric: `aat grade` refuses any
-assignment missing
-`courses/<course_id>/rubrics/<assignment_id>/default.md`, which intake
-drafts and you review.
+All real course data and generated results live in a data root outside this
+repository. The default is `~/aat-data`. Use `--data-root PATH` for one command
+or set `AAT_DATA_DIR` for a shell or environment.
 
-The data root defaults to `~/aat-data`. Resolution never creates it;
-`aat init-data` creates the directory and its top-level layout (add
-`--git` to also make it a private git repository with a `.gitignore`
-for regenerable outputs). Use `--data-root PATH` for a one-off override
-or set `AAT_DATA_DIR` to change the default for an environment or
-shell.
+Create the data root once:
 
-Experiment configs live under [`configs/`](configs/); a bare
-`--config NAME` resolves to `configs/NAME.toml` relative to the current
-working directory, so run from the repository root or pass an explicit
-path. Selection and mechanics (`--repeats`, `--max-concurrent-trials`,
-`--force`, `--dry-run`, `--materialize-only`) are CLI flags. Concurrent
-trials default to 8. Every run command requires an explicit selection —
-`--course ID` or `--all` for `aat solve` and `aat intake`, and exactly
-one submission source for `aat grade` (`--from-solve NAME`,
-`--submissions PATH` for one course, student, or assignment folder
-under `submissions/`, or `--course`/`--all` for student folders); only
-the read-only `aat report` defaults to everything. Already-done items
-are skipped by default, so bulk
-commands are naturally incremental. `aat report` is read-only: it
-writes the statistics tables, a Markdown report, and provenance into
-one timestamped directory under `analysis/` in the data root (`--out`
-moves the destination, which is never allowed inside this repository).
-See the [design](docs/design.md) for the full CLI contract.
+```bash
+aat init-data
+```
 
-The committed initial-grader and final-judge configs form the same
-model-and-reasoning matrix:
+Add `--git` to create it as a separate private Git repository. The complete
+layout and immutability rules are in
+[Data conventions](docs/data-conventions.md).
+
+## Main workflow
+
+The normal workflow processes all available courses and submissions:
+
+```bash
+aat intake --all
+aat check-course --course PU_CHE597DS_S2026
+aat ingest-submissions --all
+aat solve --all --config codex-high
+aat grade --from-solve codex-high --config codex-grader-sol-high
+aat grade --all --config codex-grader-sol-high
+aat report
+```
+
+These commands are incremental. Repeating the same sequence skips work that is
+already complete and processes only new or incomplete items. Narrow a run with
+`--course ID` and, where supported, `--assignment ID`.
+
+Before a live run, check which credential the selected config will use:
+
+```bash
+aat check-auth --config codex-grader-sol-high
+```
+
+Use `--dry-run` to inspect a selection without creating anything. Use
+`--materialize-only` to write the Harbor tasks and job configuration without
+launching Harbor. Both modes are offline and require no credential.
+
+### Course intake
+
+Place collected professor materials under `raw/<course_id>/` in the data root,
+then run `aat intake`. Intake asks the host Codex CLI to create the structured
+course tree, including a rubric draft for each material-backed assignment.
+
+Review the generated course and `intake-notes.md`, then run `aat check-course`
+until it reports no contract violations. Grading refuses an assignment without
+an approved rubric. See [Course intake](docs/course-intake.md) for the review
+procedure.
+
+### Student submission ingest
+
+Place Brightspace download zips or Gradescope graded-copy zips under
+`raw-submissions/<course_id>/`, then run `aat ingest-submissions`. Ingest is
+deterministic code, not an agent. It normalizes submissions, assigns pseudonym
+identifiers, stores the identity mapping under `tables/`, and removes
+Gradescope grade-summary pages before a submission can reach a grader.
+
+The command prints rows that need review and exits nonzero while anything is
+skipped or frozen. Resolve ambiguous names and filenames in the course's
+`manifest.toml`, then run the command again. The full contract is in
+[Data conventions](docs/data-conventions.md), under "Submission ingest."
+
+### Solving and grading
+
+`aat solve` materializes one Harbor task per selected assignment. A separate
+`aat grade` job grades either verified solver artifacts or normalized student
+folders. Every grading produces structured per-criterion scores and a Markdown
+justification.
+
+Initial graders can be followed by a final judge. The judge receives a fixed
+number of stored initial gradings and independently reconciles them against the
+submission:
+
+```bash
+aat grade --all --config codex-judge-sol-high \
+  --context-from codex-grader-sol-high --gradings 3
+```
+
+Use `--repeats N` to ensure each selected item has N valid trials. Use `--force`
+to add new trials even when an item is already complete. Existing trials are
+never overwritten.
+
+## Experiment configurations
+
+Committed configs live under [`configs/`](configs/). Selection, repeat count,
+concurrency, and dry-run behavior are command-line options. Agent, model,
+reasoning effort, prompt, rubric, and agent arguments belong to the config and
+form part of its recorded identity.
+
+Initial-grader and final-judge configs use the same model matrix:
 
 | Model and reasoning | Initial grader | Final judge |
 | --- | --- | --- |
@@ -136,336 +182,58 @@ model-and-reasoning matrix:
 | Opus 5, max | `claude-grader-opus5-max` | `claude-judge-opus5-max` |
 | Sonnet 5, high | `claude-grader-sonnet5-high` | `claude-judge-sonnet5-high` |
 
-Config names describe rather than define: what results are keyed by is
-the config identity. Grading configs read
-`<agent>-grader-<model>-<effort>` and `<agent>-judge-<model>-<effort>`.
-One experiment setting can be changed from the command line:
-`aat grade --rubric NAME` grades against
-`rubrics/<assignment_id>/NAME.md` instead of the rubric the config
-names. The run is its own condition — the config identity folds the
-name in and the recorded config name becomes `<config>+NAME` — so a
-config run with the flag never pools with the same config run without
-it, and runs made without the flag are unaffected. For a final-judge
-run the same `--rubric` also selects the `--context-from` gradings made
-against that rubric.
-The solve configs do not share one pattern: `codex-high` names the agent
-and the effort, because it was written when Codex was the only stack,
-while `claude-opus5-high` and `claude-sonnet5-high` name the agent, the
-model, and the effort. `codex-high` keeps its name because the name is
-how stored results are selected afterwards — `aat grade --from-solve
-codex-high`, `--context-from`, `aat report --config` — so renaming it
-would leave every existing solve job unreachable by the name that
-selects it.
+The solve configs are `codex-high`, `claude-opus5-high`, and
+`claude-sonnet5-high`.
 
-Solver and grader are separate jobs, so any solver config can be graded
-by any grader config — including across agents.
+For a rubric experiment, `aat grade --rubric NAME` selects
+`rubrics/<assignment_id>/NAME.md`. The rubric name and bytes enter the config
+and item identities, so results from different rubric variants never pool.
 
-The judge model is independent of the initial grader model. Each judge
-run names the one initial-grader config whose stored results it consumes
-with `--context-from`, plus the exact number of stored gradings each
-task presents with `--gradings`.
+## Reporting and inspection
 
-### Authentication for solving and grading
+`aat report` reads stored Harbor jobs and writes one timestamped report
+directory under `analysis/` in the data root. It contains tidy trial and
+criterion tables, benchmark and grading summaries, failure accounting, review
+queues, a Markdown report, and provenance. Use `--out PATH` to choose another
+destination outside this repository.
 
-AAT resolves the configured agent's credential before it plans a run,
-preferring subscription-backed access over per-token API billing.
-Resolution comes first because planning hashes every selected
-submission: a credential that is missing or malformed then fails in a
-second, above the selection output rather than beneath it. An executing
-run prints the method and source it resolved (`auth: claude-oauth-token
-(source: automatic-token-file)`) and records both in `aat-run.json`.
-
-To check a credential without launching anything — worth doing before a
-run that will take hours — ask for the resolution alone:
-
-```bash
-aat check-auth --config claude-grader-sonnet5-high
-```
-
-It prints the method and the selection source, never the credential
-itself or the path of a file holding one, and exits nonzero with the
-same message a launch would give. `--dry-run` and `--materialize-only`
-resolve nothing at all, so a selection can always be inspected without
-any credential present.
-
-#### Codex
-
-Live Codex runs automatically reuse the file-based login of the local
-Codex CLI. In normal use, authenticate once with `codex login`, then run
-`aat solve` or `aat grade` without exporting anything. AAT finds
-`${CODEX_HOME:-~/.codex}/auth.json`, validates it before creating a job,
-and tells Harbor to copy it into the Codex container. This works for both
-ChatGPT subscription login and API-key login saved by Codex; OpenAI's
-[Codex authentication documentation](https://learn.chatgpt.com/docs/auth)
-describes those login and storage choices.
-
-AAT resolves Codex authentication in this order:
-
-1. `CODEX_AUTH_JSON_PATH` selects a specific auth file.
-2. `CODEX_FORCE_AUTH_JSON=true` selects `~/.codex/auth.json`;
-   `CODEX_FORCE_AUTH_JSON=false` explicitly selects `OPENAI_API_KEY`.
-3. Otherwise, the cached file under `CODEX_HOME` (or `~/.codex`) is used.
-4. If no cached file exists, a non-empty `OPENAI_API_KEY` is used.
-
-The cached file deliberately wins when both it and `OPENAI_API_KEY` are
-present, which prevents an unrelated shell API key from silently changing a
-subscription-backed run to usage-based billing. To choose a separate auth
-file for one run:
-
-```bash
-CODEX_AUTH_JSON_PATH=/protected/path/auth.json \
-  aat grade --all --config codex-grader-terra-high
-```
-
-To explicitly choose usage-based API authentication even when a cached login
-exists:
-
-```bash
-CODEX_FORCE_AUTH_JSON=0 OPENAI_API_KEY=... \
-  aat grade --all --config codex-grader-terra-high
-```
-
-An absent, empty, unreadable, or invalid selected credential fails before AAT
-creates job or task directories. If `codex login status` succeeds but no
-`auth.json` exists because Codex uses the operating-system keyring, set
-`cli_auth_credentials_store = "file"` in the Codex `config.toml` and run
-`codex login` again. Treat `auth.json` like a password: Harbor temporarily
-copies it into each Codex container. AAT records only the non-secret method and
-selection source in `aat-run.json`, never the credential, token, or auth-file
-path.
-
-This preflight validates the selected local credential file or environment
-variable, not the remote account. A provider can still reject a revoked login,
-an expired key that cannot be refreshed, or an account without access.
-
-`--dry-run` and `--materialize-only` remain offline and do not require
-authentication. Running the command printed by `--materialize-only` manually
-bypasses AAT's automatic injection; set `CODEX_AUTH_JSON_PATH` or
-`OPENAI_API_KEY` in that shell first. `aat intake` invokes the host Codex CLI
-directly, so it already uses the same local cached login without Harbor
-injection.
-
-#### Claude Code
-
-Live Claude Code runs use the subscription token from `claude
-setup-token`, which needs a Claude plan that includes Claude Code (Pro
-or Max); Anthropic's
-[Claude Code setup documentation](https://docs.claude.com/en/docs/claude-code/setup)
-describes the plans and the login. Without such a plan, use
-`ANTHROPIC_API_KEY` instead and accept usage-based billing (below).
-
-Write the token once to `~/.claude/aat-oauth-token` and every later `aat
-solve` or `aat grade` finds it with nothing exported, the way Codex runs
-find `~/.codex/auth.json`.
-
-Run `claude setup-token` on its own and finish the browser sign-in; it
-prints the token, `sk-ant-oat…`, and the date it expires. Do not
-redirect that command into the file: it draws an interactive interface
-on standard output, so a redirect captures the interface instead of the
-token. Copy the printed token into the file with an editor, or paste it
-into a `cat` that reads until Ctrl-D:
-
-```bash
-claude setup-token                      # complete the sign-in, copy the token
-
-install -m 600 /dev/null ~/.claude/aat-oauth-token
-cat > ~/.claude/aat-oauth-token         # paste, Enter, then Ctrl-D
-```
-
-Pasting into `cat` keeps the token out of shell history, which
-`echo 'sk-ant-oat…' > file` would not. The file must hold the token and
-nothing else; a launch rejects anything else before creating a job
-directory, so a mistake here costs one command, not a run.
-
-Keep that file outside this repository and the data root; it is a
-credential like `auth.json`. The host `claude` CLI is needed only to
-mint the token — the task images carry their own pinned copy. Minting is
-the one interactive step, the counterpart of `codex login`.
-
-The token is long-lived and static: AAT reads it as bytes and never
-refreshes it, so note the expiry the CLI prints. Logging the `claude`
-CLI out and back in refreshes the interactive login only; it neither
-renews nor extends this token. When it does expire, mint another and
-overwrite the file.
-
-`~/.claude/.credentials.json`, the interactive login the `claude` CLI
-keeps, is deliberately not read: its access token lasts hours and only
-that CLI refreshes it, so a long run would lose its credential
-mid-flight. `claude setup-token` exists to mint the long-lived token for
-non-interactive use.
-
-AAT resolves Claude authentication in this order:
-
-1. `CLAUDE_FORCE_OAUTH` selects explicitly: `true`, `1`, or `yes` selects
-   the subscription token, and `false`, `0`, or `no` selects
-   `ANTHROPIC_API_KEY`.
-2. Otherwise, `AAT_CLAUDE_TOKEN_FILE`, when set, names the token file to
-   read; naming a file that is missing, empty, or holding more than the
-   token is an error, not a fallthrough.
-3. Otherwise, a non-empty `CLAUDE_CODE_OAUTH_TOKEN`.
-4. Otherwise, `~/.claude/aat-oauth-token` when it exists.
-5. If there is none, `ANTHROPIC_API_KEY` is used; once it is set at all
-   it must be non-empty, and the error names it.
-
-Harbor's Claude Code adapter reads environment variables only, so a
-token file is read at launch and its contents travel to the Harbor
-subprocess in `CLAUDE_CODE_OAUTH_TOKEN`. Neither the token nor the path
-enters the run record, which keeps only the method
-(`claude-oauth-token`) and the selection source.
-
-To run different jobs on different Claude accounts, keep one token file
-per account and name the one a run should use. Nothing is renamed, so
-two terminals can run two accounts at once:
-
-```bash
-# one file per account, each minted while that account was signed in
-chmod 600 ~/.claude/aat-oauth-token.*
-
-AAT_CLAUDE_TOKEN_FILE=~/.claude/aat-oauth-token.other \
-  aat grade --all --config claude-grader-sonnet5-high
-```
-
-A run that names its file records `source: AAT_CLAUDE_TOKEN_FILE`, while
-one that took the default records `automatic-token-file` — the account
-itself is never recorded. Which account is the default is a property of
-one path, so make `~/.claude/aat-oauth-token` a symlink to the file you
-want by default (`ln -sfn`, and `ls -l` then answers "which account am I
-about to use"). The account never enters config identity, so trials
-pool by item regardless of which one paid for them.
-
-`ANTHROPIC_AUTH_TOKEN` is not a credential source here. Harbor's adapter
-delivers whatever it selects in `ANTHROPIC_API_KEY`, so a bearer token
-would travel in the wrong header, and it is only meaningful against a
-gateway `ANTHROPIC_BASE_URL` — which AAT removes (below).
-
-The token deliberately wins when both it and `ANTHROPIC_API_KEY` are
-present. This matters more than for Codex: Harbor's Claude Code adapter
-prefers the API key over the token unless `CLAUDE_FORCE_OAUTH` is
-truthy, so AAT sets that variable *and* removes both
-`ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` from Harbor's
-environment — an unrelated shell API key can never turn a
-subscription-backed run into a usage-based bill. To choose usage-based
-API authentication deliberately:
-
-```bash
-CLAUDE_FORCE_OAUTH=0 ANTHROPIC_API_KEY=... \
-  aat grade --all --config claude-grader-opus5-high
-```
-
-Whichever credential is selected, AAT also removes the variables
-Harbor's adapter would otherwise read from the shell: `ANTHROPIC_BASE_URL`
-and `ANTHROPIC_MODEL` (which provider and model the run reaches),
-`CLAUDE_CODE_USE_BEDROCK` and `AWS_BEARER_TOKEN_BEDROCK` (either one puts
-the run on Bedrock, a third billing route this project does not use), and
-the behavior fallbacks `CLAUDE_CODE_MAX_TURNS`,
-`CLAUDE_CODE_EFFORT_LEVEL`, `MAX_THINKING_TOKENS`,
-`CLAUDE_CODE_MAX_OUTPUT_TOKENS`, and
-`CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING`. None of them can enter a config
-identity, so a value left in a shell would change every trial of a run
-without leaving any trace of having done so. Agent settings that should
-change a run belong in a config's `agent_args`, which is recorded and
-part of the identity.
-
-### Gurobi WLS for optimization tasks
-
-Keep `gurobi.lic` outside this repository and the data root. Give `aat
-solve` its host path either through `--gurobi-license-file PATH` or the
-`AAT_GUROBI_LICENSE_FILE` environment variable:
-
-```bash
-export AAT_GUROBI_LICENSE_FILE=/home/sgusev/gurobi.lic
-
-aat solve --course PU_CHE597CO_S2026 \
-  --config codex-high --max-concurrent-trials 1
-```
-
-The toolkit verifies that the path is a file and that every selected
-assignment uses the `optimization` environment. The generated Harbor
-job mounts the file read-only at `/opt/gurobi/gurobi.lic`; neither the
-credential bytes nor their individual WLS values enter a task, image,
-or recorded JSON file. The host path is recorded in `harbor-job.json`.
-Omit the option and environment variable to run the optimization image
-without Gurobi licensing and use its license-free solvers.
-
-Before a course run, build the shipped image and solve a one-variable
-model in it. This is live validation: it needs Docker, internet access
-to Gurobi WLS, and an active license.
-
-```bash
-docker build \
-  --file src/agentic_assessment_toolkit/templates/environments/optimization.Dockerfile \
-  --tag aat-optimization-license-check .
-
-docker run --rm -i \
-  --mount "type=bind,source=$AAT_GUROBI_LICENSE_FILE,target=/opt/gurobi/gurobi.lic,readonly" \
-  aat-optimization-license-check python - <<'PY'
-import gurobipy as gp
-
-model = gp.Model("license-check")
-x = model.addVar(lb=0, name="x")
-model.addConstr(x <= 1)
-model.setObjective(x, gp.GRB.MAXIMIZE)
-model.optimize()
-assert model.Status == gp.GRB.OPTIMAL
-assert abs(model.ObjVal - 1) < 1e-9
-print("Gurobi WLS license check passed")
-PY
-```
-
-Start an Academic WLS course run with one concurrent trial unless the
-license portal shows capacity for more. Read-only mounting prevents the
-container from changing the file; code inside the container can still
-read it, so use a dedicated, renewable credential.
-
-To repeat a completed item, add `--force`. Repeats are additional trials;
-they never replace prior results:
-
-```bash
-# Add one new solver trial.
-aat solve --course PU_CHE597DS_S2026 --assignment HW5 \
-  --config codex-high --force
-
-# Add three new solver trials in one job.
-aat solve --course PU_CHE597DS_S2026 --assignment HW5 \
-  --config codex-high --force --repeats 3
-```
-
-A subsequent `aat grade --from-solve codex-high ...` automatically selects
-new solver trials that have not yet been graded. To run another independent
-grader trial over an already-graded submission, use `--force` on `aat grade`
-(and optionally `--repeats N`).
-
-Inspect a single run with the exact per-job command printed by `aat`, or
-browse a whole stage — job directories are Harbor job directories, so the
-viewer works on the shared `solving/` and `grading/` parents too:
+Harbor can inspect one job or a whole stage:
 
 ```bash
 harbor view ~/aat-data/grading/20260801T044338Z__codex-grader-sol-high__44292e75
 harbor view ~/aat-data/solving
 ```
 
-Do not use Harbor's suggested `upload` command for real coursework unless the
-assignment, reference solution, submissions, and transcripts are authorized
-for disclosure or have been sanitized.
+Do not use Harbor's upload suggestion for real coursework unless every input,
+submission, result, and transcript is authorized for disclosure or has been
+sanitized.
+
+Optimization tasks can use a Gurobi WLS license mounted from outside both the
+repository and data root. See [Gurobi WLS setup](docs/gurobi.md).
+
+## Documentation
+
+- [Authentication](docs/authentication.md): Codex and Claude Code credential
+  setup and selection.
+- [Course intake](docs/course-intake.md): raw professor materials to a reviewed
+  course tree.
+- [Data conventions](docs/data-conventions.md): data-root layout, course and
+  submission contracts, privacy boundaries, and immutability.
+- [Design](docs/design.md): implemented decisions, task contracts, identities,
+  results, statistics, and CLI behavior.
+- [Gurobi WLS setup](docs/gurobi.md): licensed optimization runs.
+- [Roadmap](docs/roadmap.md): work deferred until a concrete need appears.
 
 ## Development
 
-Requires Python 3.12+. Install and validate with:
+`make check` runs formatting verification, linting, strict type checking, and
+the deterministic offline test suite. Useful individual targets are
+`make format`, `make lint`, `make typecheck`, `make test`, and `make package`.
 
-```bash
-pip install -e ".[dev]"
-make check
-```
+Live Harbor runs, Docker builds, and model-provider calls are intentionally not
+part of repository validation.
 
-Harbor is the package's runtime-orchestration dependency; `numpy` and
-`pandas` back the statistics and reporting layer, and `pypdf` backs the
-submission-ingest PDF splitting. Running actual jobs additionally
-requires Docker, which packaging cannot provide; repository tests never
-invoke it.
+## License
 
-The task images carry their own pinned copy of the agent CLI, so no
-agent CLI has to be installed on the host to run trials. The two stacks
-differ in what the host is needed for: Claude Code needs the `claude` CLI
-once, to mint the subscription token, and never again, while Codex needs
-its CLI installed and logged in, because AAT reads that cached login at
-every launch (and `aat intake` invokes the host Codex CLI directly).
+Agentic Assessment Toolkit is licensed under the Apache License 2.0. See
+[`LICENSE`](LICENSE).
