@@ -27,14 +27,14 @@ def data_root(tmp_path: Path) -> Path:
 
 
 def test_render_prompt_substitutes_the_course_id() -> None:
-    prompt = intake.render_prompt("PU_X_F2026")
-    assert "raw/PU_X_F2026/" in prompt
-    assert "courses/PU_X_F2026/" in prompt
+    prompt = intake.render_prompt("SYN_X_F2025")
+    assert "raw/SYN_X_F2025/" in prompt
+    assert "courses/SYN_X_F2025/" in prompt
     assert "{course_id}" not in prompt
 
 
 def test_render_prompt_requires_bounded_assignment_audits() -> None:
-    prompt = intake.render_prompt("PU_X_F2026")
+    prompt = intake.render_prompt("SYN_X_F2025")
     normalized = " ".join(prompt.split())
     assert "spawn one read-only subagent per assignment" in normalized
     assert "student-facing assignment bundle" in normalized

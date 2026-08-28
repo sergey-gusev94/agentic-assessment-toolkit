@@ -23,7 +23,7 @@ separate deterministic `aat ingest-submissions` procedure described in
    everything collected for the course, syllabus, handouts, solution
    files, schedule pages, in whatever shape it arrived. Pick the
    course id once (`<institution>_<course>_<term>`, e.g.
-   `PU_CHE456_F2025`); `raw/` is read-only from here on. Dump several
+   `SYN_COURSE1_F2025`); `raw/` is read-only from here on. Dump several
    courses at once if you have them.
 2. **Run.** `aat intake --all` (or `--course ID`) launches the Codex
    CLI once per unprocessed dump, sequentially, in a workspace-write

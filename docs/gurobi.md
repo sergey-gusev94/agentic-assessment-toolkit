@@ -7,7 +7,7 @@ command line or the `AAT_GUROBI_LICENSE_FILE` environment variable:
 ```bash
 export AAT_GUROBI_LICENSE_FILE=/home/user/gurobi.lic
 
-aat solve --course PU_CHE597CO_S2026 \
+aat solve --course SYN_OPT101_F2025 \
   --config codex-high --max-concurrent-trials 1
 ```
 

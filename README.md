@@ -23,7 +23,7 @@ This is an actively developed research tool. Its command-line and data
 contracts are documented and tested, but they may still change between
 revisions.
 
-The current security model is suitable for the author's research over trusted
+The current security model is suitable for research over trusted
 historical coursework. Grading reads untrusted submission content inside a
 networked container that holds a model-provider credential. The grader is
 instructed to inspect submissions without executing them, but that rule is not
@@ -59,7 +59,7 @@ editable mode:
 conda create --name aat python=3.12 pip
 conda activate aat
 
-git clone https://github.com/sergey-gusev94/agentic-assessment-toolkit.git
+git clone ANONYMOUS_REPOSITORY_URL
 cd agentic-assessment-toolkit
 python -m pip install -e .
 ```
@@ -97,7 +97,7 @@ The normal workflow processes all available courses and submissions:
 
 ```bash
 aat intake --all
-aat check-course --course PU_CHE597DS_S2026
+aat check-course --course SYN_COURSE1_F2025
 aat ingest-submissions --all
 aat solve --all --config codex-high
 aat grade --from-solve codex-high --config codex-grader-sol-high

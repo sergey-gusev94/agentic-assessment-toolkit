@@ -53,7 +53,7 @@ $AAT_DATA_DIR/
 │       ├── *.zip               #   plus an optional manifest.toml for overrides
 │       └── manifest.toml
 ├── courses/                    # source-of-truth course content (frozen at first use)
-│   └── <course_id>/            #   e.g. PU_CHE456_F2025
+│   └── <course_id>/            #   e.g. SYN_COURSE1_F2025
 │       ├── course.toml         #   course record + assessment registry
 │       ├── intake-notes.md     #   intake's review aid: judgment calls, open items
 │       ├── intake-record.json  #   receipt written by `aat intake` (doneness)
@@ -198,7 +198,7 @@ Notes:
   environment per assignment; if neither names one, materialization
   fails with a clear error. The course id is the directory name alone
   (recommended shape `<institution>_<course>_<term>`, e.g.
-  `PU_CHE456_F2025`); no consumer ever parses it, which is why
+  `SYN_COURSE1_F2025`); no consumer ever parses it, which is why
   `institution` and `term` are explicit fields.
 
   The `[[assessments]]` registry: one entry per syllabus assessment,

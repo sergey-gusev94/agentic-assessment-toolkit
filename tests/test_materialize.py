@@ -23,7 +23,7 @@ COURSE_DIR = FIXTURES_DIR / "course" / COURSE_ID
 
 def test_slugify() -> None:
     assert slugify("HW 12") == "HW-12"
-    assert slugify("PU_CHE597CO_S2026") == "PU-CHE597CO-S2026"
+    assert slugify("SYN_COURSE1_F2025") == "SYN-COURSE1-F2025"
     assert slugify("_irrelevant") == "irrelevant"
     assert slugify("///") == "x"
 
@@ -50,8 +50,8 @@ _DOCKER_IMAGE_NAME = re.compile(r"[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*")
 @pytest.mark.parametrize(
     "parts",
     [
-        ["PU_CHE597DS_S2026", "_reference", "HW2"],
-        ["PU_CHE597DS_S2026", "_irrelevant", "HW2"],
+        ["SYN_COURSE1_F2025", "_reference", "HW2"],
+        ["SYN_COURSE1_F2025", "_irrelevant", "HW2"],
         ["SYN_C1", "S001", "HW1"],
         ["SYN_C1", "student-17", "HW1"],
         ["C1", "a b.c__d", "HW 1"],
