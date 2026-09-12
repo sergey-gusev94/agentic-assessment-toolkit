@@ -49,6 +49,8 @@ software.
   [Authentication](docs/authentication.md).
 - The host Codex CLI for course intake. Claude Code needs its host CLI only to
   create a subscription token.
+- Pandoc 3.1.2 or later on the host for `aat export-results`. PDF rendering
+  uses the Typst Python package installed with the toolkit and its bundled fonts.
 
 ## Installation
 
@@ -162,6 +164,51 @@ aat grade --all --config codex-judge-sol-high \
 Use `--repeats N` to ensure each selected item has N valid trials. Use `--force`
 to add new trials even when an item is already complete. Existing trials are
 never overwritten.
+
+### Export final results to Brightspace
+
+After final judging, `aat export-results` creates a fresh directory containing
+`feedback.zip`, `grades.csv`, and a staff-only `manifest.json`. It reads stored
+results across jobs, so successful retries contribute without rerunning models.
+The CSV and each student's PDF use the same final judgment.
+
+```bash
+aat export-results --course COURSE_ID --assignment HW1 \
+  --config codex-judge-sol-high \
+  --context-from codex-grader-sol-high --gradings 3 \
+  --submissions-zip '/path/to/Assignment 1 Download.zip' \
+  --grade-export '/path/to/GradesExport.csv'
+```
+
+Use the original Brightspace submission ZIP and an actual grade export with
+**Username**, **Points grade**, and exactly one numeric grade item. The CSV
+supplies the full roster, exact grade-item name, and maximum points. It is not
+the sample import CSV. Repeat `--submissions-zip` if the assignment spans
+multiple downloads. Complete submission ingest before exporting.
+
+Missing or ambiguous judgments block export. Use `--zero-missing` only after
+confirming the downloads are complete and roster students without a submission
+should receive zero. Submitted work with failed grading still needs a successful
+judgment. `--allow-partial` explicitly omits unresolved students from both upload
+files and lists them in the manifest. Multiple eligible judgments require
+`--trial JOB/TRIAL`; multiple stored config versions require the displayed
+identity selectors. Bonus grades above the gradebook maximum require Brightspace's
+**Can Exceed** setting and `--can-exceed`.
+
+Outputs default to `analysis/exports/` in the data root. `--out PATH` selects
+another parent directory outside the repository and source-data trees. Each run
+creates a new snapshot, including when you rerun the same command after grading
+more students. Read [the export contract](docs/design.md#brightspace-results-export)
+for selection, validation, and PDF details.
+
+Upload **feedback.zip** through the assignment's **Add Feedback Files**. Import
+**grades.csv** through **Grades > Enter Grades > Import**, matching the existing
+grade item. Keep **manifest.json** locally. Review both files before import:
+Brightspace synchronizes imported grades for linked assignments as published
+feedback. See [D2L's grade import documentation](https://community.d2l.com/brightspace/kb/articles/3538-importing-grades)
+and [the feedback attachment workflow](https://community.d2l.com/brightspace/kb/articles/5175-evaluate-assignments-using-the-assignments-tool).
+The maintainer validates a small upload in the target Brightspace instance;
+repository checks cover local generation only.
 
 ## Experiment configurations
 

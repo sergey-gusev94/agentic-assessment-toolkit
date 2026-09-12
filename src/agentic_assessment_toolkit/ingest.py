@@ -45,7 +45,7 @@ from pypdf import PdfReader, PdfWriter
 
 from . import __version__
 from .course import CourseError, load_course
-from .hashing import sha256_bytes, sha256_dir
+from .hashing import sha256_bytes, sha256_dir, sha256_manifest
 
 RECORD_FILENAME = "ingest-record.json"
 RECORD_SCHEMA_VERSION = 1
@@ -454,6 +454,63 @@ def _brightspace_uploads(zip_path: Path, zf: zipfile.ZipFile) -> list[_Upload]:
 
 # ---------------------------------------------------------------------------
 # Students table
+
+
+@dataclass(frozen=True)
+class BrightspaceSubmission:
+    """A merged submission and its original folder for returning feedback."""
+
+    person_id: str
+    username: str
+    display_name: str
+    folder: str
+    sha256: str
+
+
+def read_brightspace_submissions(paths: list[Path]) -> list[BrightspaceSubmission]:
+    """Read one assignment's downloads using the same merge rules as ingest.
+
+    No files are extracted. The latest upload folder receives the feedback
+    for the combined academic work. Assignment IDs and identities must agree.
+    """
+    uploads = []
+    for path in paths:
+        with zipfile.ZipFile(path) as archive:
+            names = archive.namelist()
+            if len(names) != len(set(names)):
+                raise IngestError(f"{path.name}: duplicate ZIP member names")
+            for name in names:
+                _validate_member_path(path.name, name.rstrip("/"))
+                if "/" not in name and name != "index.html":
+                    raise IngestError(f"{path.name}: unexpected root file {name!r}")
+            uploads.extend(_brightspace_uploads(path, archive))
+    if not uploads:
+        raise IngestError("the selected ZIPs contain no file submissions")
+    if len({upload.lms_assignment_id for upload in uploads}) != 1:
+        raise IngestError("the selected ZIPs contain more than one Brightspace assignment")
+    people: dict[str, list[_Upload]] = {}
+    for upload in uploads:
+        people.setdefault(upload.person_id, []).append(upload)
+    result = []
+    for person_id, group in sorted(people.items()):
+        if len({u.username.lstrip("#").casefold() for u in group}) != 1:
+            raise IngestError(f"Brightspace person {person_id} has conflicting usernames")
+        merged, _, _ = _merge_uploads(group)
+        manifest = {}
+        for relative, entry in merged.items():
+            with zipfile.ZipFile(entry.zip_path) as archive:
+                manifest[relative] = sha256_bytes(archive.read(entry.member))
+        latest = max(group, key=lambda u: (u.submitted_at, u.dir_name))
+        result.append(
+            BrightspaceSubmission(
+                person_id,
+                latest.username,
+                latest.display_name,
+                latest.dir_name,
+                sha256_manifest(manifest),
+            )
+        )
+    return result
 
 
 def read_students(root: Path, course_id: str) -> list[Student]:

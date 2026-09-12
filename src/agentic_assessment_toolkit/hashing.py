@@ -48,8 +48,13 @@ def file_manifest(root: Path) -> dict[str, str]:
 
 def sha256_dir(root: Path) -> str:
     """Deterministic digest of a directory: relative names and file contents only."""
+    return sha256_manifest(file_manifest(root))
+
+
+def sha256_manifest(manifest: dict[str, str]) -> str:
+    """Hash relative paths and file digests using the directory hash contract."""
     digest = hashlib.sha256(b"aat-dir-sha256-v1\0")
-    for relpath, file_digest in sorted(file_manifest(root).items()):
+    for relpath, file_digest in sorted(manifest.items()):
         digest.update(relpath.encode("utf-8"))
         digest.update(b"\0")
         digest.update(file_digest.encode("ascii"))

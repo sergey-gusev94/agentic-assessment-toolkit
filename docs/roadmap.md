@@ -21,14 +21,6 @@ and the condition that triggers building it. No dates, no history.
 
 ## Later, on demand
 
-- **Feedback export**, a deterministic command that collects each
-  student's final-judge `feedback.md` files, re-identifies them via
-  the identity tables under `tables/`, and writes a distributable tree
-  outside the LLM path (subject to the same refusal rule as reports:
-  never inside the toolkit repository); when final feedback is
-  actually handed to students. The pseudonymization boundary is
-  untouched: re-identification happens only in this export, after all
-  grading.
 - **Initial-grader feedback enrichment**, extending the initial
   grader prompt to also author learning-opportunity notes; if
   judge-produced feedback proves thin in practice because issues the

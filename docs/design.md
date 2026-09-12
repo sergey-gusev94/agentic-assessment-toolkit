@@ -26,7 +26,7 @@ Each entry is a commitment with a short rationale.
    submission-ingest adapters and identity tables, and the thin
    `aat solve` / `aat grade` / `aat report` / `aat check-course` /
    `aat check-auth` / `aat intake` / `aat ingest-submissions` /
-   `aat init-data` commands. It does not
+    `aat init-data` / `aat export-results` commands. It does not
    implement an agent runner, sandbox framework, run orchestrator, model
    abstraction, transcript schema, experiment database, or results viewer:
    Harbor does all orchestration; the toolkit constructs one command line
@@ -199,9 +199,9 @@ Each entry is a commitment with a short rationale.
     prior gradings; the evidence count is an experiment parameter, so
     N has no default.
     The judge's feedback document is written for the student and never
-    mentions the grading process; collecting and re-identifying the
-    documents for distribution is a planned export step
-    ([roadmap.md](roadmap.md)).
+    mentions the grading process. `aat export-results` combines this
+    feedback with the final criterion scores to create student PDFs and
+    a Brightspace grade-import CSV, restoring identities locally after grading.
 
 ## Vocabulary
 
@@ -1387,7 +1387,7 @@ at or above 95, irrelevant at or below 5), never a machine pass/fail.
 No generation code exists or is needed: the checks reuse `aat grade`
 and `metrics.py` unchanged.
 
-**Reporting (`aat report`).** The third, read-only command renders the
+**Reporting (`aat report`).** This read-only command renders the
 benchmark statistics, score distributions and confidence intervals by
 assignment, course, and config, failure accounting, and the
 grader-check summary, as CSV tables plus a Markdown report under
@@ -1415,6 +1415,91 @@ duplicate this layer without providing the statistics, and because
 files are the source of truth it remains retroactively adoptable via a
 backfill script if a browsable cross-experiment UI is ever needed
 ([roadmap.md](roadmap.md)).
+
+### Brightspace results export
+
+`aat export-results` exports one course assignment for the 2026 Brightspace
+file-submission workflow. It reads stored final judgments, original Brightspace
+download ZIPs, the ingest identity table, and an actual Brightspace grade-export
+CSV. It makes no model calls and never uploads or publishes anything.
+The command's name and context selectors refer to stored config names, not
+current TOML files. This lets export reproduce stored work after prompts change.
+
+Selection spans all matching jobs for `--course`, `--assignment`, `--config`,
+and `--context-from`. Config names must each resolve to one stored identity;
+`--config-identity` and `--context-config-identity` disambiguate hashes. Eligible
+judgments are completed student gradings with readable results, exactly
+`--gradings N` prior trials, and no superseded flag. There must be exactly one
+eligible judgment per student. Repeated `--trial JOB/TRIAL` options explicitly
+choose judgments for students with several candidates; other students retain
+their single candidate. Scores are never averaged or selected by recency.
+
+The grade-export CSV supplies Username, exactly one numeric Points Grade column
+with its exported `<Numeric MaxPoints:N>` annotation, and End-of-Line Indicator.
+It supplies the authoritative export roster and target point scale; existing
+grade cells are ignored. Usernames match case-insensitively without their leading
+`#`, but the CSV's original spelling is preserved in output. Missing or duplicate
+usernames, invalid maximum points, malformed rows, and ZIP submitters absent from
+the roster are errors. The operator selects the grade export for the intended
+assignment and class or section, including students without submissions.
+
+Brightspace downloads retain their original numbered upload folders. Multiple
+ZIPs are supported for one assignment, with the same per-path upload merge rule
+as ingest. The combined files must hash identically to the normalized submission
+and the selected judge's recorded submission input. Identity mappings must agree
+on LMS person ID and username. The most recent upload folder receives one
+`feedback.pdf` for the combined submission. Original student files are not included
+in the feedback ZIP. Downloads with other layouts or multiple LMS assignment IDs
+are rejected. Group assignments and students lacking a Brightspace identity
+mapping are not supported.
+
+The exporter revalidates the grading JSON, nonempty justification and feedback,
+and criterion IDs, maxima, and bonus flags against the hash-checked materialized
+rubric. It recomputes totals from criteria using the shared grading schema;
+authored sum discrepancies remain recorded diagnostics. CSV grades equal the
+bonus-inclusive `score_pct` times the gradebook maximum divided by 100.
+Numbers are written with up to six decimal places, consistently in the generated
+grade summary and CSV. A scale conversion is printed and recorded. Scores above
+the gradebook maximum require `--can-exceed`, confirming that the operator enabled
+Brightspace's Can Exceed setting; the exporter never caps scores silently.
+
+Each PDF contains the course ID, assignment grade-item name, student name and
+username, final academic grade and percentage, base and bonus totals, a criterion
+table in rubric order, and the judge's student-facing feedback. Staff justification
+and `overall_comment` are not copied into the PDF. Existing feedback is retained
+as written, so factual accuracy, tone, and any scores within that prose still
+require review. Pandoc 3.1.2 or later parses Markdown, tables, and TeX equations
+and translates them to Typst. The installed Typst Python package compiles locally
+using bundled fonts, fixed PDF time metadata, readable text, and page numbers.
+Raw executable markup, external images, author metadata, and Typst attributes
+cannot control rendering. Unsupported conversion produces an error instead of
+silently dropping content. No tools or fonts are downloaded during export.
+
+Without `--zero-missing`, a roster student absent from the ZIP is unresolved.
+`--zero-missing` confirms both complete downloads and a policy of zero for those
+non-submitters. Those students receive CSV zeros and no feedback PDF because no
+submission folder exists. A normalized submission or any recorded student grading
+trial contradicts absence from the ZIP and prevents a zero. Submitted work whose
+judgment failed, is missing, or has unreadable artifacts remains unresolved.
+By default any unresolved student prevents export. `--allow-partial` omits those
+students from both upload files and records each omission, without writing blank
+grade rows that could affect existing grades. At least one grade must be ready.
+
+Each invocation writes a fresh snapshot under `analysis/exports/`, or under the
+parent selected by `--out`. Destinations within the toolkit repository or source
+data trees are refused. PDF, ZIP, CSV, and manifest generation is staged; an error
+leaves no finished snapshot. Existing snapshots and grading artifacts stay intact.
+The upload files are `feedback.zip` and `grades.csv`; the ZIP uses fixed member
+timestamps. The separate staff-only `manifest.json` records selection, input and
+output hashes, included judgments and their lineage, scale conversions, confirmed
+zeros, and omissions. Re-identification happens entirely in this local export.
+
+In Brightspace, feedback.zip goes to the assignment's Add Feedback Files and
+grades.csv goes to Grades > Enter Grades > Import. Imported grades for linked
+assignments synchronize as published feedback, so both outputs are reviewed before
+import. The maintainer checks attachment matching and publication in the target
+Brightspace instance outside repository work. The command does not infer whether
+a snapshot was previously uploaded and does not implement incremental LMS updates.
 
 ## Implementation
 
@@ -1449,12 +1534,15 @@ src/agentic_assessment_toolkit/
 ├── results.py             # trials + criteria tables
 ├── metrics.py             # pooled statistics, bootstrap CIs
 ├── report.py              # report rendering behind `aat report`
+├── export_results.py      # final judgments into Brightspace PDF ZIP and grades CSV
+├── feedback_pdf.py        # local Markdown and equation rendering with Pandoc and Typst
 ├── cli.py                 # argparse: `aat solve` / `aat grade` /
 │                          #   `aat report` / `aat check-course` /
 │                          #   `aat check-auth` / `aat intake` /
-│                          #   `aat ingest-submissions` / `aat init-data`
+│                          #   `aat ingest-submissions` / `aat init-data` / `aat export-results`
 └── templates/             # package data (importlib.resources)
-    ├── prompts/           # solver.md, grader.md, intake.md
+    ├── feedback.typ       # student PDF layout
+    ├── prompts/           # solver.md, grader.md, judge.md, intake.md
     ├── verifiers/         # two standalone scripts
     ├── environments/      # one Dockerfile per (flavor, agent), plus
     │                      #   preflight.py (canonical source of the

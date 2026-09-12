@@ -16,10 +16,13 @@ regraded automatically.
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
+import json
 import os
 import shlex
 import sys
+import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +31,7 @@ from . import base_images as base_images_mod
 from . import check_course as check_course_mod
 from . import config as config_mod
 from . import data_root as data_root_mod
+from . import export_results as export_mod
 from . import harbor as harbor_mod
 from . import hashing, provenance
 from . import ingest as ingest_mod
@@ -79,6 +83,7 @@ def main(argv: list[str] | None = None) -> int:
         ConfigError,
         CourseError,
         DataRootError,
+        export_mod.ExportError,
         harbor_mod.HarborAuthenticationError,
         MaterializeError,
     ) as error:
@@ -307,6 +312,61 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     report.add_argument("--data-root", metavar="PATH", help=DATA_ROOT_HELP)
 
+    export = subparsers.add_parser(
+        "export-results", help="export final judgments as Brightspace feedback.zip and grades.csv"
+    )
+    export.add_argument("--course", required=True, metavar="ID")
+    export.add_argument("--assignment", required=True, metavar="ID")
+    export.add_argument("--config", required=True, help="stored final judge config name")
+    export.add_argument("--context-from", required=True, help="stored initial grader config name")
+    export.add_argument("--gradings", required=True, type=_positive_int, metavar="N")
+    export.add_argument(
+        "--config-identity", help="select a stored judge config hash when its name is ambiguous"
+    )
+    export.add_argument(
+        "--context-config-identity", help="select a stored initial grader config hash"
+    )
+    export.add_argument(
+        "--trial",
+        action="append",
+        metavar="JOB/TRIAL",
+        help="choose a student's judgment when several remain (repeatable)",
+    )
+    export.add_argument(
+        "--grade-export",
+        required=True,
+        metavar="CSV",
+        help="actual Brightspace roster export with one numeric grade item",
+    )
+    export.add_argument(
+        "--submissions-zip",
+        required=True,
+        action="append",
+        metavar="ZIP",
+        help="original Brightspace download for this assignment (repeatable)",
+    )
+    export.add_argument(
+        "--zero-missing",
+        action="store_true",
+        help="confirm downloads are complete and assign zero to roster students with no submission",
+    )
+    export.add_argument(
+        "--allow-partial",
+        action="store_true",
+        help="omit unresolved students and record them in the manifest",
+    )
+    export.add_argument(
+        "--can-exceed",
+        action="store_true",
+        help="confirm Brightspace Can Exceed is enabled for bonus scores above the maximum",
+    )
+    export.add_argument(
+        "--out",
+        metavar="PATH",
+        help="parent for a fresh export directory (default: <data-root>/analysis/exports)",
+    )
+    export.add_argument("--data-root", metavar="PATH", help=DATA_ROOT_HELP)
+
     init_data = subparsers.add_parser(
         "init-data", help="create the data root directory and its top-level layout"
     )
@@ -327,6 +387,8 @@ def _positive_int(value: str) -> int:
 
 
 def _run(args: argparse.Namespace) -> int:
+    if args.command == "export-results":
+        return _run_export_results(args)
     if args.command == "init-data":
         return _run_init_data(args)
     if args.command == "report":
@@ -452,6 +514,62 @@ def _run_init_data(args: argparse.Namespace) -> int:
     print(f"initialized data root {root}")
     for name in created:
         print(f"  created {name}")
+    return 0
+
+
+def _run_export_results(args: argparse.Namespace) -> int:
+    root = data_root_mod.resolve_data_root(args.data_root)
+    try:
+        path = export_mod.export_results(
+            root,
+            course_id=args.course,
+            assignment_id=args.assignment,
+            config_name=args.config,
+            context_name=args.context_from,
+            gradings=args.gradings,
+            grade_export=Path(args.grade_export),
+            submission_zips=[Path(p) for p in args.submissions_zip],
+            out_root=Path(args.out) if args.out else None,
+            config_identity=args.config_identity,
+            context_identity=args.context_config_identity,
+            trials=args.trial,
+            allow_partial=args.allow_partial,
+            zero_missing=args.zero_missing,
+            can_exceed=args.can_exceed,
+        )
+    except (
+        OSError,
+        ValueError,
+        csv.Error,
+        zipfile.BadZipFile,
+        ingest_mod.IngestError,
+        rubric_mod.RubricError,
+    ) as error:
+        raise CliError(str(error)) from error
+    manifest = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
+    entries = manifest["students"]
+    print(f"export: {path}")
+    for status in ("graded", "zero_missing", "unresolved"):
+        print(f"  {status}: {sum(entry['status'] == status for entry in entries)}")
+    for entry in entries:
+        if entry["status"] == "unresolved":
+            print(f"  omitted {entry['username']}: {entry['reason']}")
+        elif (
+            entry["status"] == "graded"
+            and entry["rubric_base_max"] != manifest["gradebook_maximum"]
+        ):
+            print(
+                f"  scaled {entry['username']}: rubric maximum {entry['rubric_base_max']} "
+                f"to gradebook maximum {manifest['gradebook_maximum']}"
+            )
+    print(
+        "Upload feedback.zip through the assignment's Add Feedback Files; "
+        "import grades.csv through Grades > Enter Grades > Import."
+    )
+    print(
+        "Review before import: linked assignment grades synchronize as published feedback. "
+        "Keep manifest.json locally."
+    )
     return 0
 
 
