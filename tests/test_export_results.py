@@ -483,3 +483,29 @@ def test_pdf_rejects_external_images_and_renders_code_as_text() -> None:
     assert data == feedback_pdf.render_pdf(source)
     text = " ".join(page.extract_text() for page in PdfReader(io.BytesIO(data)).pages)
     assert 'read("/etc/passwd")' in text
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (r"(q_{\rm prod}-q_{\rm ship})\Delta t", r"(q_\mathrm{prod}-q_\mathrm{ship})\Delta t"),
+        (r"{ \rm A_{i} + {\rm B}}", r"\mathrm{A_{i} + \mathrm{B}}"),
+        (r"{\mathrm{prod}}", r"{\mathrm{prod}}"),
+        (r"\{\rm prod\}", r"\{\rm prod\}"),
+        (r"{\\rm prod}", r"{\\rm prod}"),
+        (r"{\rmunknown x}", r"{\rmunknown x}"),
+    ],
+)
+def test_legacy_roman_math_normalization(source: str, expected: str) -> None:
+    assert feedback_pdf._normalize_math(source) == expected
+
+
+@pytest.mark.skipif(shutil.which("pandoc") is None, reason="PDF integration requires host Pandoc")
+@pytest.mark.parametrize("delimiter", ["$", "$$"])
+def test_pdf_renders_legacy_roman_math_without_changing_code(delimiter: str) -> None:
+    legacy = r"(q_{\rm prod}-q_{\rm ship})\Delta t"
+    modern = r"(q_{\mathrm{prod}}-q_{\mathrm{ship}})\Delta t"
+    code = f"Example: `{legacy}`\n\n```latex\n{legacy}\n```\n\n"
+    actual = feedback_pdf.render_pdf(f"{code}{delimiter}{legacy}{delimiter}\n")
+    expected = feedback_pdf.render_pdf(f"{code}{delimiter}{modern}{delimiter}\n")
+    assert actual == expected

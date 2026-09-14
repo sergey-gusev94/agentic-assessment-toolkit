@@ -1483,7 +1483,10 @@ order, and the judge's student-facing feedback. Staff justification
 and `overall_comment` are not copied into the PDF. Existing feedback is retained
 as written, so factual accuracy, tone, and any scores within that prose still
 require review. Pandoc 3.1.2 or later parses Markdown, tables, and TeX equations
-and translates them to Typst. The installed Typst Python package compiles locally
+and translates them to Typst. Within parsed equations, the renderer converts
+grouped legacy roman declarations such as `{\rm prod}` to `\mathrm{prod}` before
+translation. Prose, code examples, and stored feedback are unchanged.
+The installed Typst Python package compiles locally
 using bundled fonts, fixed PDF time metadata, readable text, and page numbers.
 Raw executable markup, external images, author metadata, and Typst attributes
 cannot control rendering. Unsupported conversion produces an error instead of

@@ -8,6 +8,7 @@ document metadata, external images, or Typst attributes.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import tempfile
@@ -57,11 +58,25 @@ def _pandoc(source: str, source_format: str, target: str) -> str:
     return completed.stdout
 
 
+def _normalize_math(source: str) -> str:
+    """Convert grouped TeX roman declarations to Pandoc's supported notation."""
+    # Consume commands and escaped characters first so literal braces and
+    # backslashes cannot be mistaken for the start of a font declaration.
+    return re.sub(
+        r"\\[A-Za-z]+|\\.|(\{\s*\\rm(?![A-Za-z])\s*)",
+        lambda match: r"\mathrm{" if match.group(1) else match.group(0),
+        source,
+    )
+
+
 def _clean(node: Any) -> Any:
     if isinstance(node, dict):
         if node.get("t") in {"RawBlock", "RawInline", "Image"}:
             raise FeedbackRenderError("feedback must use text, tables, code, and equations only")
-        return {key: _clean(value) for key, value in node.items()}
+        cleaned = {key: _clean(value) for key, value in node.items()}
+        if node.get("t") == "Math":
+            cleaned["c"][1] = _normalize_math(cleaned["c"][1])
+        return cleaned
     if isinstance(node, list):
         # Pandoc Attr: identifier, classes, key/value pairs. In particular,
         # typst:* attributes must never reach the Typst writer as code.
