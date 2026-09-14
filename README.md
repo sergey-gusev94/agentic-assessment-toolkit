@@ -185,6 +185,9 @@ Use the original Brightspace submission ZIP and an actual grade export with
 supplies the full roster, exact grade-item name, and maximum points. It is not
 the sample import CSV. Repeat `--submissions-zip` if the assignment spans
 multiple downloads. Complete submission ingest before exporting.
+For reviewed resubmissions, record an exact upload selection in the course's
+`manifest.toml` and rerun ingest. Export uses that same selection and records
+the excluded uploads. See [upload selection rules](docs/data-conventions.md#submission-ingest).
 
 Missing or ambiguous judgments block export. Use `--zero-missing` only after
 confirming the downloads are complete and roster students without a submission

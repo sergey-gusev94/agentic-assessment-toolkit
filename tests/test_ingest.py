@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import zipfile
 from pathlib import Path
@@ -10,6 +11,7 @@ import pytest
 from pypdf import PdfReader
 
 from agentic_assessment_toolkit import cli, ingest
+from agentic_assessment_toolkit.hashing import sha256_dir
 from tests.conftest import COURSE_ID, build_data_root
 
 
@@ -229,6 +231,96 @@ def test_identical_reupload_dedupes(data_root: Path) -> None:
     assert "duplicate_reupload" in outcome.flags
     assert "replaced_files" not in outcome.flags
     assert outcome.uploads == 2
+
+
+@pytest.mark.parametrize("earlier_content", [b"same", b"older solution"])
+def test_reviewed_upload_selection_matches_frozen_submission(
+    data_root: Path, earlier_content: bytes
+) -> None:
+    earlier = upload_dir("101", "alice", "Alice Smith", "Sep 7, 2025 516 PM")
+    selected = upload_dir("101", "alice", "Alice Smith", "Sep 8, 2025 900 AM")
+    brightspace_zip(data_root, uploads={selected: {"final.pdf": b"same"}})
+    ingest.ingest_course(data_root, COURSE_ID)
+    submission = data_root / "submissions" / COURSE_ID / "S001" / "HW1"
+    before = sha256_dir(submission)
+    original_mtime = (submission / "final.pdf").stat().st_mtime_ns
+    job = data_root / "grading" / "existing"
+    job.mkdir(parents=True)
+    (job / "aat-run.json").write_text(
+        json.dumps(
+            {
+                "items": [
+                    {
+                        "course_id": COURSE_ID,
+                        "assignment_id": "HW1",
+                        "student_id": "S001",
+                        "submission_source": "student",
+                    }
+                ]
+            }
+        )
+    )
+    brightspace_zip(
+        data_root, zip_name="HW1 earlier.zip", uploads={earlier: {"old.pdf": earlier_content}}
+    )
+    manifest = raw_dir(data_root) / "manifest.toml"
+    manifest.write_text(
+        '[[upload_selections]]\nassignment_id = "HW1"\nperson_id = "101"\n'
+        f'folder = "{selected}"\nreason = "Reviewed final attempt"\n'
+    )
+    report = ingest.ingest_course(data_root, COURSE_ID)
+    [outcome] = report.outcomes
+    assert outcome.status == "ready"
+    assert outcome.uploads == 2 and outcome.files == 1
+    assert outcome.selected_upload == selected
+    assert outcome.excluded_uploads == (earlier,)
+    assert outcome.selection_reason == "Reviewed final attempt"
+    assert sha256_dir(submission) == before
+    assert (submission / "final.pdf").stat().st_mtime_ns == original_mtime
+    with (data_root / "tables" / COURSE_ID / "submissions.csv").open() as handle:
+        [row] = csv.DictReader(handle)
+    assert json.loads(row["excluded_uploads"]) == [earlier]
+    assert row["selected_upload"] == selected
+    assert row["selection_reason"] == outcome.selection_reason
+    assert f"excluded: {earlier}" in ingest.format_report(report)
+    selections = ingest.read_upload_selections(raw_dir(data_root), "HW1")
+    [exported] = ingest.read_brightspace_submissions(
+        sorted(raw_dir(data_root).glob("*.zip")), selections=selections
+    )
+    assert exported.sha256 == before
+    assert exported.folder == selected
+    assert exported.excluded_uploads == (earlier,)
+    assert ingest.read_upload_selections(raw_dir(data_root), "HW2") == {}
+    manifest.write_text(manifest.read_text().replace(selected, earlier))
+    [outcome] = ingest.ingest_course(data_root, COURSE_ID).outcomes
+    assert outcome.status == "frozen"
+    assert sha256_dir(submission) == before
+
+
+@pytest.mark.parametrize(
+    "problem",
+    ["missing_folder", "absent_person", "wrong_person", "duplicate", "empty_reason", "unknown_key"],
+)
+def test_invalid_upload_selection_stops_ingest(data_root: Path, problem: str) -> None:
+    brightspace_zip(data_root)
+    person = "999" if problem == "absent_person" else "101"
+    folder_person = "999" if problem == "wrong_person" else person
+    date = "Sep 8, 2025 900 AM" if problem == "missing_folder" else "Sep 7, 2025 516 PM"
+    folder = upload_dir(folder_person, "alice", "Alice Smith", date)
+    reason = "" if problem == "empty_reason" else "Reviewed"
+    entry = (
+        '[[upload_selections]]\nassignment_id = "HW1"\n'
+        f'person_id = "{person}"\nfolder = "{folder}"\nreason = "{reason}"\n'
+    )
+    if problem == "duplicate":
+        entry += entry
+    if problem == "unknown_key":
+        entry += 'typo = "value"\n'
+    (raw_dir(data_root) / "manifest.toml").write_text(entry)
+    before = sha256_dir(data_root)
+    with pytest.raises(ingest.IngestError):
+        ingest.ingest_course(data_root, COURSE_ID)
+    assert sha256_dir(data_root) == before
 
 
 def test_three_digit_clock_parses() -> None:

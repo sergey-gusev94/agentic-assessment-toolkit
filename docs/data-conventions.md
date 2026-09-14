@@ -501,6 +501,31 @@ unrecognized layout is a hard error, never a guess.
   `identity_changed` (the table keeps the first-seen identity).
   Root-level export bookkeeping files (e.g. `index.html`) are
   ignored.
+- **Reviewed Brightspace upload selections.** A `[[upload_selections]]` entry
+  in the course's `manifest.toml` selects one exact upload folder for one
+  assignment and LMS person ID. All files from that folder are retained; other
+  upload folders for that submission are excluded from the effective submission.
+  Raw ZIPs remain unchanged. Ingest and results export apply the same selection.
+  The selection stays fixed until the manifest is edited, including when newer
+  uploads arrive. Without a selection, the ordinary merge rules apply.
+  Duplicate selections, unknown fields, empty values, a folder belonging to a
+  different person, and selections absent from the input ZIPs are errors.
+  Export checks selections only for the assignment being exported.
+
+  ```toml
+  [[upload_selections]]
+  assignment_id = "HW01"
+  person_id = "101"
+  folder = "101-9001 - alice Alice Smith - Sep 8, 2025 900 AM"
+  reason = "Reviewed final attempt; earlier upload is an older solution."
+  ```
+
+  The ingest table records `selected_upload`, `excluded_uploads` (a JSON array
+  of folder names), and `selection_reason`, with the `upload_selected` flag.
+  The upload count includes all input uploads; the file count covers selected
+  files. A selection never bypasses the freeze rule or the exporter's checks
+  that the selected bytes match the work graded. Feedback is returned to the
+  selected folder.
 - **Gradescope**: `assignment_<n>_export/` holds one graded-copy
   PDF per submission, named by numeric submission id. Each PDF is
   grade-summary pages followed by submission pages. Every submission
@@ -567,9 +592,10 @@ receipt records the outcome counts, and unresolved rows are reported
 (and keep the exit nonzero) until a fix changes the dump or `--force`
 reprocesses it. The review loop is: read the summary, fix
 `manifest.toml` or resolve the frozen conflict, re-run until clean.
-Flagged multi-upload merges are drafts like everything else
-pre-freeze: hand-prune a submission directory before grading if the
-merge kept a stale version.
+Resolve flagged multi-upload merges through a reviewed upload selection when
+one complete attempt should be retained, then rerun ingest. This records a
+selection that export can reproduce. A selection reproducing an already graded
+submission refreshes the ingest records without rewriting that submission.
 
 ## Job directories and run records
 

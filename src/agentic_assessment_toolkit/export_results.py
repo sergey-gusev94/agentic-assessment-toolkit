@@ -330,7 +330,9 @@ def export_results(
                 "export destination overlaps source data; use analysis/exports or a separate directory"
             )
     template = read_grade_template(grade_export)
-    submissions = ingest.read_brightspace_submissions(submission_zips)
+    raw_dir = root / "raw-submissions" / course_id
+    selections = ingest.read_upload_selections(raw_dir, assignment_id)
+    submissions = ingest.read_brightspace_submissions(submission_zips, selections=selections)
     by_username = {_username(s.username): s for s in submissions}
     if len(by_username) != len(submissions):
         raise ExportError("multiple Brightspace person IDs share a username")
@@ -450,6 +452,12 @@ def export_results(
                 rubric_base_adjustment_points=grade.rubric_base_adjustment_points,
                 sums_consistent=grading_schema.sums_report(data)["consistent"],
             )
+            if submission.selection is not None:
+                entry["upload_selection"] = {
+                    "folder": submission.selection.folder,
+                    "reason": submission.selection.reason,
+                    "excluded_uploads": list(submission.excluded_uploads),
+                }
         except (ExportError, OSError, ValueError, RubricError) as error:
             entry.update(status="unresolved", reason=str(error))
     unresolved = [entry for entry in entries if entry["status"] == "unresolved"]
@@ -461,6 +469,10 @@ def export_results(
     included = [entry for entry in entries if entry["status"] != "unresolved"]
     if not included:
         raise ExportError("no grades are ready to export")
+    inputs = [grade_export, *submission_zips, root / "tables" / course_id / ingest.STUDENTS_CSV]
+    selection_manifest = raw_dir / ingest.MANIFEST_FILENAME
+    if selection_manifest.is_file():
+        inputs.append(selection_manifest)
     manifest = {
         "schema_version": 1,
         "toolkit_version": __version__,
@@ -475,14 +487,7 @@ def export_results(
         "allow_partial": allow_partial,
         "zero_missing": zero_missing,
         "can_exceed": can_exceed,
-        "inputs": [
-            {"path": str(p.resolve()), "sha256": sha256_file(p)}
-            for p in [
-                grade_export,
-                *submission_zips,
-                root / "tables" / course_id / ingest.STUDENTS_CSV,
-            ]
-        ],
+        "inputs": [{"path": str(p.resolve()), "sha256": sha256_file(p)} for p in inputs],
         "students": entries,
     }
     destination.mkdir(parents=True, exist_ok=True)

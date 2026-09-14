@@ -14,7 +14,9 @@ Two adapters, auto-detected from each zip's internal shape:
   uploads for an assignment merge into one effective submission: union
   by relative path, where a later upload's file with exactly the same
   path supersedes the earlier version (recorded, never silent), and
-  nothing else is ever discarded.
+  nothing else is discarded by the merge. A reviewed upload selection in
+  the manifest instead retains one exact upload folder and records the
+  excluded folders and reason.
 - **Gradescope** — one graded "Print Submission" PDF per submission.
   The grade-summary pages are split off at the first page carrying a
   question-assignment banner; only the submission pages reach the
@@ -112,6 +114,9 @@ SUBMISSIONS_COLUMNS = (
     "files",
     "flags",
     "replaced_files",
+    "selected_upload",
+    "excluded_uploads",
+    "selection_reason",
 )
 
 
@@ -153,6 +158,9 @@ class Outcome:
     files: int
     flags: tuple[str, ...] = ()
     replaced_files: tuple[str, ...] = ()
+    selected_upload: str = ""
+    excluded_uploads: tuple[str, ...] = ()
+    selection_reason: str = ""
 
     @property
     def attention(self) -> bool:
@@ -284,9 +292,18 @@ def write_record(root: Path, report: CourseReport) -> Path:
 
 
 @dataclass(frozen=True)
+class UploadSelection:
+    """An explicitly reviewed Brightspace upload to use for one submission."""
+
+    folder: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class _Manifest:
     zips: dict[str, str]  # zip filename → assignment id
     identities: dict[str, str]  # Gradescope submission id → student id or display name
+    upload_selections: dict[tuple[str, str], UploadSelection] = field(default_factory=dict)
 
 
 def _load_manifest(raw_dir: Path) -> _Manifest:
@@ -299,13 +316,48 @@ def _load_manifest(raw_dir: Path) -> _Manifest:
         raise IngestError(f"cannot read {path} as UTF-8: {error}") from error
     except tomllib.TOMLDecodeError as error:
         raise IngestError(f"{path} is not valid TOML: {error}") from error
-    unknown = sorted(set(data) - {"zips", "identities"})
+    unknown = sorted(set(data) - {"zips", "identities", "upload_selections"})
     if unknown:
         raise IngestError(f"{path} has unknown keys: {', '.join(unknown)}")
     return _Manifest(
         zips=_str_table(data.get("zips"), path, "zips"),
         identities=_str_table(data.get("identities"), path, "identities"),
+        upload_selections=_parse_upload_selections(data.get("upload_selections", []), path),
     )
+
+
+def _parse_upload_selections(value: object, path: Path) -> dict[tuple[str, str], UploadSelection]:
+    fields = {"assignment_id", "person_id", "folder", "reason"}
+    if not isinstance(value, list):
+        raise IngestError(f"{path}: upload_selections must be an array of tables")
+    selections = {}
+    for entry in value:
+        if (
+            not isinstance(entry, dict)
+            or set(entry) != fields
+            or not all(isinstance(v, str) and v.strip() for v in entry.values())
+        ):
+            raise IngestError(
+                f"{path}: each upload selection requires nonempty strings: "
+                "assignment_id, person_id, folder, reason"
+            )
+        match = _BRIGHTSPACE_DIR_RE.fullmatch(entry["folder"])
+        if match is None or match["person_id"] != entry["person_id"]:
+            raise IngestError(f"{path}: selected upload folder must belong to person_id")
+        key = (entry["assignment_id"], entry["person_id"])
+        if key in selections:
+            raise IngestError(f"{path}: duplicate upload selection for {key}")
+        selections[key] = UploadSelection(entry["folder"], entry["reason"])
+    return selections
+
+
+def read_upload_selections(raw_dir: Path, assignment_id: str) -> dict[str, UploadSelection]:
+    """Read the course's reviewed upload selections for one assignment."""
+    return {
+        person: selection
+        for (assignment, person), selection in _load_manifest(raw_dir).upload_selections.items()
+        if assignment == assignment_id
+    }
 
 
 def _str_table(value: object, path: Path, key: str) -> dict[str, str]:
@@ -465,13 +517,18 @@ class BrightspaceSubmission:
     display_name: str
     folder: str
     sha256: str
+    selection: UploadSelection | None = None
+    excluded_uploads: tuple[str, ...] = ()
 
 
-def read_brightspace_submissions(paths: list[Path]) -> list[BrightspaceSubmission]:
+def read_brightspace_submissions(
+    paths: list[Path], *, selections: dict[str, UploadSelection] | None = None
+) -> list[BrightspaceSubmission]:
     """Read one assignment's downloads using the same merge rules as ingest.
 
-    No files are extracted. The latest upload folder receives the feedback
-    for the combined academic work. Assignment IDs and identities must agree.
+    No files are extracted. The selected folder, or otherwise the latest
+    upload folder, receives the feedback. Assignment IDs and identities
+    must agree.
     """
     uploads = []
     for path in paths:
@@ -491,16 +548,24 @@ def read_brightspace_submissions(paths: list[Path]) -> list[BrightspaceSubmissio
     people: dict[str, list[_Upload]] = {}
     for upload in uploads:
         people.setdefault(upload.person_id, []).append(upload)
+    selections = selections or {}
+    unknown = selections.keys() - people.keys()
+    if unknown:
+        raise IngestError(
+            f"upload selections refer to people absent from the ZIPs: {sorted(unknown)}"
+        )
     result = []
     for person_id, group in sorted(people.items()):
         if len({u.username.lstrip("#").casefold() for u in group}) != 1:
             raise IngestError(f"Brightspace person {person_id} has conflicting usernames")
-        merged, _, _ = _merge_uploads(group)
+        selection = selections.get(person_id)
+        selected, excluded = _select_uploads(group, selection)
+        merged, _, _ = _merge_uploads(selected)
         manifest = {}
         for relative, entry in merged.items():
             with zipfile.ZipFile(entry.zip_path) as archive:
                 manifest[relative] = sha256_bytes(archive.read(entry.member))
-        latest = max(group, key=lambda u: (u.submitted_at, u.dir_name))
+        latest = max(selected, key=lambda u: (u.submitted_at, u.dir_name))
         result.append(
             BrightspaceSubmission(
                 person_id,
@@ -508,6 +573,8 @@ def read_brightspace_submissions(paths: list[Path]) -> list[BrightspaceSubmissio
                 latest.display_name,
                 latest.dir_name,
                 sha256_manifest(manifest),
+                selection,
+                excluded,
             )
         )
     return result
@@ -584,6 +651,9 @@ def _write_submissions_csv(root: Path, course_id: str, outcomes: list[Outcome]) 
                     "files": outcome.files,
                     "flags": ";".join(outcome.flags),
                     "replaced_files": ";".join(outcome.replaced_files),
+                    "selected_upload": outcome.selected_upload,
+                    "excluded_uploads": json.dumps(outcome.excluded_uploads),
+                    "selection_reason": outcome.selection_reason,
                 }
             )
 
@@ -633,6 +703,18 @@ def frozen_student_items(root: Path) -> set[tuple[str, str, str]]:
 
 # ---------------------------------------------------------------------------
 # Brightspace merge policy
+
+
+def _select_uploads(
+    uploads: list[_Upload], selection: UploadSelection | None
+) -> tuple[list[_Upload], tuple[str, ...]]:
+    if selection is None:
+        return uploads, ()
+    selected = [u for u in uploads if u.dir_name == selection.folder]
+    if not selected:
+        raise IngestError(f"selected upload folder is absent from the ZIPs: {selection.folder}")
+    excluded = tuple(sorted({u.dir_name for u in uploads if u.dir_name != selection.folder}))
+    return selected, excluded
 
 
 def _merge_uploads(
@@ -775,7 +857,14 @@ def ingest_course(root: Path, course_id: str) -> CourseReport:
             "one assignment must come from one system"
         )
 
-    students = _ingest_brightspace(course_id, brightspace_pools, existing_students, plan)
+    unknown = manifest.upload_selections.keys() - brightspace_pools.keys()
+    if unknown:
+        raise IngestError(
+            f"upload selections refer to absent Brightspace submissions: {sorted(unknown)}"
+        )
+    students = _ingest_brightspace(
+        course_id, brightspace_pools, existing_students, plan, manifest.upload_selections
+    )
     students = _ingest_gradescope(course_id, gradescope_pdfs, students, manifest, plan)
     _add_missing_rows(course_id, plan, students)
 
@@ -823,6 +912,7 @@ def _ingest_brightspace(
     pools: dict[tuple[str, str], list[_Upload]],
     students: list[Student],
     plan: _Plan,
+    selections: dict[tuple[str, str], UploadSelection],
 ) -> list[Student]:
     by_person = {s.lms_person_id: s for s in students if s.lms_person_id}
     new_person_ids = sorted(
@@ -847,8 +937,12 @@ def _ingest_brightspace(
 
     for (assignment_id, person_id), uploads in sorted(pools.items()):
         student = by_person[person_id]
-        merged, flags, replaced = _merge_uploads(uploads)
-        latest = max(uploads, key=lambda u: (u.submitted_at, u.dir_name))
+        selection = selections.get((assignment_id, person_id))
+        selected, excluded = _select_uploads(uploads, selection)
+        merged, flags, replaced = _merge_uploads(selected)
+        latest = max(selected, key=lambda u: (u.submitted_at, u.dir_name))
+        if selection is not None:
+            flags = tuple(sorted({*flags, "upload_selected"}))
         if (latest.username, latest.display_name) != (student.lms_username, student.display_name):
             flags = tuple(sorted({*flags, "identity_changed"}))
         plan.writes[(assignment_id, student.student_id)] = merged
@@ -865,6 +959,9 @@ def _ingest_brightspace(
                 files=len(merged),
                 flags=flags,
                 replaced_files=replaced,
+                selected_upload=selection.folder if selection else "",
+                excluded_uploads=excluded,
+                selection_reason=selection.reason if selection else "",
             )
         )
     return students
@@ -1134,6 +1231,10 @@ def format_report(report: CourseReport) -> str:
         lines.append(f"  {outcome.assignment_id} {who}: {outcome.status} ({detail})")
         for replaced in outcome.replaced_files:
             lines.append(f"    superseded: {replaced}")
+        if outcome.selected_upload:
+            lines.append(f"    selected: {outcome.selected_upload} ({outcome.selection_reason})")
+            for excluded in outcome.excluded_uploads:
+                lines.append(f"    excluded: {excluded}")
     if not flagged:
         lines.append("  nothing needs review")
     return "\n".join(lines)

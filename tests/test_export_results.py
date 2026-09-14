@@ -173,6 +173,51 @@ def test_export_uses_judge_scores_and_brightspace_folders(export_data: ExportDat
     assert {p.name for p in first.iterdir()} == {"feedback.zip", "grades.csv", "manifest.json"}
 
 
+@pytest.mark.parametrize("earlier_content", ["A balance equation.", "An older solution."])
+def test_export_uses_reviewed_upload_and_records_selection(
+    export_data: ExportData, earlier_content: str
+) -> None:
+    export_data.judgment()
+    earlier = export_data.folder.replace("1200 PM", "1100 AM")
+    with zipfile.ZipFile(export_data.archive, "a") as archive:
+        archive.writestr(earlier + "/old-answer.txt", earlier_content)
+    with pytest.raises(exports.ExportError, match="ZIP content differs"):
+        export_data.run(zero_missing=True)
+    manifest_path = export_data.archive.parent / "manifest.toml"
+    manifest_path.write_text(
+        '[[upload_selections]]\nassignment_id = "HW1"\nperson_id = "123"\n'
+        f'folder = "{export_data.folder}"\nreason = "Reviewed final attempt"\n'
+    )
+    path = export_data.run(zero_missing=True)
+    assert read_csv(path / "grades.csv")[1] == ["#alice", "95", "#"]
+    manifest = json.loads((path / "manifest.json").read_text())
+    assert manifest["students"][0]["upload_selection"] == {
+        "folder": export_data.folder,
+        "reason": "Reviewed final attempt",
+        "excluded_uploads": [earlier],
+    }
+    assert {"path": str(manifest_path), "sha256": sha256_file(manifest_path)} in manifest["inputs"]
+    with zipfile.ZipFile(path / "feedback.zip") as archive:
+        assert archive.namelist() == [export_data.folder + "/feedback.pdf"]
+    # Selecting the older upload cannot bypass the graded-content checks.
+    manifest_path.write_text(manifest_path.read_text().replace(export_data.folder, earlier))
+    with pytest.raises(exports.ExportError, match="ZIP content differs"):
+        export_data.run(zero_missing=True)
+
+
+@pytest.mark.parametrize("person", ["123", "999"])
+def test_export_rejects_absent_selected_upload(export_data: ExportData, person: str) -> None:
+    export_data.judgment()
+    folder = export_data.folder.replace("123-", f"{person}-").replace("1200 PM", "1100 AM")
+    (export_data.archive.parent / "manifest.toml").write_text(
+        '[[upload_selections]]\nassignment_id = "HW1"\n'
+        f'person_id = "{person}"\nfolder = "{folder}"\nreason = "Reviewed"\n'
+    )
+    with pytest.raises(ingest.IngestError, match="absent"):
+        export_data.run(zero_missing=True, allow_partial=True)
+    assert not (export_data.root / "analysis").exists()
+
+
 def test_absence_needs_confirmation_and_partial_omits_it(export_data: ExportData) -> None:
     export_data.judgment()
     with pytest.raises(exports.ExportError, match="--zero-missing"):

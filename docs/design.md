@@ -1445,12 +1445,16 @@ assignment and class or section, including students without submissions.
 
 Brightspace downloads retain their original numbered upload folders. Multiple
 ZIPs are supported for one assignment, with the same per-path upload merge rule
-as ingest. The combined files must hash identically to the normalized submission
+as ingest. Reviewed `upload_selections` in the course's raw-submissions
+`manifest.toml` select exact upload folders using the same rules as ingest.
+Missing selected folders or people are errors, including with `--allow-partial`.
+The selected files must hash identically to the normalized submission
 and the selected judge's recorded submission input. Identity mappings must agree
 on LMS person ID and username. The most recent upload folder receives one
 `feedback.pdf` for the combined submission. Original student files are not included
 in the feedback ZIP. Downloads with other layouts or multiple LMS assignment IDs
-are rejected. Group assignments and students lacking a Brightspace identity
+are rejected. When an upload selection exists, its folder receives the feedback.
+Group assignments and students lacking a Brightspace identity
 mapping are not supported.
 
 The exporter revalidates the grading JSON, nonempty justification and feedback,
@@ -1511,7 +1515,10 @@ timestamps. The separate staff-only `manifest.json` records selection, input and
 output hashes, included judgments and their lineage, scale conversions, the
 `base_adjustment_pct` policy (5), each graded student's
 `rubric_base_adjustment_points`, confirmed zeros, and omissions. Re-identification
-happens entirely in this local export.
+happens entirely in this local export. The input hashes include the ingest
+manifest when present. Each graded student with an upload selection has an
+`upload_selection` entry recording the selected folder, reason, and excluded
+upload folders.
 
 In Brightspace, feedback.zip goes to the assignment's Add Feedback Files and
 grades.csv goes to Grades > Enter Grades > Import. Imported grades for linked
