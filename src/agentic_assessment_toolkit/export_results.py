@@ -25,6 +25,8 @@ from .hashing import sha256_bytes, sha256_dir, sha256_file
 from .results import load_results
 from .rubric import RubricError, parse_rubric_file
 
+_BASE_ADJUSTMENT_FRACTION = 0.05
+
 
 class ExportError(Exception):
     """An incomplete or ambiguous export, requiring corrected inputs."""
@@ -35,6 +37,26 @@ class GradeTemplate:
     usernames: dict[str, str]
     column: str
     maximum: float
+
+
+@dataclass(frozen=True)
+class FinalGrade:
+    points: float
+    percentage: float
+    rubric_base_adjustment_points: float
+
+
+def _final_grade(sums: dict[str, float], maximum: float) -> FinalGrade:
+    adjusted_base = min(
+        sums["base_points"] + _BASE_ADJUSTMENT_FRACTION * sums["base_max"],
+        sums["base_max"],
+    )
+    fraction = (adjusted_base + sums["bonus_points"]) / sums["base_max"]
+    return FinalGrade(
+        points=fraction * maximum,
+        percentage=fraction * 100,
+        rubric_base_adjustment_points=adjusted_base - sums["base_points"],
+    )
 
 
 def _username(value: str) -> str:
@@ -222,10 +244,9 @@ def feedback_document(
     data: dict[str, Any],
     feedback: str,
     maximum: float,
+    grade: FinalGrade,
 ) -> str:
     sums = grading_schema.computed_sums(data)
-    percentage = grading_schema.derive_scores(data)["score_pct"]
-    grade = percentage * maximum / 100
     lines = [
         f"# {_text(assignment)}: grade and feedback",
         "",
@@ -233,10 +254,16 @@ def feedback_document(
         "",
         f"**Student:** {_text(student.display_name)} ({_text(student.lms_username)})",
         "",
-        f"**Final academic grade: {_number(grade)} / {_number(maximum)} ({_number(percentage)}%)**",
+        f"**Final academic grade: {_number(grade.points)} / {_number(maximum)} "
+        f"({_number(grade.percentage)}%)**",
         "",
         f"Rubric base points: {_number(sums['base_points'])} / {_number(sums['base_max'])}. "
         f"Bonus points: {_number(sums['bonus_points'])} / {_number(sums['bonus_max'])}.",
+        "",
+        f"A {_number(_BASE_ADJUSTMENT_FRACTION * 100)} percentage point adjustment adds "
+        f"{_number(grade.rubric_base_adjustment_points)} rubric base points, capped at "
+        f"the base maximum of {_number(sums['base_max'])}. "
+        "Earned bonus points are added after the cap.",
         "",
     ]
     if not math.isclose(sums["base_max"], maximum):
@@ -388,10 +415,11 @@ def export_results(
                 )
             row = {str(key): value for key, value in selected.iloc[0].to_dict().items()}
             data, feedback, hashes = _load_judgment(root, row, submission.sha256)
-            grade = grading_schema.derive_scores(data)["score_pct"] * template.maximum / 100
-            if not math.isfinite(grade):
+            sums = grading_schema.computed_sums(data)
+            grade = _final_grade(sums, template.maximum)
+            if not math.isfinite(grade.points):
                 raise ExportError("grade is not finite")
-            if grade > template.maximum and not can_exceed:
+            if grade.points > template.maximum and not can_exceed:
                 raise ExportError(
                     "grade exceeds the gradebook maximum; enable Can Exceed in Brightspace "
                     "and confirm with --can-exceed"
@@ -404,11 +432,12 @@ def export_results(
                 data,
                 feedback,
                 template.maximum,
+                grade,
             )
             documents.append((archive_name, document))
             entry.update(
                 status="graded",
-                grade=_number(grade),
+                grade=_number(grade.points),
                 student_id=student.student_id,
                 trial=row["reference"],
                 item_identity=row["item_identity"],
@@ -417,7 +446,8 @@ def export_results(
                 prior_trials=row["prior_trials"],
                 feedback_file=archive_name,
                 hashes=hashes,
-                rubric_base_max=grading_schema.computed_sums(data)["base_max"],
+                rubric_base_max=sums["base_max"],
+                rubric_base_adjustment_points=grade.rubric_base_adjustment_points,
                 sums_consistent=grading_schema.sums_report(data)["consistent"],
             )
         except (ExportError, OSError, ValueError, RubricError) as error:
@@ -441,6 +471,7 @@ def export_results(
         "gradings": gradings,
         "grade_column": template.column,
         "gradebook_maximum": template.maximum,
+        "base_adjustment_pct": _BASE_ADJUSTMENT_FRACTION * 100,
         "allow_partial": allow_partial,
         "zero_missing": zero_missing,
         "can_exceed": can_exceed,

@@ -7,7 +7,7 @@ import shutil
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from pypdf import PdfReader
@@ -51,11 +51,17 @@ class ExportData:
     ) -> Path:
         rubric = self.root / "tasks" / job / student / "environment" / "rubric.md"
         rubric.parent.mkdir(parents=True, exist_ok=True)
-        rubric.write_text("- `a` (10 points): Analysis\n- `b` (2 points, bonus): Extension\n")
         if data is None:
             data = grading_data(
                 [criterion("a", 8, 10), criterion("b", 1, 2, bonus=True)], base_points=999
             )
+        rubric.write_text(
+            "".join(
+                f"- `{entry['id']}` ({entry['max_points']} points"
+                f"{', bonus' if entry.get('bonus') else ''}): {entry['title']}\n"
+                for entry in cast(list[dict[str, Any]], data["criteria"])
+            )
+        )
         record = {
             "stage": "grade",
             "config": {"name": "judge", "judge": True, "rubric": "default"},
@@ -149,13 +155,13 @@ def test_export_uses_judge_scores_and_brightspace_folders(export_data: ExportDat
     assert (first / "feedback.zip").read_bytes() == (second / "feedback.zip").read_bytes()
     assert read_csv(first / "grades.csv") == [
         ["Username", "Assignment 1 Points Grade", "End-of-Line Indicator"],
-        ["#alice", "90", "#"],
+        ["#alice", "95", "#"],
         ["#bob", "0", "#"],
     ]
     with zipfile.ZipFile(first / "feedback.zip") as archive:
         assert archive.namelist() == [export_data.folder + "/feedback.pdf"]
         document = archive.read(archive.namelist()[0]).decode()
-        assert "90 / 100 (90%)" in document
+        assert "95 / 100 (95%)" in document
         assert "8 / 10" in document
         assert "gradebook maximum of 100" in document
         assert "STAFF ONLY" not in document
@@ -186,7 +192,7 @@ def test_failed_judgment_never_becomes_zero(export_data: ExportData) -> None:
     assert read_csv(path / "grades.csv")[1:] == [["#bob", "0", "#"]]
     export_data.judgment("retry")
     path = export_data.run(zero_missing=True)
-    assert read_csv(path / "grades.csv")[1] == ["#alice", "90", "#"]
+    assert read_csv(path / "grades.csv")[1] == ["#alice", "95", "#"]
 
 
 def test_collects_students_from_separate_jobs(export_data: ExportData) -> None:
@@ -205,7 +211,7 @@ def test_collects_students_from_separate_jobs(export_data: ExportData) -> None:
         data=grading_data([criterion("a", 5, 10), criterion("b", 0, 2, bonus=True)]),
     )
     path = export_data.run()
-    assert read_csv(path / "grades.csv")[1:] == [["#alice", "90", "#"], ["#bob", "50", "#"]]
+    assert read_csv(path / "grades.csv")[1:] == [["#alice", "95", "#"], ["#bob", "55", "#"]]
     with zipfile.ZipFile(path / "feedback.zip") as archive:
         assert set(archive.namelist()) == {
             export_data.folder + "/feedback.pdf",
@@ -286,14 +292,68 @@ def test_changed_or_missing_inputs_block_export(export_data: ExportData, changed
     assert not (export_data.root / "analysis").exists()
 
 
-def test_bonus_above_gradebook_max_needs_confirmation(export_data: ExportData) -> None:
+@pytest.mark.parametrize(
+    ("base", "base_max", "bonus", "maximum", "expected", "percentage", "adjustment"),
+    [
+        (75, 100, None, 100, "80", "80", 5),
+        (97, 100, None, 100, "100", "100", 3),
+        (8, 10, None, 10, "8.5", "85", 0.5),
+        (8, 10, None, 20, "17", "85", 0.5),
+        (9.7, 10, 1, 10, "11", "110", 0.3),
+        (8, 10, 1, 10, "9.5", "95", 0.5),
+        (95, 100, None, 100, "100", "100", 5),
+        (100, 100, None, 100, "100", "100", 0),
+        (0, 10, None, 100, "5", "5", 0.5),
+    ],
+)
+def test_final_grade_adjustment(
+    export_data: ExportData,
+    base: float,
+    base_max: float,
+    bonus: float | None,
+    maximum: float,
+    expected: str,
+    percentage: str,
+    adjustment: float,
+) -> None:
+    criteria = [criterion("a", base, base_max)]
+    if bonus is not None:
+        criteria.append(criterion("b", bonus, 2, bonus=True))
+    output = export_data.judgment(data=grading_data(criteria))
+    original_result = (output / "grading_result.json").read_bytes()
+    export_data.roster.write_text(
+        f"Username,Assignment 1 Points Grade <Numeric MaxPoints:{maximum}>,End-of-Line Indicator\n"
+        "#alice,,#\n#bob,,#\n"
+    )
+    path = export_data.run(zero_missing=True, can_exceed=float(expected) > maximum)
+    assert read_csv(path / "grades.csv")[1:] == [
+        ["#alice", expected, "#"],
+        ["#bob", "0", "#"],
+    ]
+    with zipfile.ZipFile(path / "feedback.zip") as archive:
+        document = archive.read(export_data.folder + "/feedback.pdf").decode()
+    assert f"{expected} / {maximum:g} ({percentage}%)" in document
+    assert f"5 percentage point adjustment adds {adjustment:g} rubric base points" in document
+    assert "Earned bonus points are added after the cap." in document
+    manifest = json.loads((path / "manifest.json").read_text())
+    assert manifest["base_adjustment_pct"] == 5
+    entry = manifest["students"][0]
+    assert entry["grade"] == expected
+    assert entry["rubric_base_adjustment_points"] == pytest.approx(adjustment)
+    assert (output / "grading_result.json").read_bytes() == original_result
+
+
+@pytest.mark.parametrize(("base", "bonus", "expected"), [(9.4, 0.5, "104"), (10, 2, "120")])
+def test_bonus_above_gradebook_max_needs_confirmation(
+    export_data: ExportData, base: float, bonus: float, expected: str
+) -> None:
     export_data.judgment(
-        data=grading_data([criterion("a", 10, 10), criterion("b", 2, 2, bonus=True)])
+        data=grading_data([criterion("a", base, 10), criterion("b", bonus, 2, bonus=True)])
     )
     with pytest.raises(exports.ExportError, match="--can-exceed"):
         export_data.run(zero_missing=True)
     path = export_data.run(zero_missing=True, can_exceed=True)
-    assert read_csv(path / "grades.csv")[1] == ["#alice", "120", "#"]
+    assert read_csv(path / "grades.csv")[1] == ["#alice", expected, "#"]
 
 
 def test_render_failure_leaves_no_upload_snapshot(
@@ -404,7 +464,7 @@ def test_real_pdf_contains_grade_table_and_feedback(
         data = archive.read(export_data.folder + "/feedback.pdf")
     reader = PdfReader(io.BytesIO(data))
     text = " ".join(page.extract_text() for page in reader.pages)
-    assert "90 / 100 (90%)" in text
+    assert "95 / 100 (95%)" in text
     assert "Alice Example" in text
     assert "Criterion scores" in text and "a: criterion a" in text
     assert "(bonus)" in text

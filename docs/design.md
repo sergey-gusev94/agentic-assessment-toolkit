@@ -1456,16 +1456,30 @@ mapping are not supported.
 The exporter revalidates the grading JSON, nonempty justification and feedback,
 and criterion IDs, maxima, and bonus flags against the hash-checked materialized
 rubric. It recomputes totals from criteria using the shared grading schema;
-authored sum discrepancies remain recorded diagnostics. CSV grades equal the
-bonus-inclusive `score_pct` times the gradebook maximum divided by 100.
+authored sum discrepancies remain recorded diagnostics. Final exported grades add
+5% of the rubric base maximum to earned base points, cap that adjusted base at
+the base maximum, then add earned assignment bonus points:
+
+```text
+adjusted_base = min(base_points + 0.05 * base_max, base_max)
+final_fraction = (adjusted_base + bonus_points) / base_max
+csv_grade = final_fraction * gradebook_maximum
+```
+
+The CSV and PDF summary use the same calculated final grade. For example, 75/100
+becomes 80/100, 97/100 becomes 100/100, and 8/10 becomes 8.5/10. A base score of
+9.7/10 with 1 earned bonus point becomes 11/10. The adjustment applies only during
+export; stored grading artifacts, criterion scores, and report statistics retain
+their raw scores. A graded submission earning zero receives the adjustment.
 Numbers are written with up to six decimal places, consistently in the generated
 grade summary and CSV. A scale conversion is printed and recorded. Scores above
 the gradebook maximum require `--can-exceed`, confirming that the operator enabled
-Brightspace's Can Exceed setting; the exporter never caps scores silently.
+Brightspace's Can Exceed setting; earned assignment bonuses are never capped.
 
 Each PDF contains the course ID, assignment grade-item name, student name and
-username, final academic grade and percentage, base and bonus totals, a criterion
-table in rubric order, and the judge's student-facing feedback. Staff justification
+username, final academic grade and percentage, raw base and bonus totals, the
+applied adjustment in rubric base points and its cap, a criterion table in rubric
+order, and the judge's student-facing feedback. Staff justification
 and `overall_comment` are not copied into the PDF. Existing feedback is retained
 as written, so factual accuracy, tone, and any scores within that prose still
 require review. Pandoc 3.1.2 or later parses Markdown, tables, and TeX equations
@@ -1477,8 +1491,8 @@ silently dropping content. No tools or fonts are downloaded during export.
 
 Without `--zero-missing`, a roster student absent from the ZIP is unresolved.
 `--zero-missing` confirms both complete downloads and a policy of zero for those
-non-submitters. Those students receive CSV zeros and no feedback PDF because no
-submission folder exists. A normalized submission or any recorded student grading
+non-submitters. Those students receive CSV zeros without the adjustment and no
+feedback PDF because no submission folder exists. A normalized submission or any recorded student grading
 trial contradicts absence from the ZIP and prevents a zero. Submitted work whose
 judgment failed, is missing, or has unreadable artifacts remains unresolved.
 By default any unresolved student prevents export. `--allow-partial` omits those
@@ -1491,8 +1505,10 @@ data trees are refused. PDF, ZIP, CSV, and manifest generation is staged; an err
 leaves no finished snapshot. Existing snapshots and grading artifacts stay intact.
 The upload files are `feedback.zip` and `grades.csv`; the ZIP uses fixed member
 timestamps. The separate staff-only `manifest.json` records selection, input and
-output hashes, included judgments and their lineage, scale conversions, confirmed
-zeros, and omissions. Re-identification happens entirely in this local export.
+output hashes, included judgments and their lineage, scale conversions, the
+`base_adjustment_pct` policy (5), each graded student's
+`rubric_base_adjustment_points`, confirmed zeros, and omissions. Re-identification
+happens entirely in this local export.
 
 In Brightspace, feedback.zip goes to the assignment's Add Feedback Files and
 grades.csv goes to Grades > Enter Grades > Import. Imported grades for linked
