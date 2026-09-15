@@ -128,7 +128,11 @@ def test_dry_run(data_root: Path, capsys: pytest.CaptureFixture[str]) -> None:
 def fake_execute_producing_course(data_root: Path) -> object:
     def fake(_command: list[str], cwd: Path, log_path: Path) -> int:
         assert cwd == data_root
-        shutil.copytree(FIXTURES_DIR / "course" / COURSE_ID, data_root / "courses" / "C_NEW_F2026")
+        shutil.copytree(
+            FIXTURES_DIR / "course" / COURSE_ID,
+            data_root / "courses" / "C_NEW_F2026",
+            dirs_exist_ok=True,
+        )
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text("agent output\n", encoding="utf-8")
         return 0
@@ -146,11 +150,88 @@ def test_successful_run_writes_receipt_and_checks(
     assert "launching codex" in out
     assert "course C_NEW_F2026" in out  # the checker report follows
     assert "processed 1 of 1 course(s)" in out
+    # Missing source material is a reported gap, not a contract violation.
+    assert "syllabus/ is missing or empty" in out
+    assert "intake-pending" not in out
     assert intake.record_path(data_root, "C_NEW_F2026").is_file()
 
     # The receipt makes the next run a no-op.
     assert cli.main(["intake", "--all", "--data-root", str(data_root)]) == 0
     assert "nothing to do: 1 already processed" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("previous", ["new", "manual", "done", "changed"])
+def test_contract_violation_keeps_intake_retryable(
+    data_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    previous: str,
+) -> None:
+    course_dir = data_root / "courses" / "C_NEW_F2026"
+    receipt = intake.record_path(data_root, "C_NEW_F2026")
+    prior_receipt = None
+    if previous != "new":
+        shutil.copytree(FIXTURES_DIR / "course" / COURSE_ID, course_dir)
+    if previous in ("done", "changed"):
+        intake.write_record(
+            data_root,
+            "C_NEW_F2026",
+            command=["codex", "prompt"],
+            model="test",
+            reasoning_effort="high",
+            log_path=None,
+        )
+        prior_receipt = receipt.read_bytes()
+    if previous == "changed":
+        (data_root / "raw" / "C_NEW_F2026" / "new.md").write_text("new material\n")
+
+    def invalid_output(_command: list[str], **_kwargs: object) -> int:
+        shutil.copytree(FIXTURES_DIR / "course" / COURSE_ID, course_dir, dirs_exist_ok=True)
+        source = course_dir / "rubrics" / "HW1" / "source"
+        source.mkdir()
+        (source / "rubric.md").write_text("Professor rubric with a different point split.\n")
+        return 0
+
+    monkeypatch.setattr(intake, "codex_path", lambda: "/fake/codex")
+    monkeypatch.setattr(intake, "execute", invalid_output)
+    args = ["intake", "--all", "--data-root", str(data_root)]
+    force = ["--force"] if previous in ("manual", "done") else []
+    assert cli.main([*args, *force]) == 1
+    out = capsys.readouterr().out
+    assert "contract violations remain; no receipt written" in out
+    assert "processed 0 of 1 course(s)" in out
+    assert (receipt.read_bytes() if receipt.exists() else None) == prior_receipt
+    assert intake.list_raw_courses(data_root)[0].status == "pending"
+
+    # Repair the contract, then retry without force, even after a forced failure.
+    toml_path = course_dir / "course.toml"
+    toml_path.write_text(
+        toml_path.read_text().replace(
+            'rubric_provenance = "handout"', 'rubric_provenance = "professor_rubric"'
+        )
+    )
+    monkeypatch.setattr(intake, "execute", lambda *_args, **_kwargs: 0)
+    assert cli.main(args) == 0
+    assert intake.list_raw_courses(data_root)[0].status == "done"
+
+
+def test_interrupted_intake_remains_pending(
+    data_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def interrupted(_command: list[str], cwd: Path, **_kwargs: object) -> int:
+        (cwd / "courses" / "C_NEW_F2026" / "intake-notes.md").write_text("Partial work\n")
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(intake, "codex_path", lambda: "/fake/codex")
+    monkeypatch.setattr(intake, "execute", interrupted)
+    args = ["intake", "--all", "--data-root", str(data_root)]
+    with pytest.raises(KeyboardInterrupt):
+        cli.main(args)
+    assert not intake.record_path(data_root, "C_NEW_F2026").exists()
+    assert intake.list_raw_courses(data_root)[0].status == "pending"
+    monkeypatch.setattr(intake, "execute", fake_execute_producing_course(data_root))
+    assert cli.main(args) == 0
+    assert intake.list_raw_courses(data_root)[0].status == "done"
 
 
 def test_failed_agent_leaves_the_course_pending(
@@ -174,6 +255,7 @@ def test_zero_exit_without_a_course_tree_is_a_failure(
     assert cli.main(["intake", "--all", "--data-root", str(data_root)]) == 1
     assert "produced no courses/C_NEW_F2026" in capsys.readouterr().out
     assert not intake.record_path(data_root, "C_NEW_F2026").is_file()
+    assert intake.list_raw_courses(data_root)[0].status == "pending"
 
 
 def test_manual_course_is_skipped_without_force(

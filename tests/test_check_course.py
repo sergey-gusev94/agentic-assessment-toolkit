@@ -277,6 +277,23 @@ def test_non_professor_provenance_with_a_professor_rubric_is_a_violation(data_ro
     )
 
 
+def test_authored_rubric_with_qualitative_instructor_guidance(data_root: Path) -> None:
+    toml_path = course_dir(data_root) / "course.toml"
+    toml_path.write_text(
+        toml_path.read_text(encoding="utf-8").replace(
+            'rubric_provenance = "handout"', 'rubric_provenance = "authored"'
+        ),
+        encoding="utf-8",
+    )
+    reference = course_dir(data_root) / "reference_solutions" / "HW1"
+    (reference / "solution.md").unlink()
+    (reference / "README.md").write_text("No worked solution exists.\n", encoding="utf-8")
+    (reference / "STAFF_GUIDE.md").write_text(
+        "Approve only proposals that satisfy every physical requirement.\n", encoding="utf-8"
+    )
+    assert check_course(data_root, COURSE_ID).ok
+
+
 def test_rubric_without_provenance_is_a_gap(data_root: Path) -> None:
     toml_path = course_dir(data_root) / "course.toml"
     text = toml_path.read_text(encoding="utf-8").replace('rubric_provenance = "handout"\n', "")

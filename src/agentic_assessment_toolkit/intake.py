@@ -8,7 +8,10 @@ line, run it as a subprocess, record what ran.
 
 Doneness is derived from the data root: a course is processed when its
 `courses/<course_id>/intake-record.json` receipt exists and records the
-current hash of the raw dump. New material in `raw/` changes the hash,
+current hash of the raw dump and no `intake-pending` marker remains.
+The marker is created before launch and removed after validation and
+receipt writing, keeping failed or interrupted attempts retryable.
+New material in `raw/` changes the hash,
 so the course becomes unprocessed again and the next run performs an
 incremental pass. The prompt template and model are recorded in the
 receipt as provenance but deliberately excluded from doneness: intake
@@ -32,6 +35,7 @@ DEFAULT_MODEL = "gpt-5.6-sol"  # the pipeline configs' model, in `codex -m` form
 DEFAULT_REASONING_EFFORT = "high"
 INTAKE_PROMPT_NAME = "intake"
 RECORD_FILENAME = "intake-record.json"
+PENDING_FILENAME = "intake-pending"
 RECORD_SCHEMA_VERSION = 1
 
 
@@ -41,9 +45,9 @@ class IntakeCourse:
 
     course_id: str
     raw_dir: Path
-    # "pending": needs a run (no receipt, or the raw dump changed).
+    # "pending": needs a run (unfinished attempt, no receipt, or changed raw dump).
     # "done": receipt matches the current raw dump.
-    # "manual": courses/<id> exists without a receipt — built by hand,
+    # "manual": courses/<id> exists without a receipt or pending marker, built by hand,
     #   skipped unless --force.
     status: str
 
@@ -98,6 +102,8 @@ def list_raw_courses(root: Path, only: str | None = None) -> list[IntakeCourse]:
 
 def _status(root: Path, raw_dir: Path) -> str:
     course_dir = root / "courses" / raw_dir.name
+    if (course_dir / PENDING_FILENAME).exists():
+        return "pending"
     if not record_path(root, raw_dir.name).is_file():
         return "manual" if course_dir.is_dir() else "pending"
     record = read_record(root, raw_dir.name)
@@ -111,6 +117,13 @@ def _status(root: Path, raw_dir: Path) -> str:
 
 def record_path(root: Path, course_id: str) -> Path:
     return root / "courses" / course_id / RECORD_FILENAME
+
+
+def mark_pending(root: Path, course_id: str) -> None:
+    """Keep an attempted intake retryable until validation and receipt writing succeed."""
+    path = root / "courses" / course_id / PENDING_FILENAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch()
 
 
 def read_record(root: Path, course_id: str) -> dict[str, object] | None:
@@ -154,6 +167,7 @@ def write_record(
     path = record_path(root, course_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (path.parent / PENDING_FILENAME).unlink(missing_ok=True)
     return path
 
 

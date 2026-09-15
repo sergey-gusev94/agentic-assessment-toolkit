@@ -57,6 +57,7 @@ $AAT_DATA_DIR/
 │       ├── course.toml         #   course record + assessment registry
 │       ├── intake-notes.md     #   intake's review aid: judgment calls, open items
 │       ├── intake-record.json  #   receipt written by `aat intake` (doneness)
+│       ├── intake-pending      #   present while an intake attempt is unfinished
 │       ├── syllabus/           #   syllabus file(s), copied verbatim
 │       ├── assignments/
 │       │   ├── <assignment_id>/      # as-received handout, exactly as given
@@ -97,13 +98,21 @@ Notes:
   be re-run. The intake procedure is
   [course-intake.md](course-intake.md).
 - `intake-record.json` is the receipt `aat intake` writes after a
-  successful agent run. The agent never writes it. Its
+  zero-exit agent run produces `course.toml` and the course checker finds
+  no contract violations. Completeness gaps are reported but do not block
+  the receipt. The agent never writes it. Its
   `raw_sha256` (the hash of the raw dump at processing time) is
   intake's doneness: a dump whose current hash differs is unprocessed
   again, so new material triggers an incremental pass. The remaining fields
   (prompt hash, model, effort, command, and log path) are provenance only:
   intake output is human-reviewed, so a prompt or model change never
-  invalidates a processed course. A course tree without a receipt is
+  invalidates a processed course. Before launching the agent, the command
+  creates `intake-pending` in the course directory. This marker overrides
+  any receipt and keeps failed or interrupted attempts unprocessed,
+  including partial first runs and forced runs over an unchanged dump.
+  Only writing a successful receipt removes the marker; a failure leaves
+  any previous receipt intact. The agent never changes either file.
+  A course tree without a receipt or pending marker is
   treated as hand-built and skipped unless forced; a receipt that
   exists but does not parse counts as unprocessed, so the next run
   performs an incremental pass and rewrites it. Intake run logs are
@@ -381,14 +390,19 @@ Notes:
   other (provenance `authored`), never omitted. Which parts a rubric
   covers, and on what evidence, belongs in `intake-notes.md`.
 - `rubrics/<assignment_id>/source/`, when present, holds the
-  professor's standalone rubric document(s) verbatim (a rubric PDF or
+  professor's standalone rubric document(s) specifying numeric point
+  allocations, copied verbatim (a rubric PDF or
   grading-scheme handout, distinct from schemes embedded in the
   assignment or reference files, which already reach the grader
   through those directories). The grading task presents it at
   `/app/rubric_source` as transcription context; `rubric.md` remains
   the sole authority on criteria and points, and rubric fidelity is
   measured against it alone. Most assignments have no standalone
-  rubric document.
+  rubric document. Qualitative staff guides, approval checklists, and
+  review instructions without numeric point allocations instead belong
+  in `reference_solutions/<assignment_id>/` as verbatim instructor context.
+  They do not change the provenance of an authored point split. When no
+  worked solution exists, the explanatory README remains alongside them.
 - Every assignment that will be graded must have a rubric; grading
   fails at materialization without one (docs/design.md, decision 5).
   A rubric enumerates its criteria in ordinary, human-readable Markdown. Each

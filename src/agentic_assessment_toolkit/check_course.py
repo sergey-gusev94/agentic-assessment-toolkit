@@ -23,6 +23,7 @@ from pathlib import Path
 
 from . import config, data_root, provenance
 from .course import RUBRIC_PROVENANCES, Course, CourseError, load_course
+from .intake import PENDING_FILENAME
 from .rubric import RubricError, parse_rubric_file
 
 WEIGHT_SUM_TOLERANCE = 0.01
@@ -48,6 +49,7 @@ _EXPECTED_COURSE_ENTRIES = frozenset(
         "syllabus",
         "intake-notes.md",
         "intake-record.json",
+        PENDING_FILENAME,
     }
 )
 

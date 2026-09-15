@@ -34,11 +34,17 @@ separate deterministic `aat ingest-submissions` procedure described in
    material-backed assignment, waits for every audit, writes the
    artifacts itself, and delegates a final coverage review. Output
    streams to the console and to
-   `scratch/intake/<stamp>__<course>.log`; after each successful run the
-   command writes the course's `intake-record.json` receipt and prints
-   its `aat check-course` report. A failed run writes no receipt.
-   Re-running `aat intake` is the retry. `--dry-run` lists what would
-   run.
+   `scratch/intake/<stamp>__<course>.log`. Before launching the agent,
+   the command creates an `intake-pending` marker in the course directory.
+   After a zero exit, it requires `course.toml` and prints the
+   `aat check-course` report. Contract violations make intake fail;
+   completeness gaps remain visible for human review but do not block
+   completion. Only a run without contract violations writes the
+   `intake-record.json` receipt and removes the pending marker.
+   A failed or interrupted run retains the marker and any previous
+   receipt, so re-running `aat intake` retries it without `--force`,
+   even if it left partial output or the previous receipt matches the raw
+   dump. `--dry-run` lists what would run.
 3. **Review and fill.** Fix violations, fill what the materials could
    not answer, and review every judgment call in `intake-notes.md`.
    Review rubric drafts most carefully because a rubric is the frozen judge
@@ -81,6 +87,6 @@ hand; either let a later `aat intake --course ID --force` run record
 one, or leave the course as hand-built (the checker treats both the
 same).
 
-A course tree that exists without a receipt (built before `aat intake`
+A course tree that exists without a receipt or pending marker (built before `aat intake`
 existed, or interactively) is skipped with a note; `--force` runs
 intake over it, which per the incremental rule only adds material.

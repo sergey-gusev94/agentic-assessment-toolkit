@@ -140,11 +140,13 @@ Each entry is a commitment with a short rationale.
     rendered `intake` prompt template, producing `courses/<course_id>/`
     (course record, assessment registry, rubric drafts). This is the
     same thin pattern as the Harbor commands: construct one command
-    line, run it as a subprocess, record what ran. After each
-    successful run the command writes an `intake-record.json` receipt
-    and prints the `aat check-course` report, contract violations,
-    completeness gaps, intake notes, until the course is clean.
-    Intake doneness is the receipt's hash of the raw dump: new raw
+    line, run it as a subprocess, record what ran. After a zero-exit run
+    produces `course.toml`, the command prints the `aat check-course`
+    report and writes an `intake-record.json` receipt only when no contract
+    violations remain. Completeness gaps are reported but do not block the
+    receipt. An `intake-pending` marker, created before launch and removed
+    after writing the receipt, keeps failed or interrupted runs retryable.
+    Without that marker, intake doneness is the receipt's hash of the raw dump: new raw
     material makes a course unprocessed again (an incremental pass
     that never modifies existing artifacts), while the prompt template
     and model are provenance only, intake output is human-reviewed,
@@ -1819,9 +1821,12 @@ intake procedure (decision 14). `aat intake` runs the intake agent
 sequentially over the selected unprocessed dumps (decision 14). Model
 and effort are flags with pinned defaults, not an experiment config,
 because intake has no config identity. The receipt records them as
-provenance and doneness is the raw-dump hash alone. `--force` includes
-processed and hand-built courses; a failed agent run writes no receipt,
-so re-running the command is the retry mechanism; `--print-prompt`
+provenance. A matching raw-dump hash marks a course done only when no
+`intake-pending` marker remains. `--force` includes processed and hand-built
+courses. Failed runs and checker contract violations return a nonzero exit
+status, leave any old receipt intact, and retain the marker so a normal
+rerun retries them. Completeness gaps do not block a new receipt.
+`--print-prompt`
 emits the rendered brief for an interactive session instead of
 launching anything. Each run's output is teed to
 `scratch/intake/<stamp>__<course>.log`. `aat ingest-submissions` runs

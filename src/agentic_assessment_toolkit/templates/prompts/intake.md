@@ -37,8 +37,9 @@ courses/{course_id}/
         └── source/            # professor's standalone rubric files, verbatim
 ```
 
-Do not create or edit `intake-record.json`: the toolkit writes that
-receipt itself after you finish.
+Do not create, edit, or remove `intake-record.json` or `intake-pending`:
+the toolkit manages these files. It writes the receipt and removes the
+pending marker only after your run passes contract validation.
 
 ## Required workflow
 
@@ -191,10 +192,18 @@ author a worked solution yourself: an invented oracle is worse than an
 absent one.
 
 **Rubrics.** When the professor distributed a standalone rubric
-document (a rubric PDF, a grading-scheme handout — as opposed to
-points embedded in the assignment or reference files), copy it
+document specifying numeric point allocations (a rubric PDF or a
+grading-scheme handout, as opposed to points embedded in the assignment
+or reference files), copy it
 verbatim into `rubrics/<assignment_id>/source/`; the grader is shown
 it alongside the rubric you write.
+
+Qualitative staff guides, approval checklists, and review instructions
+without numeric point allocations belong in
+`reference_solutions/<assignment_id>/`, copied verbatim as instructor
+context, not in `source/`. Their presence does not establish a numeric
+point split or change an authored rubric's provenance. If no worked
+solution exists, keep the explanatory README alongside that guidance.
 
 Draft `rubrics/<assignment_id>/default.md` for every material-backed
 assignment. Take its point split from the highest-precedence source

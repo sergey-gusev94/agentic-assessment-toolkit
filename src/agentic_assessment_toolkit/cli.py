@@ -650,17 +650,24 @@ def _run_intake(args: argparse.Namespace) -> int:
         )
         log_path = intake_mod.log_path_for(root, course.course_id)
         print(f"intake {course.course_id}: launching codex (log: {log_path})")
+        intake_mod.mark_pending(root, course.course_id)
         exit_code = intake_mod.execute(command, cwd=root, log_path=log_path)
         if exit_code != 0:
             failures.append(course.course_id)
             print(f"intake {course.course_id}: codex exited {exit_code}; no receipt written")
             continue
-        if not (root / "courses" / course.course_id).is_dir():
+        if not (root / "courses" / course.course_id / "course.toml").is_file():
             failures.append(course.course_id)
             print(
                 f"intake {course.course_id}: codex exited 0 but produced no "
-                f"courses/{course.course_id}; no receipt written"
+                f"courses/{course.course_id}/course.toml; no receipt written"
             )
+            continue
+        report = check_course_mod.check_course(root, course.course_id)
+        print(check_course_mod.format_report(report))
+        if not report.ok:
+            failures.append(course.course_id)
+            print(f"intake {course.course_id}: contract violations remain; no receipt written")
             continue
         intake_mod.write_record(
             root,
@@ -670,7 +677,6 @@ def _run_intake(args: argparse.Namespace) -> int:
             reasoning_effort=args.reasoning_effort,
             log_path=log_path,
         )
-        print(check_course_mod.format_report(check_course_mod.check_course(root, course.course_id)))
 
     done = len(to_run) - len(failures)
     print(f"processed {done} of {len(to_run)} course(s)")
