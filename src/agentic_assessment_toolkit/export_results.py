@@ -1,4 +1,4 @@
-"""Export one assignment's final judgments as Brightspace PDFs and grades."""
+"""Export final judgments as feedback PDFs, optionally with Brightspace grades."""
 
 from __future__ import annotations
 
@@ -245,28 +245,44 @@ def feedback_document(
     feedback: str,
     maximum: float,
     grade: FinalGrade,
+    *,
+    diagnostic: bool = False,
 ) -> str:
     sums = grading_schema.computed_sums(data)
     lines = [
-        f"# {_text(assignment)}: grade and feedback",
+        f"# {_text(assignment)}: {'diagnostic score' if diagnostic else 'grade'} and feedback",
         "",
         f"**Course:** {_text(course_id)}",
         "",
         f"**Student:** {_text(student.display_name)} ({_text(student.lms_username)})",
         "",
-        f"**Final academic grade: {_number(grade.points)} / {_number(maximum)} "
+        f"**{'Diagnostic rubric score' if diagnostic else 'Final academic grade'}: "
+        f"{_number(grade.points)} / {_number(maximum)} "
         f"({_number(grade.percentage)}%)**",
         "",
         f"Rubric base points: {_number(sums['base_points'])} / {_number(sums['base_max'])}. "
         f"Bonus points: {_number(sums['bonus_points'])} / {_number(sums['bonus_max'])}.",
         "",
-        f"A {_number(_BASE_ADJUSTMENT_FRACTION * 100)} percentage point adjustment adds "
-        f"{_number(grade.rubric_base_adjustment_points)} rubric base points, capped at "
-        f"the base maximum of {_number(sums['base_max'])}. "
-        "Earned bonus points are added after the cap.",
-        "",
     ]
-    if not math.isclose(sums["base_max"], maximum):
+    if diagnostic:
+        lines.extend(
+            [
+                "This diagnostic score uses raw rubric points, including earned bonus points. "
+                "It is not a course grade or an approval decision.",
+                "",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                f"A {_number(_BASE_ADJUSTMENT_FRACTION * 100)} percentage point adjustment adds "
+                f"{_number(grade.rubric_base_adjustment_points)} rubric base points, capped at "
+                f"the base maximum of {_number(sums['base_max'])}. "
+                "Earned bonus points are added after the cap.",
+                "",
+            ]
+        )
+    if not diagnostic and not math.isclose(sums["base_max"], maximum):
         lines.extend(
             [
                 f"The rubric score is scaled to the gradebook maximum of {_number(maximum)} points.",
@@ -293,8 +309,9 @@ def export_results(
     config_name: str,
     context_name: str,
     gradings: int,
-    grade_export: Path,
+    grade_export: Path | None = None,
     submission_zips: list[Path],
+    feedback_only: bool = False,
     out_root: Path | None = None,
     config_identity: str | None = None,
     context_identity: str | None = None,
@@ -307,11 +324,21 @@ def export_results(
 
     zero_missing is the operator's confirmation that the downloads cover all
     intended file submissions and absent students should receive zero.
+    feedback_only selects ZIP submitters and raw diagnostic rubric scores,
+    without a gradebook roster, adjustment, or grades CSV.
     """
     _safe_component(course_id)
     _safe_component(assignment_id)
     if gradings < 1:
         raise ExportError("--gradings must be positive")
+    if feedback_only:
+        if grade_export is not None or zero_missing or can_exceed:
+            raise ExportError(
+                "--feedback-only cannot be combined with --grade-export, --zero-missing, "
+                "or --can-exceed"
+            )
+    elif grade_export is None:
+        raise ExportError("provide --grade-export or select --feedback-only")
     destination = (out_root or root / "analysis" / "exports").resolve()
     ensure_outside_toolkit(destination, what="export destination")
     for name in (
@@ -329,16 +356,22 @@ def export_results(
             raise ExportError(
                 "export destination overlaps source data; use analysis/exports or a separate directory"
             )
-    template = read_grade_template(grade_export)
+    template = read_grade_template(grade_export) if grade_export is not None else None
     raw_dir = root / "raw-submissions" / course_id
     selections = ingest.read_upload_selections(raw_dir, assignment_id)
     submissions = ingest.read_brightspace_submissions(submission_zips, selections=selections)
     by_username = {_username(s.username): s for s in submissions}
     if len(by_username) != len(submissions):
         raise ExportError("multiple Brightspace person IDs share a username")
-    unexpected = set(by_username) - set(template.usernames)
-    if unexpected:
-        raise ExportError("ZIP submitters absent from roster: " + ", ".join(sorted(unexpected)))
+    if template is not None:
+        unexpected = set(by_username) - set(template.usernames)
+        if unexpected:
+            raise ExportError("ZIP submitters absent from roster: " + ", ".join(sorted(unexpected)))
+    recipients = (
+        template.usernames
+        if template is not None
+        else {username: submission.username for username, submission in by_username.items()}
+    )
     students = ingest.read_students(root, course_id)
     if not students:
         raise ExportError("missing student identity table; run ingest-submissions before export")
@@ -373,7 +406,7 @@ def export_results(
     )
     entries: list[dict[str, Any]] = []
     documents: list[tuple[str, str]] = []
-    for username, original in template.usernames.items():
+    for username, original in recipients.items():
         entry: dict[str, Any] = {"username": original}
         entries.append(entry)
         student = mapped.get(username)
@@ -418,10 +451,19 @@ def export_results(
             row = {str(key): value for key, value in selected.iloc[0].to_dict().items()}
             data, feedback, hashes = _load_judgment(root, row, submission.sha256)
             sums = grading_schema.computed_sums(data)
-            grade = _final_grade(sums, template.maximum)
+            maximum = template.maximum if template is not None else sums["base_max"]
+            grade = (
+                _final_grade(sums, maximum)
+                if template is not None
+                else FinalGrade(
+                    points=sums["base_points"] + sums["bonus_points"],
+                    percentage=(sums["base_points"] + sums["bonus_points"]) / maximum * 100,
+                    rubric_base_adjustment_points=0,
+                )
+            )
             if not math.isfinite(grade.points):
                 raise ExportError("grade is not finite")
-            if grade.points > template.maximum and not can_exceed:
+            if template is not None and grade.points > maximum and not can_exceed:
                 raise ExportError(
                     "grade exceeds the gradebook maximum; enable Can Exceed in Brightspace "
                     "and confirm with --can-exceed"
@@ -429,12 +471,15 @@ def export_results(
             archive_name = submission.folder + "/feedback.pdf"
             document = feedback_document(
                 course_id,
-                template.column.removesuffix(" Points Grade"),
+                template.column.removesuffix(" Points Grade")
+                if template is not None
+                else assignment_id,
                 student,
                 data,
                 feedback,
-                template.maximum,
+                maximum,
                 grade,
+                diagnostic=feedback_only,
             )
             documents.append((archive_name, document))
             entry.update(
@@ -468,8 +513,10 @@ def export_results(
         )
     included = [entry for entry in entries if entry["status"] != "unresolved"]
     if not included:
-        raise ExportError("no grades are ready to export")
-    inputs = [grade_export, *submission_zips, root / "tables" / course_id / ingest.STUDENTS_CSV]
+        raise ExportError("no results are ready to export")
+    inputs = [*submission_zips, root / "tables" / course_id / ingest.STUDENTS_CSV]
+    if grade_export is not None:
+        inputs.insert(0, grade_export)
     selection_manifest = raw_dir / ingest.MANIFEST_FILENAME
     if selection_manifest.is_file():
         inputs.append(selection_manifest)
@@ -481,15 +528,16 @@ def export_results(
         "config_name": config_name,
         "context_config_name": context_name,
         "gradings": gradings,
-        "grade_column": template.column,
-        "gradebook_maximum": template.maximum,
-        "base_adjustment_pct": _BASE_ADJUSTMENT_FRACTION * 100,
+        "feedback_only": feedback_only,
+        "base_adjustment_pct": 0 if feedback_only else _BASE_ADJUSTMENT_FRACTION * 100,
         "allow_partial": allow_partial,
         "zero_missing": zero_missing,
         "can_exceed": can_exceed,
         "inputs": [{"path": str(p.resolve()), "sha256": sha256_file(p)} for p in inputs],
         "students": entries,
     }
+    if template is not None:
+        manifest.update(grade_column=template.column, gradebook_maximum=template.maximum)
     destination.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".aat-export-", dir=destination) as temporary:
         staging = Path(temporary) / "result"
@@ -503,14 +551,16 @@ def export_results(
                     archive.writestr(info, pdf)
         except FeedbackRenderError as error:
             raise ExportError(f"no upload files written: {error}") from error
-        buffer = io.StringIO(newline="")
-        writer = csv.writer(buffer)
-        writer.writerow(["Username", template.column, "End-of-Line Indicator"])
-        writer.writerows([entry["username"], entry["grade"], "#"] for entry in included)
-        (staging / "grades.csv").write_text(buffer.getvalue(), encoding="utf-8", newline="")
+        output_names = ["feedback.zip"]
+        if template is not None:
+            buffer = io.StringIO(newline="")
+            writer = csv.writer(buffer)
+            writer.writerow(["Username", template.column, "End-of-Line Indicator"])
+            writer.writerows([entry["username"], entry["grade"], "#"] for entry in included)
+            (staging / "grades.csv").write_text(buffer.getvalue(), encoding="utf-8", newline="")
+            output_names.append("grades.csv")
         manifest["outputs"] = {
-            name: sha256_bytes((staging / name).read_bytes())
-            for name in ("feedback.zip", "grades.csv")
+            name: sha256_bytes((staging / name).read_bytes()) for name in output_names
         }
         (staging / "manifest.json").write_text(
             json.dumps(manifest, indent=2) + "\n", encoding="utf-8"

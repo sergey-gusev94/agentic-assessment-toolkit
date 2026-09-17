@@ -168,7 +168,8 @@ never overwritten.
 ### Export final results to Brightspace
 
 After final judging, `aat export-results` creates a fresh directory containing
-`feedback.zip`, `grades.csv`, and a staff-only `manifest.json`. It reads stored
+`feedback.zip`, a staff-only `manifest.json`, and, for gradebook exports,
+`grades.csv`. It reads stored
 results across jobs, so successful retries contribute without rerunning models.
 The CSV and each student's PDF use the same final judgment.
 
@@ -185,6 +186,27 @@ Use the original Brightspace submission ZIP and an actual grade export with
 supplies the full roster, exact grade-item name, and maximum points. It is not
 the sample import CSV. Repeat `--submissions-zip` if the assignment spans
 multiple downloads. Complete submission ingest before exporting.
+
+For an assignment without a gradebook item, use `--feedback-only` instead of
+`--grade-export`:
+
+```bash
+aat export-results --course COURSE_ID --assignment PROJECT00 \
+  --config codex-judge-sol-high \
+  --context-from codex-grader-sol-high --gradings 3 \
+  --submissions-zip '/path/to/Stage 0 Download.zip' \
+  --feedback-only
+```
+
+This exports feedback only for students in the supplied ZIPs, matched through
+the ingest identity table. Nonparticipants need no zero or omission decision.
+PDFs label the raw rubric total, including earned bonus points, as a diagnostic
+score against the rubric base maximum. No five-percentage-point grade adjustment
+or gradebook scaling applies, and no `grades.csv` is produced. The score is not
+a course grade or an approval decision. `--grade-export`, `--zero-missing`, and
+`--can-exceed` cannot be combined with this mode. Both modes reuse stored final
+judgments and require no regrading.
+
 For reviewed resubmissions, record an exact upload selection in the course's
 `manifest.toml` and rerun ingest. Export uses that same selection and records
 the excluded uploads. See [upload selection rules](docs/data-conventions.md#submission-ingest).
@@ -193,7 +215,9 @@ Missing or ambiguous judgments block export. Use `--zero-missing` only after
 confirming the downloads are complete and roster students without a submission
 should receive zero. Submitted work with failed grading still needs a successful
 judgment. `--allow-partial` explicitly omits unresolved students from both upload
-files and lists them in the manifest. Multiple eligible judgments require
+files and lists them in the manifest. This also applies to submitted students
+with unresolved judgments in feedback-only mode; missing or ambiguous judgments
+block that export by default. Multiple eligible judgments require
 `--trial JOB/TRIAL`; multiple stored config versions require the displayed
 identity selectors. Bonus grades above the gradebook maximum require Brightspace's
 **Can Exceed** setting and `--can-exceed`.
@@ -246,6 +270,18 @@ directory under `analysis/` in the data root. It contains tidy trial and
 criterion tables, benchmark and grading summaries, failure accounting, review
 queues, a Markdown report, and provenance. Use `--out PATH` to choose another
 destination outside this repository.
+
+For staff review, add `--include-identities`:
+
+```bash
+aat report --course COURSE_ID --assignment ASSIGNMENT_ID --include-identities
+```
+
+This adds `display_name` and `lms_username` beside `student_id` in student-level
+CSVs and Markdown tables, using the local course identity table. The default
+does not read identity tables or add these columns. Missing mappings leave
+blank identity fields and are listed in the report and provenance. Grades
+and stored grading artifacts are unchanged; no regrading is needed.
 
 Harbor can inspect one job or a whole stage:
 

@@ -311,9 +311,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="report destination (default: <data-root>/analysis; never inside this repository)",
     )
     report.add_argument("--data-root", metavar="PATH", help=DATA_ROOT_HELP)
+    report.add_argument(
+        "--include-identities",
+        action="store_true",
+        help="include local student names and usernames in staff reports",
+    )
 
     export = subparsers.add_parser(
-        "export-results", help="export final judgments as Brightspace feedback.zip and grades.csv"
+        "export-results", help="export final judgments as feedback.zip, optionally with grades.csv"
     )
     export.add_argument("--course", required=True, metavar="ID")
     export.add_argument("--assignment", required=True, metavar="ID")
@@ -332,11 +337,16 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="JOB/TRIAL",
         help="choose a student's judgment when several remain (repeatable)",
     )
-    export.add_argument(
+    export_mode = export.add_mutually_exclusive_group(required=True)
+    export_mode.add_argument(
         "--grade-export",
-        required=True,
         metavar="CSV",
         help="actual Brightspace roster export with one numeric grade item",
+    )
+    export_mode.add_argument(
+        "--feedback-only",
+        action="store_true",
+        help="export feedback PDFs with raw diagnostic rubric scores, without a grades CSV",
     )
     export.add_argument(
         "--submissions-zip",
@@ -527,7 +537,8 @@ def _run_export_results(args: argparse.Namespace) -> int:
             config_name=args.config,
             context_name=args.context_from,
             gradings=args.gradings,
-            grade_export=Path(args.grade_export),
+            grade_export=Path(args.grade_export) if args.grade_export else None,
+            feedback_only=args.feedback_only,
             submission_zips=[Path(p) for p in args.submissions_zip],
             out_root=Path(args.out) if args.out else None,
             config_identity=args.config_identity,
@@ -556,20 +567,23 @@ def _run_export_results(args: argparse.Namespace) -> int:
             print(f"  omitted {entry['username']}: {entry['reason']}")
         elif (
             entry["status"] == "graded"
+            and not args.feedback_only
             and entry["rubric_base_max"] != manifest["gradebook_maximum"]
         ):
             print(
                 f"  scaled {entry['username']}: rubric maximum {entry['rubric_base_max']} "
                 f"to gradebook maximum {manifest['gradebook_maximum']}"
             )
-    print(
-        "Upload feedback.zip through the assignment's Add Feedback Files; "
-        "import grades.csv through Grades > Enter Grades > Import."
-    )
-    print(
-        "Review before import: linked assignment grades synchronize as published feedback. "
-        "Keep manifest.json locally."
-    )
+    print("Upload feedback.zip through the assignment's Add Feedback Files.")
+    if not args.feedback_only:
+        print("Import grades.csv through Grades > Enter Grades > Import.")
+    if args.feedback_only:
+        print("Review feedback before upload. Keep manifest.json locally.")
+    else:
+        print(
+            "Review before import: linked assignment grades synchronize as published feedback. "
+            "Keep manifest.json locally."
+        )
     return 0
 
 
@@ -584,6 +598,7 @@ def _run_report(args: argparse.Namespace) -> int:
         assignments=[args.assignment] if args.assignment is not None else None,
         config_names=args.config,
         seed=args.seed,
+        include_identities=args.include_identities,
         out_root=Path(args.out).expanduser().resolve() if args.out else None,
     )
     print(f"report directory: {report_dir}")

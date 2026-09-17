@@ -33,7 +33,7 @@ class ExportData:
             "config_name": "judge",
             "context_name": "grader",
             "gradings": 3,
-            "grade_export": self.roster,
+            "grade_export": None if options.get("feedback_only") else self.roster,
             "submission_zips": [self.archive],
         }
         arguments.update(options)
@@ -173,23 +173,110 @@ def test_export_uses_judge_scores_and_brightspace_folders(export_data: ExportDat
     assert {p.name for p in first.iterdir()} == {"feedback.zip", "grades.csv", "manifest.json"}
 
 
+@pytest.mark.parametrize(
+    ("base", "bonus", "score", "percentage"),
+    [(8, 1, "9", "90"), (10, 2, "12", "120"), (0, 0, "0", "0")],
+)
+def test_feedback_only_uses_raw_rubric_scores_without_roster(
+    export_data: ExportData, base: int, bonus: int, score: str, percentage: str
+) -> None:
+    output = export_data.judgment(
+        data=grading_data([criterion("a", base, 10), criterion("b", bonus, 2, bonus=True)])
+    )
+    stored_result = (output / "grading_result.json").read_bytes()
+    export_data.roster.unlink()
+    # Nonparticipants in the identity table do not require a missing-work decision.
+    with (export_data.root / "tables/SYN_C1/students.csv").open("a") as handle:
+        handle.write("S002,SYN_C1,789,bob,Bob Example,brightspace\n")
+    path = export_data.run(feedback_only=True)
+    assert {p.name for p in path.iterdir()} == {"feedback.zip", "manifest.json"}
+    with zipfile.ZipFile(path / "feedback.zip") as archive:
+        assert archive.namelist() == [export_data.folder + "/feedback.pdf"]
+        document = archive.read(archive.namelist()[0]).decode()
+    assert f"Diagnostic rubric score: {score} / 10 ({percentage}%)" in document
+    assert "not a course grade or an approval decision" in document
+    assert "Final academic grade" not in document
+    assert "adjustment" not in document and "gradebook" not in document
+    assert "correct balance" in document and "Criterion scores" in document
+    manifest = json.loads((path / "manifest.json").read_text())
+    assert manifest["feedback_only"] is True
+    assert manifest["base_adjustment_pct"] == 0
+    assert "grade_column" not in manifest and "gradebook_maximum" not in manifest
+    assert len(manifest["students"]) == 1
+    assert manifest["students"][0]["grade"] == score
+    assert manifest["students"][0]["rubric_base_adjustment_points"] == 0
+    assert set(manifest["outputs"]) == {"feedback.zip"}
+    assert str(export_data.roster) not in {entry["path"] for entry in manifest["inputs"]}
+    assert (output / "grading_result.json").read_bytes() == stored_result
+
+
+@pytest.mark.parametrize("option", ["grade_export", "zero_missing", "can_exceed"])
+def test_feedback_only_rejects_gradebook_options(export_data: ExportData, option: str) -> None:
+    value = export_data.roster if option == "grade_export" else True
+    with pytest.raises(exports.ExportError, match="--feedback-only cannot be combined"):
+        export_data.run(feedback_only=True, **{option: value})
+    assert not (export_data.root / "analysis").exists()
+
+
+def test_gradebook_export_still_requires_roster(export_data: ExportData) -> None:
+    with pytest.raises(exports.ExportError, match="provide --grade-export"):
+        export_data.run(grade_export=None)
+
+
+def test_feedback_only_missing_judgment_blocks_unless_partial(export_data: ExportData) -> None:
+    bob_folder = "789-456 - bob Bob Example - Sep 1, 2026 1200 PM"
+    with zipfile.ZipFile(export_data.archive, "a") as archive:
+        archive.writestr(bob_folder + "/answer.txt", "Bob's balance")
+    normalized = export_data.root / "submissions/SYN_C1/S002/HW1"
+    normalized.mkdir(parents=True)
+    (normalized / "answer.txt").write_text("Bob's balance")
+    with (export_data.root / "tables/SYN_C1/students.csv").open("a") as handle:
+        handle.write("S002,SYN_C1,789,bob,Bob Example,brightspace\n")
+    export_data.judgment()
+    export_data.judgment("bob-failed", student="S002", failed=True)
+    with pytest.raises(exports.ExportError, match="no completed current final judgment"):
+        export_data.run(feedback_only=True)
+    assert not (export_data.root / "analysis").exists()
+    path = export_data.run(feedback_only=True, allow_partial=True)
+    manifest = json.loads((path / "manifest.json").read_text())
+    assert [s["status"] for s in manifest["students"]] == ["graded", "unresolved"]
+    assert "no completed current final judgment" in manifest["students"][1]["reason"]
+    with zipfile.ZipFile(path / "feedback.zip") as archive:
+        assert archive.namelist() == [export_data.folder + "/feedback.pdf"]
+    assert not (path / "grades.csv").exists()
+
+
+@pytest.mark.parametrize("mismatch", ["missing", "person_id"])
+def test_feedback_only_requires_matching_identity(export_data: ExportData, mismatch: str) -> None:
+    table = export_data.root / "tables/SYN_C1/students.csv"
+    if mismatch == "missing":
+        table.write_text(",".join(ingest.STUDENTS_COLUMNS) + "\n")
+    else:
+        table.write_text(table.read_text().replace("123", "999"))
+    export_data.judgment()
+    with pytest.raises(exports.ExportError, match="identity"):
+        export_data.run(feedback_only=True)
+
+
 @pytest.mark.parametrize("earlier_content", ["A balance equation.", "An older solution."])
+@pytest.mark.parametrize("feedback_only", [False, True])
 def test_export_uses_reviewed_upload_and_records_selection(
-    export_data: ExportData, earlier_content: str
+    export_data: ExportData, earlier_content: str, feedback_only: bool
 ) -> None:
     export_data.judgment()
     earlier = export_data.folder.replace("1200 PM", "1100 AM")
     with zipfile.ZipFile(export_data.archive, "a") as archive:
         archive.writestr(earlier + "/old-answer.txt", earlier_content)
     with pytest.raises(exports.ExportError, match="ZIP content differs"):
-        export_data.run(zero_missing=True)
+        export_data.run(zero_missing=not feedback_only, feedback_only=feedback_only)
     manifest_path = export_data.archive.parent / "manifest.toml"
     manifest_path.write_text(
         '[[upload_selections]]\nassignment_id = "HW1"\nperson_id = "123"\n'
         f'folder = "{export_data.folder}"\nreason = "Reviewed final attempt"\n'
     )
-    path = export_data.run(zero_missing=True)
-    assert read_csv(path / "grades.csv")[1] == ["#alice", "95", "#"]
+    path = export_data.run(zero_missing=not feedback_only, feedback_only=feedback_only)
+    if not feedback_only:
+        assert read_csv(path / "grades.csv")[1] == ["#alice", "95", "#"]
     manifest = json.loads((path / "manifest.json").read_text())
     assert manifest["students"][0]["upload_selection"] == {
         "folder": export_data.folder,
@@ -202,7 +289,7 @@ def test_export_uses_reviewed_upload_and_records_selection(
     # Selecting the older upload cannot bypass the graded-content checks.
     manifest_path.write_text(manifest_path.read_text().replace(export_data.folder, earlier))
     with pytest.raises(exports.ExportError, match="ZIP content differs"):
-        export_data.run(zero_missing=True)
+        export_data.run(zero_missing=not feedback_only, feedback_only=feedback_only)
 
 
 @pytest.mark.parametrize("person", ["123", "999"])
@@ -276,17 +363,22 @@ def test_missing_download_does_not_zero_known_work(export_data: ExportData) -> N
         export_data.run(zero_missing=True)
 
 
-def test_multiple_judgments_need_selection(export_data: ExportData) -> None:
+@pytest.mark.parametrize("feedback_only", [False, True])
+def test_multiple_judgments_need_selection(export_data: ExportData, feedback_only: bool) -> None:
     export_data.judgment()
     export_data.judgment("retry")
     with pytest.raises(exports.ExportError, match="multiple final judgments"):
-        export_data.run(zero_missing=True)
-    path = export_data.run(zero_missing=True, trials=["retry/trial1"])
+        export_data.run(zero_missing=not feedback_only, feedback_only=feedback_only)
+    path = export_data.run(
+        zero_missing=not feedback_only, feedback_only=feedback_only, trials=["retry/trial1"]
+    )
     assert (
         json.loads((path / "manifest.json").read_text())["students"][0]["trial"] == "retry/trial1"
     )
     with pytest.raises(exports.ExportError, match="not an eligible"):
-        export_data.run(zero_missing=True, trials=["missing/trial"])
+        export_data.run(
+            zero_missing=not feedback_only, feedback_only=feedback_only, trials=["missing/trial"]
+        )
 
 
 def test_superseded_judgments_cannot_be_exported(export_data: ExportData) -> None:
@@ -314,7 +406,10 @@ def test_config_name_cannot_mix_versions(export_data: ExportData) -> None:
 
 
 @pytest.mark.parametrize("changed", ["normalized", "judged", "feedback", "rubric", "criteria"])
-def test_changed_or_missing_inputs_block_export(export_data: ExportData, changed: str) -> None:
+@pytest.mark.parametrize("feedback_only", [False, True])
+def test_changed_or_missing_inputs_block_export(
+    export_data: ExportData, changed: str, feedback_only: bool
+) -> None:
     output = export_data.judgment()
     if changed == "normalized":
         (export_data.root / "submissions/SYN_C1/S001/HW1/answer.txt").write_text("Different work")
@@ -333,7 +428,7 @@ def test_changed_or_missing_inputs_block_export(export_data: ExportData, changed
         data["criteria"][0]["max_points"] = 20
         path.write_text(json.dumps(data))
     with pytest.raises(exports.ExportError, match="export incomplete"):
-        export_data.run(zero_missing=True)
+        export_data.run(zero_missing=not feedback_only, feedback_only=feedback_only)
     assert not (export_data.root / "analysis").exists()
 
 
@@ -422,10 +517,16 @@ def test_export_refuses_repository_and_source_destinations(export_data: ExportDa
         export_data.run(out_root=export_data.root / "grading" / "exports")
 
 
-def test_cli_produces_both_outputs(
-    export_data: ExportData, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize("feedback_only", [False, True])
+def test_cli_export_modes(
+    export_data: ExportData, capsys: pytest.CaptureFixture[str], feedback_only: bool
 ) -> None:
     export_data.judgment()
+    mode = (
+        ["--feedback-only"]
+        if feedback_only
+        else ["--grade-export", str(export_data.roster), "--zero-missing"]
+    )
     result = cli.main(
         [
             "export-results",
@@ -441,17 +542,20 @@ def test_cli_produces_both_outputs(
             "grader",
             "--gradings",
             "3",
-            "--grade-export",
-            str(export_data.roster),
+            *mode,
             "--submissions-zip",
             str(export_data.archive),
-            "--zero-missing",
         ]
     )
     assert result == 0
     output = capsys.readouterr().out
-    assert "graded: 1" in output and "zero_missing: 1" in output
-    assert "feedback.zip" in output and "grades.csv" in output
+    assert "graded: 1" in output and "feedback.zip" in output
+    if feedback_only:
+        assert "zero_missing: 0" in output and "grades.csv" not in output
+        assert "scaled" not in output
+        assert "linked assignment grades" not in output
+    else:
+        assert "zero_missing: 1" in output and "grades.csv" in output
 
 
 @pytest.mark.parametrize(
@@ -499,17 +603,22 @@ def test_invalid_or_mixed_archive_is_rejected(export_data: ExportData, member: s
 
 
 @pytest.mark.skipif(shutil.which("pandoc") is None, reason="PDF integration requires host Pandoc")
+@pytest.mark.parametrize("feedback_only", [False, True])
 def test_real_pdf_contains_grade_table_and_feedback(
-    export_data: ExportData, monkeypatch: pytest.MonkeyPatch
+    export_data: ExportData, monkeypatch: pytest.MonkeyPatch, feedback_only: bool
 ) -> None:
     monkeypatch.setattr(exports, "render_pdf", feedback_pdf.render_pdf)
     export_data.judgment()
-    path = export_data.run(zero_missing=True)
+    path = export_data.run(zero_missing=not feedback_only, feedback_only=feedback_only)
     with zipfile.ZipFile(path / "feedback.zip") as archive:
         data = archive.read(export_data.folder + "/feedback.pdf")
     reader = PdfReader(io.BytesIO(data))
     text = " ".join(page.extract_text() for page in reader.pages)
-    assert "95 / 100 (95%)" in text
+    if feedback_only:
+        assert "Diagnostic rubric score: 9 / 10 (90%)" in text
+        assert "Final academic grade" not in text
+    else:
+        assert "95 / 100 (95%)" in text
     assert "Alice Example" in text
     assert "Criterion scores" in text and "a: criterion a" in text
     assert "(bonus)" in text

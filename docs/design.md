@@ -1408,6 +1408,21 @@ answer to what is missing from grading and why), `report.md`, and
 `provenance.json`. The tidy tables are always emitted so any further
 question is answerable from the report directory without re-running
 the loader.
+Reports do not read student identity tables by default. The optional
+`--include-identities` flag adds `display_name` and `lms_username` immediately
+after `student_id` in tables containing both `course_id` and `student_id`,
+including `trials.csv`, `students.csv`, `repeat_consistency.csv`,
+`review_queue.csv`, and `grader_checks.csv`, and their Markdown displays.
+Identity lookup uses `(course_id, student_id)` from the local
+`tables/<course_id>/students.csv` files after report filtering. Statistics
+are computed before adding identities. Missing tables or student mappings
+leave blank identity fields and retain every row; the report and provenance
+list the missing mappings. Solve trials and underscore-prefixed pseudo-students
+remain unnamed and do not count as missing mappings. Malformed identity tables,
+duplicate student IDs within a course, and mismatched course IDs are errors.
+Provenance records `include_identities` and, when enabled, `missing_identities`.
+Names are rendered as literal text in Markdown. Stored jobs, grading inputs,
+and grading results remain unchanged.
 Professor-grade comparison is not implemented
 ([roadmap.md](roadmap.md)): the benchmark and the grading assistant do
 not need it, and because every grade and its provenance are stored,
@@ -1422,8 +1437,10 @@ backfill script if a browsable cross-experiment UI is ever needed
 
 `aat export-results` exports one course assignment for the 2026 Brightspace
 file-submission workflow. It reads stored final judgments, original Brightspace
-download ZIPs, the ingest identity table, and an actual Brightspace grade-export
-CSV. It makes no model calls and never uploads or publishes anything.
+download ZIPs and the ingest identity table. The command requires either an
+actual Brightspace grade-export CSV (`--grade-export`) for a gradebook export,
+or `--feedback-only` for diagnostic feedback without a gradebook item.
+It makes no model calls and never uploads or publishes anything.
 The command's name and context selectors refer to stored config names, not
 current TOML files. This lets export reproduce stored work after prompts change.
 
@@ -1445,6 +1462,13 @@ usernames, invalid maximum points, malformed rows, and ZIP submitters absent fro
 the roster are errors. The operator selects the grade export for the intended
 assignment and class or section, including students without submissions.
 
+In feedback-only mode, the supplied ZIPs define the recipients, so students
+without an upload are outside the export. No roster CSV is read or synthesized.
+The existing identity table maps ZIP usernames and LMS person IDs to the stored
+student IDs. The same submission hashes, judgment selection, and artifact
+validation apply in both modes. `--feedback-only` rejects `--grade-export`,
+`--zero-missing`, and `--can-exceed` because they concern gradebook exports.
+
 Brightspace downloads retain their original numbered upload folders. Multiple
 ZIPs are supported for one assignment, with the same per-path upload merge rule
 as ingest. Reviewed `upload_selections` in the course's raw-submissions
@@ -1462,7 +1486,7 @@ mapping are not supported.
 The exporter revalidates the grading JSON, nonempty justification and feedback,
 and criterion IDs, maxima, and bonus flags against the hash-checked materialized
 rubric. It recomputes totals from criteria using the shared grading schema;
-authored sum discrepancies remain recorded diagnostics. Final exported grades add
+authored sum discrepancies remain recorded diagnostics. Gradebook exports add
 5% of the rubric base maximum to earned base points, cap that adjusted base at
 the base maximum, then add earned assignment bonus points:
 
@@ -1482,10 +1506,20 @@ grade summary and CSV. A scale conversion is printed and recorded. Scores above
 the gradebook maximum require `--can-exceed`, confirming that the operator enabled
 Brightspace's Can Exceed setting; earned assignment bonuses are never capped.
 
+Feedback-only exports show the sum of earned base and bonus points against the
+materialized rubric's base maximum, with its corresponding percentage. They
+apply no grade adjustment or gradebook scaling. Earned bonus points may take
+the diagnostic score above the base maximum without `--can-exceed`. Stored
+grading artifacts remain unchanged.
+
 Each PDF contains the course ID, assignment grade-item name, student name and
 username, final academic grade and percentage, raw base and bonus totals, the
 applied adjustment in rubric base points and its cap, a criterion table in rubric
-order, and the judge's student-facing feedback. Staff justification
+order, and the judge's student-facing feedback. In feedback-only mode, the
+assignment ID replaces the grade-item name, the summary is labeled
+"Diagnostic rubric score", and a note explains that it is not a course grade
+or an approval decision. Adjustment and gradebook-scaling prose is omitted.
+Staff justification
 and `overall_comment` are not copied into the PDF. Existing feedback is retained
 as written, so factual accuracy, tone, and any scores within that prose still
 require review. Pandoc 3.1.2 or later parses Markdown, tables, and TeX equations
@@ -1506,21 +1540,30 @@ trial contradicts absence from the ZIP and prevents a zero. Submitted work whose
 judgment failed, is missing, or has unreadable artifacts remains unresolved.
 By default any unresolved student prevents export. `--allow-partial` omits those
 students from both upload files and records each omission, without writing blank
-grade rows that could affect existing grades. At least one grade must be ready.
+grade rows that could affect existing grades. In feedback-only mode the same
+rule applies to unresolved ZIP submitters, and at least one feedback PDF must
+be ready.
 
 Each invocation writes a fresh snapshot under `analysis/exports/`, or under the
 parent selected by `--out`. Destinations within the toolkit repository or source
 data trees are refused. PDF, ZIP, CSV, and manifest generation is staged; an error
 leaves no finished snapshot. Existing snapshots and grading artifacts stay intact.
-The upload files are `feedback.zip` and `grades.csv`; the ZIP uses fixed member
+The upload files are `feedback.zip` and, for gradebook exports, `grades.csv`;
+the ZIP uses fixed member
 timestamps. The separate staff-only `manifest.json` records selection, input and
 output hashes, included judgments and their lineage, scale conversions, the
-`base_adjustment_pct` policy (5), each graded student's
+`feedback_only` mode, `base_adjustment_pct` policy (5 for gradebook exports,
+0 for diagnostic feedback), each graded student's
 `rubric_base_adjustment_points`, confirmed zeros, and omissions. Re-identification
 happens entirely in this local export. The input hashes include the ingest
 manifest when present. Each graded student with an upload selection has an
 `upload_selection` entry recording the selected folder, reason, and excluded
 upload folders.
+Feedback-only manifests omit `grade_column` and `gradebook_maximum` and do not
+include a roster CSV in their input hashes. Each student's `grade` field holds
+the raw diagnostic total and `rubric_base_max` supplies its scale; the
+`rubric_base_adjustment_points` value is zero. Only `feedback.zip` appears in
+the output hashes.
 
 In Brightspace, feedback.zip goes to the assignment's Add Feedback Files and
 grades.csv goes to Grades > Enter Grades > Import. Imported grades for linked
@@ -1789,7 +1832,7 @@ aat grade  (--from-solve NAME [--course ID] [--assignment ID]
            [--max-concurrent-trials N] [--force]
            [--dry-run] [--materialize-only]
 
-aat report [--course ID] [--assignment ID] [--config NAME]...
+aat report [--course ID] [--assignment ID] [--config NAME]... [--include-identities]
            [--seed N] [--out PATH] [--data-root PATH]
 
 aat check-course --course ID [--data-root PATH]

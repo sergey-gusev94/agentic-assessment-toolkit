@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import csv
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -9,6 +11,7 @@ import pytest
 from agentic_assessment_toolkit import __version__, metrics
 from agentic_assessment_toolkit.data_root import DataRootError
 from agentic_assessment_toolkit.harbor import RunRecordItem, utc_stamp
+from agentic_assessment_toolkit.ingest import STUDENTS_COLUMNS
 from agentic_assessment_toolkit.report import REPORT_FILENAMES, write_report
 from tests.test_data_root import make_fake_toolkit_repo
 from tests.test_metrics import (
@@ -110,6 +113,7 @@ def run_report(
     config_names: list[str] | None = None,
     seed: int = 42,
     out_root: Path | None = None,
+    include_identities: bool = False,
 ) -> Path:
     return write_report(
         root,
@@ -118,8 +122,124 @@ def run_report(
         config_names=config_names,
         seed=seed,
         out_root=out_root,
+        include_identities=include_identities,
         now=NOW,
     )
+
+
+def write_identity_table(root: Path, course: str, rows: list[dict[str, str]]) -> Path:
+    path = root / "tables" / course / "students.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=STUDENTS_COLUMNS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({"course_id": course, "source": "brightspace", **row})
+    return path
+
+
+def read_csv_rows(path: Path) -> list[dict[str, str]]:
+    with path.open(encoding="utf-8", newline="") as handle:
+        return list(csv.DictReader(handle))
+
+
+def test_report_identities_preserve_grades_and_render_names(tmp_path: Path) -> None:
+    root = build_root(tmp_path)
+    data = grading_data([criterion("a", 0.0, 5.0), criterion("b", 0.0, 2.0, bonus=True)])
+    write_trial(
+        root / "grading" / GRADE_JOB,
+        "g2__t2",
+        trial_result("g2", rewards=graded_rewards(data)),
+        artifact_text=json.dumps(data),
+    )
+    identity = {
+        "student_id": "stu1",
+        "display_name": "Alice | Example\nJr.",
+        "lms_username": "alice_1",
+    }
+    write_identity_table(root, "SYN_C1", [identity])
+    anonymous = run_report(root)
+    named = run_report(root, include_identities=True)
+    for filename, columns in CSV_HEADERS.items():
+        before = read_csv_rows(anonymous / filename)
+        after = read_csv_rows(named / filename)
+        assert [{key: row[key] for key in columns} for row in after] == before
+        if {"course_id", "student_id"}.issubset(columns):
+            for row in after:
+                assert row["display_name"] == (
+                    identity["display_name"] if row["student_id"] == "stu1" else ""
+                )
+                assert row["lms_username"] == ("alice_1" if row["student_id"] == "stu1" else "")
+        assert "Alice" not in (anonymous / filename).read_text()
+    markdown = (named / "report.md").read_text()
+    review = markdown.split("## Review queue")[1].split("\n## ")[0]
+    assert "| student_id | display_name | lms_username |" in review
+    assert "| stu1 | Alice \\| Example Jr. | alice\\_1 |" in review
+    assert "Missing identity mappings: 0" in markdown
+    assert json.loads((named / "provenance.json").read_text())["missing_identities"] == []
+
+
+@pytest.mark.parametrize("table_exists", [False, True])
+def test_missing_report_identity_keeps_student(tmp_path: Path, table_exists: bool) -> None:
+    root = build_root(tmp_path)
+    if table_exists:
+        write_identity_table(root, "SYN_C1", [{"student_id": "other", "display_name": "Other"}])
+    report_dir = run_report(root, include_identities=True)
+    rows = read_csv_rows(report_dir / "students.csv")
+    assert len(rows) == 1
+    assert rows[0]["student_id"] == "stu1"
+    assert rows[0]["display_name"] == rows[0]["lms_username"] == ""
+    provenance = json.loads((report_dir / "provenance.json").read_text())
+    assert provenance["missing_identities"] == [{"course_id": "SYN_C1", "student_id": "stu1"}]
+    assert "Missing identity mappings: 1" in (report_dir / "report.md").read_text()
+
+
+@pytest.mark.parametrize("problem", ["duplicate", "wrong_course", "bad_header", "short_row"])
+def test_report_rejects_bad_identity_tables_only_when_requested(
+    tmp_path: Path, problem: str
+) -> None:
+    root = build_root(tmp_path)
+    row = {"student_id": "stu1", "display_name": "Alice"}
+    rows = [row, row] if problem == "duplicate" else [row]
+    if problem == "wrong_course":
+        rows = [{**row, "course_id": "OTHER"}]
+    path = write_identity_table(root, "SYN_C1", rows)
+    if problem == "bad_header":
+        path.write_text("invalid\n")
+    elif problem == "short_row":
+        path.write_text(",".join(STUDENTS_COLUMNS) + "\nstu1,SYN_C1\n")
+    run_report(root)  # The default never reads the identity table.
+    with pytest.raises(DataRootError):
+        run_report(root, include_identities=True)
+    # A course filter that excludes this course never reads its identity table either.
+    filtered = run_report(root, courses=["OTHER"], include_identities=True)
+    assert "student_id,display_name,lms_username" in (filtered / "students.csv").read_text()
+
+
+def test_report_identity_lookup_is_scoped_to_course(tmp_path: Path) -> None:
+    root = build_root(tmp_path)
+    job = make_job(
+        root,
+        tmp_path,
+        stage="grade",
+        job_name="second-course",
+        items=[replace(student_item("other"), course_id="OTHER", item_id="OTHER/stu1/HW1")],
+    )
+    data = grading_data([criterion("a", 5.0, 5.0)])
+    write_trial(
+        job,
+        "other__t1",
+        trial_result("other", rewards=graded_rewards(data)),
+        artifact_text=json.dumps(data),
+    )
+    for course, name in [("SYN_C1", "Alice"), ("OTHER", "Bob")]:
+        write_identity_table(root, course, [{"student_id": "stu1", "display_name": name}])
+    output = run_report(root, include_identities=True)
+    rows = read_csv_rows(output / "students.csv")
+    assert {(row["course_id"], row["student_id"], row["display_name"]) for row in rows} == {
+        ("SYN_C1", "stu1", "Alice"),
+        ("OTHER", "stu1", "Bob"),
+    }
 
 
 def csv_lines(report_dir: Path, name: str) -> list[str]:

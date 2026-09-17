@@ -85,7 +85,7 @@ $AAT_DATA_DIR/
 ├── grading/                    # grading jobs, any submission source
 │   └── <utc>__<config>__<hash8>/
 ├── analysis/                   # derived tables, reports, and exports, regenerable
-│   └── exports/                # export-results snapshots: feedback.zip, grades.csv, manifest.json
+│   └── exports/                # feedback.zip, manifest.json; grades.csv for gradebook exports
 └── scratch/                    # disposable working space
 ```
 

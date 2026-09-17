@@ -15,6 +15,8 @@ identifiers and grades (docs/data-conventions.md).
 
 from __future__ import annotations
 
+import csv
+import html
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,6 +27,7 @@ import pandas as pd
 from . import __version__, metrics
 from .data_root import DataRootError, ensure_outside_toolkit
 from .harbor import create_unique_dir, utc_stamp
+from .ingest import IngestError, read_students
 from .results import ResultTables, load_results
 
 # Every file a report directory holds; CSVs are written from the frames
@@ -106,6 +109,7 @@ def write_report(
     config_names: list[str] | None,
     seed: int,
     out_root: Path | None,
+    include_identities: bool = False,
     now: datetime | None = None,  # injectable for tests, like harbor.utc_stamp
 ) -> Path:
     """Write one timestamped report directory; return its path.
@@ -136,6 +140,12 @@ def write_report(
         "near_timeouts": metrics.near_timeouts(trials),
         "ungraded_solves": metrics.ungraded_solve_trials(trials),
     }
+    missing_identities = None
+    if include_identities:
+        identities, missing_identities = _load_identities(data_root, trials)
+        trials = _with_identities(trials, identities)
+        criteria = _with_identities(criteria, identities)
+        tables = {name: _with_identities(frame, identities) for name, frame in tables.items()}
     created_utc = (now if now is not None else datetime.now(UTC)).isoformat()
 
     report_dir = create_unique_dir(destination, f"{utc_stamp(now)}__report")
@@ -154,6 +164,7 @@ def write_report(
             trials=trials,
             criteria=criteria,
             tables=tables,
+            missing_identities=missing_identities,
         ),
         encoding="utf-8",
     )
@@ -167,10 +178,71 @@ def write_report(
         trials=trials,
         criteria=criteria,
     )
+    provenance["include_identities"] = include_identities
+    if missing_identities is not None:
+        provenance["missing_identities"] = [
+            {"course_id": course, "student_id": student} for course, student in missing_identities
+        ]
     (report_dir / "provenance.json").write_text(
         json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     return report_dir
+
+
+def _load_identities(
+    data_root: Path, trials: pd.DataFrame
+) -> tuple[dict[tuple[str, str], tuple[str, str]], list[tuple[str, str]]]:
+    """Resolve real students within their course, never by student ID alone."""
+    keys = {
+        (str(course), str(student))
+        for course, student in trials[["course_id", "student_id"]].itertuples(index=False)
+        if pd.notna(course) and pd.notna(student) and student and not str(student).startswith("_")
+    }
+    identities: dict[tuple[str, str], tuple[str, str]] = {}
+    for course in sorted({course for course, _ in keys}):
+        if course in {".", ".."} or Path(course).name != course:
+            raise DataRootError(f"invalid course ID in report: {course!r}")
+        path = data_root / "tables" / course / "students.csv"
+        try:
+            students = read_students(data_root, course)
+        except (IngestError, OSError, UnicodeError, csv.Error) as exc:
+            raise DataRootError(f"cannot read report identities: {exc}") from exc
+        seen: set[str] = set()
+        for student in students:
+            if (
+                student.course_id != course
+                or not student.student_id
+                or not isinstance(student.display_name, str)
+                or not isinstance(student.lms_username, str)
+            ):
+                raise DataRootError(f"invalid identity row in {path}")
+            if student.student_id in seen:
+                raise DataRootError(f"duplicate student ID {student.student_id!r} in {path}")
+            seen.add(student.student_id)
+            key = (course, student.student_id)
+            if key in keys:
+                identities[key] = (student.display_name, student.lms_username)
+    return identities, sorted(keys - identities.keys())
+
+
+def _with_identities(
+    frame: pd.DataFrame, identities: dict[tuple[str, str], tuple[str, str]]
+) -> pd.DataFrame:
+    if not {"course_id", "student_id"}.issubset(frame.columns):
+        return frame
+    enriched = frame.copy()
+    values = [
+        identities.get((str(course), str(student)), ("", ""))
+        for course, student in frame[["course_id", "student_id"]].itertuples(index=False)
+    ]
+    position = list(frame.columns).index("student_id") + 1
+    for offset, column in enumerate(("display_name", "lms_username")):
+        enriched.insert(
+            position + offset,
+            column,
+            pd.Series([row[offset] for row in values], index=frame.index, dtype="string"),
+        )
+    return enriched
 
 
 def _filtered_tables(
@@ -266,6 +338,7 @@ def _report_markdown(
     trials: pd.DataFrame,
     criteria: pd.DataFrame,
     tables: dict[str, pd.DataFrame],
+    missing_identities: list[tuple[str, str]] | None = None,
 ) -> str:
     parts = [
         "# Assessment report",
@@ -288,6 +361,21 @@ def _report_markdown(
             ]
         ),
     ]
+    if missing_identities is not None:
+        parts.append(
+            "## Student identities\n\n"
+            "This staff report includes names and usernames from local "
+            "`tables/<course_id>/students.csv` files. Student IDs remain unchanged. "
+            "Blank identity fields for solve trials and pseudo-students are expected.\n\n"
+            f"Missing identity mappings: {len(missing_identities)}. "
+            "These students remain in the report with blank identity fields."
+        )
+        if missing_identities:
+            parts.append(
+                _markdown_table(
+                    pd.DataFrame(missing_identities, columns=["course_id", "student_id"])
+                )
+            )
     parts.extend(_benchmark_section(tables["grades_by_assignment"], tables["grades_by_course"]))
     parts.extend(_judge_section(tables["judge_quality"]))
     parts.extend(_consistency_section(tables["repeat_consistency"]))
@@ -629,6 +717,22 @@ def _short_rubric(frame: pd.DataFrame) -> pd.DataFrame:
 
 def _markdown_table(frame: pd.DataFrame, columns: tuple[str, ...] | None = None) -> str:
     frame = _short_rubric(frame)
+    identity_columns = ("display_name", "lms_username")
+    if columns is not None:
+        columns = tuple(
+            expanded
+            for column in columns
+            for expanded in (
+                (column, *(name for name in identity_columns if name in frame.columns))
+                if column == "student_id"
+                else (column,)
+            )
+        )
+    # Names are literal text, including Markdown punctuation and line breaks.
+    frame = frame.copy()
+    for column in identity_columns:
+        if column in frame.columns:
+            frame[column] = frame[column].map(_identity_cell)
     shown = frame if columns is None else frame[list(columns)]
     lines = [
         "| " + " | ".join(str(column) for column in shown.columns) + " |",
@@ -639,6 +743,13 @@ def _markdown_table(frame: pd.DataFrame, columns: tuple[str, ...] | None = None)
         for row in shown.itertuples(index=False)
     )
     return "\n".join(lines)
+
+
+def _identity_cell(value: Any) -> str:
+    text = html.escape(" ".join(_cell(value).split()))
+    for char in "\\`*_{}[]|":
+        text = text.replace(char, "\\" + char)
+    return text
 
 
 def _cell(value: Any) -> str:

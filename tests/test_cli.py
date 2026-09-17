@@ -1126,10 +1126,12 @@ def test_solve_all_and_grade_all(
     assert [i["item_id"] for i in record["items"]] == [f"{COURSE_ID}/stu1/HW1"]
 
 
+@pytest.mark.parametrize("include_identities", [False, True])
 def test_report_command_writes_report_and_prints_directory(
-    data_root: Path, capsys: pytest.CaptureFixture[str]
+    data_root: Path, capsys: pytest.CaptureFixture[str], include_identities: bool
 ) -> None:
-    assert run_cli("report", "--data-root", str(data_root)) == 0
+    flags = ["--include-identities"] if include_identities else []
+    assert run_cli("report", "--data-root", str(data_root), *flags) == 0
     out = capsys.readouterr().out
     assert out.startswith("report directory: ")
     report_dir = Path(out.removeprefix("report directory: ").strip())
@@ -1139,6 +1141,7 @@ def test_report_command_writes_report_and_prints_directory(
         assert (report_dir / name).is_file(), name
     provenance = json.loads((report_dir / "provenance.json").read_text(encoding="utf-8"))
     assert provenance["seed"] == 42  # metrics.DEFAULT_SEED is the CLI default
+    assert provenance["include_identities"] is include_identities
     assert provenance["filters"] == {"courses": None, "assignments": None, "configs": None}
 
 
