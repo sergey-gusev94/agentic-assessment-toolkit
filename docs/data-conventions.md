@@ -593,7 +593,9 @@ directory is left untouched and the row is flagged
 accept the new content. To accept it, delete the submission directory and re-run
 with `--force` (the raw dump is unchanged, so a plain re-run would
 skip the course), then regrade: the item still counts as done, so
-regrading the new bytes takes `aat grade --force`.
+regrading the new bytes takes `aat grade --force`. A final judge
+presents only gradings of the current bytes, so the earlier gradings
+never reach it.
 
 **Review.** `tables/<course_id>/submissions.csv` records every
 (assignment, student) pair with status `ready`, `skipped`, `frozen`, or

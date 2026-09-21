@@ -1128,8 +1128,10 @@ def _prior_gradings_for(
     environment template. The judge therefore consumes exactly the
     gradings that pool together under the frozen initial config, and a
     context rubric that has since advanced correctly matches nothing (the
-    initial rounds under the new rubric do not exist yet). Within a pool
-    the gradings are exchangeable
+    initial rounds under the new rubric do not exist yet). Gradings
+    whose recorded submission hash differs from the submission's current
+    bytes are dropped first: they measured work that has since been
+    replaced. Within the remaining pool the gradings are exchangeable
     repeats of one frozen experiment, so the selection is the first N
     in the pool's deterministic (job name, trial name) order: adding
     initial gradings later never changes what an existing judge item
@@ -1150,14 +1152,27 @@ def _prior_gradings_for(
             rubric_source_hash,
         )
         key = (source.item_id, context_identity)
-    prior = judge.pool.by_key.get(key, []) if key is not None else []
+    pooled = judge.pool.by_key.get(key, []) if key is not None else []
     missing = judge.pool.missing_artifacts.get(key, 0) if key is not None else 0
+    # The pooling key excludes the submission bytes, so a submission
+    # replaced after grading shares a pool with its earlier gradings.
+    # Those measured different work and must not reach the judge.
+    submission_hash = hashing.sha256_dir(source.submission_dir)
+    prior = [grading for grading in pooled if grading.submission_sha256 == submission_hash]
+    stale = len(pooled) - len(prior)
     if len(prior) >= judge.gradings:
         return prior[: judge.gradings]
     detail = f"{len(prior)} of {judge.gradings} required prior grading(s)"
+    reasons = []
     if missing:
-        detail += f" ({missing} more unusable: grading artifacts missing on disk)"
-    command = _top_up_command(judge, root, source, args, usable=len(prior), missing=missing)
+        reasons.append(f"{missing} more unusable: grading artifacts missing on disk")
+    if stale:
+        reasons.append(f"{stale} more unusable: graded a submission that has since changed")
+    if reasons:
+        detail += f" ({'; '.join(reasons)})"
+    command = _top_up_command(
+        judge, root, source, args, usable=len(prior), unusable=missing + stale
+    )
     print(
         f"skipping {source.item_id}: {detail} under config "
         f"{judge.config.name!r}; top up: {shlex.join(command)}"
@@ -1172,15 +1187,15 @@ def _top_up_command(
     args: argparse.Namespace,
     *,
     usable: int,
-    missing: int,
+    unusable: int,
 ) -> list[str]:
     """The exact initial-grading command that completes a skipped judge item.
 
-    Doneness counts valid trials whether or not their artifacts survive,
-    while the judge can only use gradings whose artifacts are on disk —
+    Doneness counts every valid trial, while the judge can only use
+    gradings of the current submission bytes whose artifacts are on disk,
     so when unusable gradings exist, a plain target of ``gradings``
-    would launch nothing. ``--force`` then adds exactly the usable
-    shortfall instead.
+    would launch too few or nothing. ``--force`` then adds exactly the
+    usable shortfall instead.
     """
     command = ["aat", "grade", "--config", args.context_from]
     if judge.config.rubric_override is not None:
@@ -1192,7 +1207,7 @@ def _top_up_command(
         if args.from_solve:
             command += ["--from-solve", args.from_solve]
         command += ["--course", source.course_id, "--assignment", source.assignment_id]
-    if missing:
+    if unusable:
         command += ["--force", "--repeats", str(judge.gradings - usable)]
     else:
         command += ["--repeats", str(judge.gradings)]

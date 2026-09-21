@@ -1939,21 +1939,27 @@ the judge's whenever the two name different agents), so the judge
 consumes exactly the gradings that pool together under the
 frozen initial config. A context rubric that has since advanced
 matches nothing, which is correct because the initial rounds under the new
-rubric do not exist yet. Each task presents exactly N prior gradings:
-the first N usable ones in the pool's deterministic (job name, trial
-name) order. Job names are timestamped, so this is the earliest N.
+rubric do not exist yet. The per-item identity excludes the submission
+bytes, so a submission replaced after grading shares a pool with its
+earlier gradings. Each stored grading records the hash of the
+submission it measured, and the judge drops every grading whose hash
+differs from the submission's current bytes. Each task presents exactly
+N prior gradings: the first N usable ones in the pool's deterministic
+(job name, trial name) order. Job names are timestamped, so this is the
+earliest N.
 Within a pool the gradings are exchangeable repeats of one frozen
 experiment, so order carries no quality information, and taking the
 earliest N means adding initial rounds never changes an existing
 judge item's inputs or doneness; judging over more evidence is done
 by raising `--gradings`, and because a larger N selects a strict
 superset, the results layer then supersedes the smaller judgment. A
-valid grading whose stored artifacts are
-missing on disk is unusable and counted in the skip report. Items
+valid grading is unusable when its stored artifacts are missing on disk
+or when it measured a submission that has since changed; both are
+counted in the skip report. Items
 short of `--gradings` are skipped loudly with the exact top-up
 command. When unusable gradings exist, the command uses `--force` with
 the usable shortfall, because the plain target already counts the
-artifact-less trials as done, and a run that skipped any item exits
+unusable trials as done, and a run that skipped any item exits
 nonzero (except `--dry-run`): a judge run that judged less than it was
 asked must fail loudly in scripts. The judge's own doneness behaves
 like any grading item under the judge config's identities.

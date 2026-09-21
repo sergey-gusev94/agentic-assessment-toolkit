@@ -920,13 +920,18 @@ class PriorGrading:
     mirrored grading artifacts; both exist — a valid trial whose
     artifacts have since gone missing is excluded (and counted) by
     ``prior_gradings_by_key``, because a judge task cannot present bytes
-    that are not on disk.
+    that are not on disk. ``submission_sha256`` is the hash of the
+    submission bytes the grading measured, as its run record stored it
+    (None when the record carries none): the pooling key excludes the
+    submission, so the judge uses it to drop gradings of bytes that have
+    since been replaced.
     """
 
     job_name: str
     trial_name: str
     result_path: Path
     justification_path: Path
+    submission_sha256: str | None
 
 
 @dataclass(frozen=True)
@@ -974,12 +979,19 @@ def prior_gradings_by_key(grading_root: Path) -> PriorGradingPool:
             if not result_path.is_file() or not justification_path.is_file():
                 missing[key] = missing.get(key, 0) + 1
                 continue
+            input_hashes = item.get("input_hashes")
+            submission_sha256 = (
+                input_hashes.get("submission") if isinstance(input_hashes, dict) else None
+            )
             by_key.setdefault(key, []).append(
                 PriorGrading(
                     job_name=job_dir.name,
                     trial_name=trial_dir.name,
                     result_path=result_path,
                     justification_path=justification_path,
+                    submission_sha256=(
+                        submission_sha256 if isinstance(submission_sha256, str) else None
+                    ),
                 )
             )
     for gradings in by_key.values():

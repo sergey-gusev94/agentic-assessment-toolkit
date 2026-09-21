@@ -1949,6 +1949,53 @@ def test_top_up_command_uses_force_when_artifacts_are_missing(
     assert f"--submissions {submission} --force --repeats 1" in out
 
 
+def test_judge_ignores_gradings_of_a_replaced_submission(
+    data_root: Path,
+    grade_config: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The pooling key excludes the submission bytes, so gradings made
+    before a file was added share the item's pool. The judge must see
+    only gradings of the current bytes, and the top-up hint must use
+    --force because doneness still counts the earlier gradings."""
+    from tests.test_config import write_config
+
+    judge_config = write_config(tmp_path, JUDGE_TOML_CLI, "codex-judge")
+    submission_dir = data_root / "submissions" / COURSE_ID / "stu1" / "HW1"
+    grade_one_initial(data_root, grade_config, "graded__old")
+    (submission_dir / "added-later.txt").write_text("late workbook", encoding="utf-8")
+    current_job = grade_one_initial(data_root, grade_config, "graded__new")
+
+    def judge(gradings: str) -> int:
+        return cli.main(
+            grade_args(
+                data_root,
+                judge_config,
+                "--submissions",
+                str(submission_dir),
+                "--context-from",
+                str(grade_config),
+                "--gradings",
+                gradings,
+                "--materialize-only",
+            )
+        )
+
+    capsys.readouterr()
+    assert judge("2") == 1
+    out = capsys.readouterr().out
+    assert "1 of 2 required prior grading(s) (1 more unusable: graded a submission" in out
+    assert f"--submissions {submission_dir} --force --repeats 1" in out
+
+    assert judge("1") == 0
+    judge_job = job_dirs(data_root, "grading")[-1]
+    record = json.loads((judge_job / "aat-run.json").read_text(encoding="utf-8"))
+    assert record["items"][0]["prior_trials"] == [
+        {"job_name": current_job.name, "trial_name": "graded__new"}
+    ]
+
+
 def test_judge_rubric_must_match_context_rubric(
     data_root: Path, grade_config: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
