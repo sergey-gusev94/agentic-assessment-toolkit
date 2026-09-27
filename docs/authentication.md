@@ -8,7 +8,7 @@ from silently changing the provider, account type, model, or agent behavior.
 Check the resolution before a long run:
 
 ```bash
-aat check-auth --config codex-grader-sol-high
+aat check-auth --config codex-grader-sol6-high
 aat check-auth --config claude-grader-sonnet5-high
 ```
 

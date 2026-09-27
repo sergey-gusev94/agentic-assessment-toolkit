@@ -1,0 +1,9 @@
+# Pinned Codex solve configuration (docs/design.md, "Experiment configs
+# and config identity"). Experiment configuration only: what to run on
+# (selection) and mechanics (--repeats, --max-concurrent-trials,
+# --force, ...) are CLI flags and never appear here.
+stage = "solve"
+agent = "codex"
+model = "openai/gpt-6-sol"
+reasoning_effort = "high"
+prompt = "solver"

@@ -31,7 +31,7 @@ from pathlib import Path
 from . import __version__, config
 from .hashing import sha256_dir, sha256_file
 
-DEFAULT_MODEL = "gpt-5.6-sol"  # the pipeline configs' model, in `codex -m` form
+DEFAULT_MODEL = "gpt-6-sol"  # the pipeline configs' model, in `codex -m` form
 DEFAULT_REASONING_EFFORT = "high"
 INTAKE_PROMPT_NAME = "intake"
 RECORD_FILENAME = "intake-record.json"

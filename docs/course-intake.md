@@ -28,7 +28,7 @@ separate deterministic `aat ingest-submissions` procedure described in
 2. **Run.** `aat intake --all` (or `--course ID`) launches the Codex
    CLI once per unprocessed dump, sequentially, in a workspace-write
    sandbox scoped to the data root, with pinned defaults
-   (`gpt-5.6-sol`, high reasoning effort; override with `--model` /
+   (`gpt-6-sol`, high reasoning effort; override with `--model` /
    `--reasoning-effort`). Ten dumps means ten top-level runs. Within
    each run, the primary agent delegates one read-only audit per
    material-backed assignment, waits for every audit, writes the

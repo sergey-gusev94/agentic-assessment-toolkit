@@ -2,6 +2,6 @@
 # The base image is base.Dockerfile (this task's environment flavor
 # template), built by aat under the local-only name below so this
 # build never contacts an image registry.
-FROM aat-env-scientific-python:81cb7e02d667f4ba
+FROM aat-env-scientific-python:5760c54ce651cc56
 
 COPY assignment /app/assignment

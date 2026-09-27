@@ -1206,7 +1206,7 @@ RUN echo "smoke: convert" \
 # guarantee.
 ENV DISABLE_AUTOUPDATER=1
 ENV NODE_VERSION=22.23.2 \
-    CLAUDE_CODE_VERSION=2.1.233
+    CLAUDE_CODE_VERSION=2.1.280
 RUN apt-get update \
     && apt-get install -y --no-install-recommends procps \
     && rm -rf /var/lib/apt/lists/* \

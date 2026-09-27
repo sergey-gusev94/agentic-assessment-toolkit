@@ -101,9 +101,9 @@ The normal workflow processes all available courses and submissions:
 aat intake --all
 aat check-course --course SYN_COURSE1_F2025
 aat ingest-submissions --all
-aat solve --all --config codex-high
-aat grade --from-solve codex-high --config codex-grader-sol-high
-aat grade --all --config codex-grader-sol-high
+aat solve --all --config codex-sol6-high
+aat grade --from-solve codex-sol6-high --config codex-grader-sol6-high
+aat grade --all --config codex-grader-sol6-high
 aat report
 ```
 
@@ -114,7 +114,7 @@ already complete and processes only new or incomplete items. Narrow a run with
 Before a live run, check which credential the selected config will use:
 
 ```bash
-aat check-auth --config codex-grader-sol-high
+aat check-auth --config codex-grader-sol6-high
 ```
 
 Use `--dry-run` to inspect a selection without creating anything. Use
@@ -157,8 +157,8 @@ number of stored initial gradings and independently reconciles them against the
 submission:
 
 ```bash
-aat grade --all --config codex-judge-sol-high \
-  --context-from codex-grader-sol-high --gradings 3
+aat grade --all --config codex-judge-sol6-high \
+  --context-from codex-grader-sol6-high --gradings 3
 ```
 
 Use `--repeats N` to ensure each selected item has N valid trials. Use `--force`
@@ -175,8 +175,8 @@ The CSV and each student's PDF use the same final judgment.
 
 ```bash
 aat export-results --course COURSE_ID --assignment HW1 \
-  --config codex-judge-sol-high \
-  --context-from codex-grader-sol-high --gradings 3 \
+  --config codex-judge-sol6-high \
+  --context-from codex-grader-sol6-high --gradings 3 \
   --submissions-zip '/path/to/Assignment 1 Download.zip' \
   --grade-export '/path/to/GradesExport.csv'
 ```
@@ -192,8 +192,8 @@ For an assignment without a gradebook item, use `--feedback-only` instead of
 
 ```bash
 aat export-results --course COURSE_ID --assignment PROJECT00 \
-  --config codex-judge-sol-high \
-  --context-from codex-grader-sol-high --gradings 3 \
+  --config codex-judge-sol6-high \
+  --context-from codex-grader-sol6-high --gradings 3 \
   --submissions-zip '/path/to/Stage 0 Download.zip' \
   --feedback-only
 ```
@@ -248,16 +248,22 @@ Initial-grader and final-judge configs use the same model matrix:
 
 | Model and reasoning | Initial grader | Final judge |
 | --- | --- | --- |
-| Sol, high | `codex-grader-sol-high` | `codex-judge-sol-high` |
-| Luna, high | `codex-grader-luna-high` | `codex-judge-luna-high` |
-| Luna, max | `codex-grader-luna-max` | `codex-judge-luna-max` |
-| Terra, high | `codex-grader-terra-high` | `codex-judge-terra-high` |
+| GPT-6 Sol, high | `codex-grader-sol6-high` | `codex-judge-sol6-high` |
+| GPT-6 Luna, high | `codex-grader-luna6-high` | `codex-judge-luna6-high` |
+| GPT-6 Luna, max | `codex-grader-luna6-max` | `codex-judge-luna6-max` |
+| Opus 5.5, high | `claude-grader-opus5-5-high` | `claude-judge-opus5-5-high` |
+| Opus 5.5, max | `claude-grader-opus5-5-max` | `claude-judge-opus5-5-max` |
+| Sonnet 5, high | `claude-grader-sonnet5-high` | `claude-judge-sonnet5-high` |
+| GPT-5.6 Sol, high | `codex-grader-sol-high` | `codex-judge-sol-high` |
+| GPT-5.6 Luna, high | `codex-grader-luna-high` | `codex-judge-luna-high` |
+| GPT-5.6 Luna, max | `codex-grader-luna-max` | `codex-judge-luna-max` |
+| GPT-5.6 Terra, high | `codex-grader-terra-high` | `codex-judge-terra-high` |
 | Opus 5, high | `claude-grader-opus5-high` | `claude-judge-opus5-high` |
 | Opus 5, max | `claude-grader-opus5-max` | `claude-judge-opus5-max` |
-| Sonnet 5, high | `claude-grader-sonnet5-high` | `claude-judge-sonnet5-high` |
 
-The solve configs are `codex-high`, `claude-opus5-high`, and
-`claude-sonnet5-high`.
+The solve configs are `codex-sol6-high`, `claude-opus5-5-high`, and
+`claude-sonnet5-high`. The earlier `codex-high` and `claude-opus5-high`
+configs remain available for comparisons with GPT-5.6 Sol and Opus 5.
 
 For a rubric experiment, `aat grade --rubric NAME` selects
 `rubrics/<assignment_id>/NAME.md`. The rubric name and bytes enter the config

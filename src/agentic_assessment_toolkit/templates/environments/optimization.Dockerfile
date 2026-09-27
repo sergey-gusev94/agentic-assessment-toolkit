@@ -62,7 +62,7 @@ RUN pip install gurobipy==12.0.3 python-docx==1.2.0 python-pptx==1.0.2
 # what that install step would have added alongside. linux-x64: images
 # are built and run on x86_64.
 ENV NODE_VERSION=22.23.2 \
-    CODEX_VERSION=0.146.0
+    CODEX_VERSION=0.156.1
 RUN curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.gz" \
     && curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt" \
     && grep " node-v${NODE_VERSION}-linux-x64.tar.gz\$" SHASUMS256.txt | sha256sum -c - \

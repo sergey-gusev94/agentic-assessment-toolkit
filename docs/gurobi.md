@@ -8,7 +8,7 @@ command line or the `AAT_GUROBI_LICENSE_FILE` environment variable:
 export AAT_GUROBI_LICENSE_FILE=/home/user/gurobi.lic
 
 aat solve --course SYN_OPT101_F2025 \
-  --config codex-high --max-concurrent-trials 1
+  --config codex-sol6-high --max-concurrent-trials 1
 ```
 
 AAT verifies that the path is a file and that every selected assignment uses
