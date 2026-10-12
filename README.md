@@ -126,6 +126,8 @@ launching Harbor. Both modes are offline and require no credential.
 Place collected professor materials under `raw/<course_id>/` in the data root,
 then run `aat intake`. Intake asks the host Codex CLI to create the structured
 course tree, including a rubric draft for each material-backed assignment.
+The default model is `gpt-6.1-sol` with high reasoning effort; override it with
+`--model` and `--reasoning-effort`.
 
 Review the generated course and `intake-notes.md`, then run `aat check-course`
 until it reports no contract violations. Grading refuses an assignment without
@@ -144,6 +146,39 @@ The command prints rows that need review and exits nonzero while anything is
 skipped or frozen. Resolve ambiguous names and filenames in the course's
 `manifest.toml`, then run the command again. The full contract is in
 [Data conventions](docs/data-conventions.md), under "Submission ingest."
+
+#### Brightspace downloads
+
+If you are using Brightspace, download one submission ZIP per assignment:
+
+1. In the course, open **Assignments**, then the assignment being graded.
+2. Open the **Users** tab. Clear search and evaluation-status filters. Select
+   the intended class or section and apply the filter, if applicable.
+3. Select all submissions in that scope and click **Download**. Check that the
+   selection includes every results page, not just the visible students. Use
+   the all-results selection or increase the page size if needed.
+4. Download the ZIP into `raw-submissions/<course_id>/` in the data root. Keep
+   its original filename, folder names, and structure; do not unzip it.
+
+The supported layout has upload folders at the ZIP root, named
+`<person>-<assignment> - <username> <Display Name> - <date time>`. Group
+submissions and text-only submissions without downloaded files are outside
+this workflow. The toolkit cannot detect submissions left out of a download;
+check completeness before treating any student as missing.
+
+For [exporting final grades](#export-final-results-to-brightspace), also save
+one actual grade-export CSV per assignment:
+
+1. Open **Grades > Enter Grades > Export**. Under **Export Grade Items For**,
+   choose **All users**, or the same section as the submission download, and
+   click **Apply** if shown. Include students without submissions.
+2. Set **Key Field** to **Username** and **Grade Values** to **Points grade**.
+   Leave **Grade Scheme** off and the **User Details** checkboxes unchecked.
+3. Under **Choose Grades to Export**, select only the numeric grade item for
+   this assignment. Click **Export to CSV**, then **Download**, and save it
+   beside the ZIP in the data root. Keep the header intact: it supplies the
+   exact grade-item name and maximum points. Use the actual class export,
+   not `Grades_Sample_Import_File.csv` from the Import screen.
 
 ### Solving and grading
 

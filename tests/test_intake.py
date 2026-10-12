@@ -155,8 +155,8 @@ def test_successful_run_writes_receipt_and_checks(
     assert "intake-pending" not in out
     assert intake.record_path(data_root, "C_NEW_F2026").is_file()
     record = json.loads(intake.record_path(data_root, "C_NEW_F2026").read_text(encoding="utf-8"))
-    assert record["model"] == "gpt-6-sol"
-    assert record["command"][5] == "gpt-6-sol"
+    assert record["model"] == "gpt-6.1-sol"
+    assert record["command"][5] == "gpt-6.1-sol"
 
     # The receipt makes the next run a no-op.
     assert cli.main(["intake", "--all", "--data-root", str(data_root)]) == 0
