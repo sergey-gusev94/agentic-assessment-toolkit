@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+import typst
 from pypdf import PdfReader
 
 from agentic_assessment_toolkit import cli, feedback_pdf, ingest
@@ -624,6 +625,71 @@ def test_real_pdf_contains_grade_table_and_feedback(
     assert "(bonus)" in text
     assert "correct balance" in text
     assert "STAFF ONLY" not in text
+
+
+@pytest.mark.parametrize("in_figure", [False, True])
+def test_pdf_template_splits_long_tables_without_overlapping_rows(in_figure: bool) -> None:
+    # Exercise both forms of table output without depending on the host
+    # Pandoc version: older writers emit bare tables, newer ones use figures.
+    table = (
+        "table(columns: (3fr, 1fr, 1fr),\n"
+        "table.header([Criterion], [Points], [Maximum]),\n"
+        + "".join(
+            f"[ROW{i:03d}: nonlinear and steady volume balances with a dimensional check], "
+            "[2], [3],\n"
+            for i in range(45)
+        )
+        + ")"
+    )
+    body = (
+        "= Assignment feedback\n\nGrade: 92 / 100.\n\n== Criterion scores\n\n#"
+        + (f"figure(align(center)[#{table}], kind: table)" if in_figure else table)
+        + "\n\n== Feedback\n\nYou used the correct balance."
+    )
+    template = (Path(feedback_pdf.__file__).parent / "templates" / "feedback.typ").read_text()
+    source = template.replace("$definitions.typst()$", "").replace("$body$", body)
+    rendered = typst.compile(source.encode(), ignore_system_fonts=True, timestamp=0)
+    assert isinstance(rendered, bytes)
+    reader = PdfReader(io.BytesIO(rendered))
+    rows: list[str] = []
+    positions: list[tuple[float, float]] = []
+
+    def visit(
+        text: str,
+        cm: list[float],
+        tm: list[float],
+        _font: dict[str, Any] | None,
+        _size: float,
+    ) -> None:
+        if not text.startswith("ROW"):
+            return
+        rows.append(text[:6])
+        # Transform the text origin into PDF page coordinates.
+        x = tm[4] * cm[0] + tm[5] * cm[2] + cm[4]
+        y = tm[4] * cm[1] + tm[5] * cm[3] + cm[5]
+        positions.append((x, y))
+
+    table_pages = 0
+    for page in reader.pages:
+        positions.clear()
+        text = page.extract_text(visitor_text=visit)
+        if "Criterion scores" in text:
+            assert "ROW000" in text
+        if positions:
+            table_pages += 1
+            assert "Criterion" in text
+            for x, y in positions:
+                assert 54 <= x <= float(page.mediabox.width) - 54
+                assert 54 <= y <= float(page.mediabox.height) - 54
+            # Every label wraps onto two lines of 11pt text. Extractable
+            # text alone would still pass if those rows overlapped.
+            assert all(
+                top[1] - below[1] >= 22
+                for top, below in zip(positions, positions[1:], strict=False)
+            )
+    assert table_pages > 1
+    assert rows == [f"ROW{i:03d}" for i in range(45)]
+    assert "You used the correct balance." in reader.pages[-1].extract_text()
 
 
 @pytest.mark.skipif(shutil.which("pandoc") is None, reason="PDF integration requires host Pandoc")

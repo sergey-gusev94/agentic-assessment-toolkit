@@ -1528,6 +1528,8 @@ grouped legacy roman declarations such as `{\rm prod}` to `\mathrm{prod}` before
 translation. Prose, code examples, and stored feedback are unchanged.
 The installed Typst Python package compiles locally
 using bundled fonts, fixed PDF time metadata, readable text, and page numbers.
+Tables can span multiple pages, including tables that Pandoc wraps in figures.
+Table headers repeat on continuation pages when Pandoc emits a table header.
 Raw executable markup, external images, author metadata, and Typst attributes
 cannot control rendering. Unsupported conversion produces an error instead of
 silently dropping content. No tools or fonts are downloaded during export.
