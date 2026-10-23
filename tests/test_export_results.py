@@ -705,6 +705,14 @@ def test_pdf_rejects_external_images_and_renders_code_as_text() -> None:
     assert 'read("/etc/passwd")' in text
 
 
+@pytest.mark.skipif(shutil.which("pandoc") is None, reason="PDF integration requires host Pandoc")
+@pytest.mark.parametrize("notation", ["3(e^(−2s)−e^(−5s))/s", "C~Ai~(s)"])
+def test_pdf_preserves_plain_text_exponents_and_subscripts(notation: str) -> None:
+    rendered = feedback_pdf.render_pdf(f"The expression is {notation}.")
+    text = " ".join(page.extract_text() for page in PdfReader(io.BytesIO(rendered)).pages)
+    assert f"The expression is {notation}." in text
+
+
 @pytest.mark.parametrize(
     ("source", "expected"),
     [

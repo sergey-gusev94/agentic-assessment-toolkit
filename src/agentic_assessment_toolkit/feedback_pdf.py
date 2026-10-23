@@ -73,6 +73,22 @@ def _clean(node: Any) -> Any:
     if isinstance(node, dict):
         if node.get("t") in {"RawBlock", "RawInline", "Image"}:
             raise FeedbackRenderError("feedback must use text, tables, code, and equations only")
+        if node.get("t") == "Str" and "~" in node["c"]:
+            # Pandoc's Typst writer emits a text tilde as a nonbreaking space.
+            # Only this fixed escape is raw markup; author markup is rejected above.
+            return {
+                "t": "Span",
+                "c": [
+                    ["", [], []],
+                    [
+                        {"t": "RawInline", "c": ["typst", r"\~"]}
+                        if part == "~"
+                        else {"t": "Str", "c": part}
+                        for part in re.split(r"(~)", node["c"])
+                        if part
+                    ],
+                ],
+            }
         cleaned = {key: _clean(value) for key, value in node.items()}
         if node.get("t") == "Math":
             cleaned["c"][1] = _normalize_math(cleaned["c"][1])
@@ -95,7 +111,7 @@ def render_pdf(markdown: str) -> bytes:
     document = json.loads(
         _pandoc(
             markdown,
-            "markdown-raw_tex-raw_html-raw_attribute-yaml_metadata_block"
+            "markdown-raw_tex-raw_html-raw_attribute-yaml_metadata_block-superscript-subscript"
             "-pandoc_title_block+tex_math_single_backslash",
             "json",
         )

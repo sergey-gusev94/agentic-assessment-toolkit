@@ -1526,6 +1526,10 @@ require review. Pandoc 3.1.2 or later parses Markdown, tables, and TeX equations
 and translates them to Typst. Within parsed equations, the renderer converts
 grouped legacy roman declarations such as `{\rm prod}` to `\mathrm{prod}` before
 translation. Prose, code examples, and stored feedback are unchanged.
+Outside TeX equations, caret and tilde notation stays literal rather than
+being parsed as Markdown superscripts or subscripts. Expressions such as
+`e^(−2s)` and `C~Ai~(s)` remain readable text and cannot become invalid
+Typst function calls.
 The installed Typst Python package compiles locally
 using bundled fonts, fixed PDF time metadata, readable text, and page numbers.
 Tables can span multiple pages, including tables that Pandoc wraps in figures.
