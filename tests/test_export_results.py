@@ -49,6 +49,7 @@ class ExportData:
         identity: str = "a" * 64,
         failed: bool = False,
         data: dict[str, object] | None = None,
+        assignment: str = "HW1",
     ) -> Path:
         rubric = self.root / "tasks" / job / student / "environment" / "rubric.md"
         rubric.parent.mkdir(parents=True, exist_ok=True)
@@ -69,16 +70,16 @@ class ExportData:
             "config_identity": identity,
             "items": [
                 {
-                    "item_id": f"SYN_C1/{student}/HW1",
+                    "item_id": f"SYN_C1/{student}/{assignment}",
                     "item_identity": f"{student}-{count}",
                     "task_dir_name": student,
                     "course_id": "SYN_C1",
-                    "assignment_id": "HW1",
+                    "assignment_id": assignment,
                     "student_id": student,
                     "submission_source": "student",
                     "input_hashes": {
                         "submission": sha256_dir(
-                            self.root / "submissions" / "SYN_C1" / student / "HW1"
+                            self.root / "submissions" / "SYN_C1" / student / assignment
                         ),
                         "rubric": sha256_file(rubric),
                     },
@@ -495,6 +496,237 @@ def test_bonus_above_gradebook_max_needs_confirmation(
         export_data.run(zero_missing=True)
     path = export_data.run(zero_missing=True, can_exceed=True)
     assert read_csv(path / "grades.csv")[1] == ["#alice", expected, "#"]
+
+
+@pytest.mark.parametrize(
+    ("earned", "released", "adjustment"),
+    [
+        (0, 5, 5),
+        (60, 65, 5),
+        (95, 100, 5),
+        (98, 100, 2),
+        (100, 100, 0),
+        (105, 105, 0),
+        (110, 110, 0),
+    ],
+)
+def test_earned_points_release_preserves_exam_scale_and_pdf(
+    export_data: ExportData, earned: float, released: float, adjustment: float
+) -> None:
+    output = export_data.judgment(data=grading_data([criterion("a", earned, 110)]))
+    original_result = (output / "grading_result.json").read_bytes()
+    path = export_data.run(
+        score_policy="earned-points", allow_partial=True, can_exceed=released > 100
+    )
+    assert read_csv(path / "grades.csv")[1:] == [["#alice", str(released), "#"]]
+    with zipfile.ZipFile(path / "feedback.zip") as archive:
+        document = archive.read(export_data.folder + "/feedback.pdf").decode()
+    assert f"Final academic grade: {released} / 100 ({released}%)" in document
+    assert f"AI grading adjustment adds {adjustment} points" in document
+    assert "Raw earned points are not rescaled" in document
+    assert "score is scaled" not in document
+    manifest = json.loads((path / "manifest.json").read_text())
+    assert manifest["score_policy"] == "earned-points"
+    assert manifest["students"][0]["raw_earned_points"] == earned
+    assert manifest["students"][0]["rubric_base_adjustment_points"] == adjustment
+    assert manifest["students"][1]["status"] == "unresolved"
+    assert (output / "grading_result.json").read_bytes() == original_result
+
+
+def test_earned_points_above_maximum_requires_can_exceed(export_data: ExportData) -> None:
+    export_data.judgment(data=grading_data([criterion("a", 105, 110)]))
+    with pytest.raises(exports.ExportError, match="--can-exceed"):
+        export_data.run(score_policy="earned-points")
+    assert not (export_data.root / "analysis").exists()
+
+
+def test_earned_points_adjustment_uses_gradebook_maximum_and_total_earned() -> None:
+    grade = exports._final_grade(
+        {"base_points": 8, "base_max": 11, "bonus_points": 1}, 10, score_policy="earned-points"
+    )
+    assert grade.points == 9.5
+    assert grade.percentage == 95
+    assert grade.rubric_base_adjustment_points == 0.5
+    grade = exports._final_grade(
+        {"base_points": 97, "base_max": 110, "bonus_points": 5}, 100, score_policy="earned-points"
+    )
+    assert grade.points == 102 and grade.rubric_base_adjustment_points == 0
+
+
+def second_variant(export_data: ExportData) -> Path:
+    archive = export_data.archive.parent / "Variant B.zip"
+    with zipfile.ZipFile(archive, "w") as z:
+        z.writestr("789-0 - bob Bob Example - Sep 2, 2026 1200 PM/answer.txt", "Bob's balance")
+    normalized = export_data.root / "submissions/SYN_C1/S002/HW1B"
+    normalized.mkdir(parents=True)
+    (normalized / "answer.txt").write_text("Bob's balance")
+    with (export_data.root / "tables/SYN_C1/students.csv").open("a") as f:
+        f.write("S002,SYN_C1,789,bob,Bob Example,brightspace\n")
+    export_data.judgment(
+        "variant-b",
+        student="S002",
+        assignment="HW1B",
+        data=grading_data([criterion("b", 98, 110)]),
+    )
+    return archive
+
+
+def test_cli_combines_variants_without_zeroing_other_students(
+    export_data: ExportData, capsys: pytest.CaptureFixture[str]
+) -> None:
+    export_data.judgment(data=grading_data([criterion("a", 60, 110)]))
+    archive_b = second_variant(export_data)
+    with export_data.roster.open("a") as f:
+        f.write("#carol,,#\n")
+    original_zip = export_data.archive.read_bytes()
+    result = cli.main(
+        [
+            "export-results",
+            "--data-root",
+            str(export_data.root),
+            "--course",
+            "SYN_C1",
+            "--variant",
+            f"HW1={export_data.archive}",
+            "--variant",
+            f"HW1B={archive_b}",
+            "--brightspace-assignment-id",
+            "9876",
+            "--score-policy",
+            "earned-points",
+            "--config",
+            "judge",
+            "--context-from",
+            "grader",
+            "--gradings",
+            "3",
+            "--grade-export",
+            str(export_data.roster),
+            "--allow-partial",
+        ]
+    )
+    assert result == 0
+    output = capsys.readouterr().out
+    assert "graded: 2" in output and "unresolved: 1" in output
+    assert "feedback_HW1.zip" in output and "feedback_HW1B.zip" in output
+    assert "scaled" not in output
+    path = next((export_data.root / "analysis/exports").iterdir())
+    assert read_csv(path / "grades.csv") == [
+        ["Username", "Assignment 1 Points Grade", "End-of-Line Indicator"],
+        ["#alice", "65", "#"],
+        ["#bob", "100", "#"],
+    ]
+    for assignment, folder, score in [
+        ("HW1", "123-9876 - Alice Example", "65"),
+        ("HW1B", "789-9876 - Bob Example", "100"),
+    ]:
+        with zipfile.ZipFile(path / f"feedback_{assignment}.zip") as archive:
+            assert archive.namelist() == [folder + "/feedback.pdf"]
+            document = archive.read(archive.namelist()[0]).decode()
+            assert f"Final academic grade: {score} / 100" in document
+            assert f"Source assessment:** {assignment}" in document
+    manifest = json.loads((path / "manifest.json").read_text())
+    assert manifest["variants"] == ["HW1", "HW1B"]
+    assert manifest["brightspace_assignment_id"] == "9876"
+    assert [s["status"] for s in manifest["students"]] == ["graded", "graded", "unresolved"]
+    assert manifest["students"][0]["source_folder"] == export_data.folder
+    assert set(manifest["outputs"]) == {"grades.csv", "feedback_HW1.zip", "feedback_HW1B.zip"}
+    assert export_data.archive.read_bytes() == original_zip
+
+
+def test_duplicate_student_across_versions_blocks_combined_export(export_data: ExportData) -> None:
+    export_data.judgment()
+    with pytest.raises(exports.ExportError, match="duplicate student across variants"):
+        export_data.run(
+            assignment_id=None,
+            submission_zips=None,
+            variants={"HW1": [export_data.archive], "HW1B": [export_data.archive]},
+            brightspace_assignment_id="9876",
+            allow_partial=True,
+        )
+    assert not (export_data.root / "analysis").exists()
+
+
+def test_variant_trial_selection_is_scoped_to_the_source_assignment(
+    export_data: ExportData,
+) -> None:
+    export_data.judgment()
+    archive_b = second_variant(export_data)
+    export_data.judgment(
+        "variant-b-repeat",
+        student="S002",
+        assignment="HW1B",
+        data=grading_data([criterion("b", 95, 110)]),
+    )
+    path = export_data.run(
+        assignment_id=None,
+        submission_zips=None,
+        variants={"HW1": [export_data.archive], "HW1B": [archive_b]},
+        brightspace_assignment_id="9876",
+        trials=["variant-b-repeat/trial1"],
+        score_policy="earned-points",
+    )
+    manifest = json.loads((path / "manifest.json").read_text())
+    assert [e["trial"] for e in manifest["students"]] == ["job1/trial1", "variant-b-repeat/trial1"]
+
+
+def test_prepared_scan_placeholder_requires_explicit_feedback_destination(
+    export_data: ExportData,
+) -> None:
+    export_data.folder = export_data.folder.replace("123-456", "123-0")
+    with zipfile.ZipFile(export_data.archive, "w") as z:
+        z.writestr(export_data.folder + "/answer.txt", "A balance equation.")
+    export_data.judgment()
+    with pytest.raises(exports.ExportError, match="placeholder assignment ID 0"):
+        export_data.run(zero_missing=True)
+    path = export_data.run(zero_missing=True, brightspace_assignment_id="9876")
+    with zipfile.ZipFile(path / "feedback.zip") as z:
+        assert z.namelist() == ["123-9876 - Alice Example/feedback.pdf"]
+
+
+def test_invalid_variant_never_receives_a_zero_or_partial_feedback(export_data: ExportData) -> None:
+    export_data.judgment()
+    archive_b = second_variant(export_data)
+    (export_data.root / "submissions/SYN_C1/S002/HW1B/answer.txt").write_text("Changed work")
+    options: dict[str, Any] = {
+        "assignment_id": None,
+        "submission_zips": None,
+        "variants": {"HW1": [export_data.archive], "HW1B": [archive_b]},
+        "brightspace_assignment_id": "9876",
+        "score_policy": "earned-points",
+        "zero_missing": True,
+    }
+    with pytest.raises(exports.ExportError, match="ZIP content differs"):
+        export_data.run(**options)
+    assert not (export_data.root / "analysis").exists()
+    path = export_data.run(**options, allow_partial=True)
+    assert read_csv(path / "grades.csv")[1:] == [["#alice", "14", "#"]]
+    assert not (path / "feedback_HW1B.zip").exists()
+    manifest = json.loads((path / "manifest.json").read_text())
+    assert manifest["students"][1]["status"] == "unresolved"
+    assert "grade" not in manifest["students"][1]
+
+
+@pytest.mark.parametrize("destination", ["0", "../9876", "9876/2", "db=9876", "-1"])
+def test_invalid_brightspace_destination_is_rejected(
+    export_data: ExportData, destination: str
+) -> None:
+    with pytest.raises(exports.ExportError, match="positive numeric"):
+        export_data.run(brightspace_assignment_id=destination)
+    assert not (export_data.root / "analysis").exists()
+
+
+def test_variant_requires_shared_destination_and_exclusive_source_options(
+    export_data: ExportData,
+) -> None:
+    with pytest.raises(exports.ExportError, match="cannot be combined"):
+        export_data.run(variants={"HW1": [export_data.archive]})
+    with pytest.raises(exports.ExportError, match="requires --brightspace-assignment-id"):
+        export_data.run(
+            assignment_id=None, submission_zips=None, variants={"HW1": [export_data.archive]}
+        )
+    with pytest.raises(exports.ExportError, match="--feedback-only cannot be combined"):
+        export_data.run(feedback_only=True, score_policy="earned-points")
 
 
 def test_render_failure_leaves_no_upload_snapshot(

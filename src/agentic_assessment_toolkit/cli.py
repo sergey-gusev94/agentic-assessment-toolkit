@@ -321,7 +321,28 @@ def _build_parser() -> argparse.ArgumentParser:
         "export-results", help="export final judgments as feedback.zip, optionally with grades.csv"
     )
     export.add_argument("--course", required=True, metavar="ID")
-    export.add_argument("--assignment", required=True, metavar="ID")
+    export.add_argument("--assignment", metavar="ID")
+    export.add_argument(
+        "--variant",
+        action="append",
+        metavar="ID=ZIP",
+        help="combine assignment versions into one grade item, with one feedback ZIP per ID (repeatable)",
+    )
+    export.add_argument(
+        "--brightspace-assignment-id",
+        metavar="ID",
+        help="destination assignment's numeric db= ID; required for variants and prepared scan packages",
+    )
+    export.add_argument(
+        "--score-policy",
+        choices=["scaled", "earned-points"],
+        default="scaled",
+        help=(
+            "scaled: adjust rubric base then scale to the gradebook maximum (default); "
+            "earned-points: retain raw earned points, add up to 5%% of the gradebook maximum, "
+            "and preserve earned scores above it"
+        ),
+    )
     export.add_argument("--config", required=True, help="stored final judge config name")
     export.add_argument("--context-from", required=True, help="stored initial grader config name")
     export.add_argument("--gradings", required=True, type=_positive_int, metavar="N")
@@ -350,7 +371,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     export.add_argument(
         "--submissions-zip",
-        required=True,
         action="append",
         metavar="ZIP",
         help="original Brightspace download for this assignment (repeatable)",
@@ -529,6 +549,14 @@ def _run_init_data(args: argparse.Namespace) -> int:
 
 def _run_export_results(args: argparse.Namespace) -> int:
     root = data_root_mod.resolve_data_root(args.data_root)
+    variants: dict[str, list[Path]] | None = None
+    if args.variant is not None:
+        variants = {}
+        for value in args.variant:
+            source_id, separator, filename = value.partition("=")
+            if not separator or not source_id or not filename:
+                raise CliError("--variant must have the form ID=ZIP")
+            variants.setdefault(source_id, []).append(Path(filename))
     try:
         path = export_mod.export_results(
             root,
@@ -539,7 +567,10 @@ def _run_export_results(args: argparse.Namespace) -> int:
             gradings=args.gradings,
             grade_export=Path(args.grade_export) if args.grade_export else None,
             feedback_only=args.feedback_only,
-            submission_zips=[Path(p) for p in args.submissions_zip],
+            submission_zips=[Path(p) for p in args.submissions_zip or []],
+            variants=variants,
+            brightspace_assignment_id=args.brightspace_assignment_id,
+            score_policy=args.score_policy,
             out_root=Path(args.out) if args.out else None,
             config_identity=args.config_identity,
             context_identity=args.context_config_identity,
@@ -568,13 +599,15 @@ def _run_export_results(args: argparse.Namespace) -> int:
         elif (
             entry["status"] == "graded"
             and not args.feedback_only
+            and manifest["score_policy"] == "scaled"
             and entry["rubric_base_max"] != manifest["gradebook_maximum"]
         ):
             print(
                 f"  scaled {entry['username']}: rubric maximum {entry['rubric_base_max']} "
                 f"to gradebook maximum {manifest['gradebook_maximum']}"
             )
-    print("Upload feedback.zip through the assignment's Add Feedback Files.")
+    feedback_archives = [name for name in manifest["outputs"] if name.endswith(".zip")]
+    print(f"Upload {', '.join(feedback_archives)} through the assignment's Add Feedback Files.")
     if not args.feedback_only:
         print("Import grades.csv through Grades > Enter Grades > Import.")
     if args.feedback_only:

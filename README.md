@@ -263,7 +263,42 @@ creates a new snapshot, including when you rerun the same command after grading
 more students. Read [the export contract](docs/design.md#brightspace-results-export)
 for selection, validation, and PDF details.
 
-Upload **feedback.zip** through the assignment's **Add Feedback Files**. Import
+For alternative versions of one assessment, use repeated `--variant ID=ZIP`
+options instead of `--assignment` and `--submissions-zip`. Repeating an ID
+adds another download for that version. This exports one combined `grades.csv`
+and a separate `feedback_<ID>.zip` per version, all addressed to the same
+Brightspace assignment. A student appearing in more than one version blocks
+export. The destination's numeric `db=` ID is required:
+
+```bash
+aat export-results --course COURSE_ID \
+  --variant 'EXAM1=/path/to/Exam A.zip' \
+  --variant 'EXAM1B=/path/to/Exam B.zip' \
+  --brightspace-assignment-id 12345 \
+  --config codex-judge-luna6-max \
+  --context-from codex-grader-luna6-max --gradings 5 \
+  --grade-export '/path/to/Exam grade export.csv' \
+  --score-policy earned-points --allow-partial
+```
+
+The default `--score-policy scaled` retains the ordinary adjustment and scale
+conversion. Select `earned-points` when rubric points already use the course's
+earned-point scale, such as 110 available points graded out of 100. It adds up
+to 5% of the gradebook maximum, stops the adjustment at that maximum, and
+preserves earned totals above it without rescaling. With a 100-point grade item,
+60 becomes 65, 98 becomes 100, and 105 stays 105. Scores above the maximum still
+require `--can-exceed` and the corresponding Brightspace setting.
+
+The destination override changes feedback folder names only. It retains each
+student's internal LMS person ID and uses the destination assignment ID;
+source archives, normalized submissions, and recorded gradings stay unchanged.
+Prepared scan archives with placeholder assignment ID `0` require this override.
+No student upload is required to construct these feedback folders; verify
+attachment for one student in the target Brightspace instance before bulk release.
+`--allow-partial` omits unresolved recipients from the CSV and ZIPs, records
+them in `manifest.json`, and never substitutes zero. Review those omissions.
+
+Upload the **feedback ZIPs** through the assignment's **Add Feedback Files**. Import
 **grades.csv** through **Grades > Enter Grades > Import**, matching the existing
 grade item. Keep **manifest.json** locally. Review both files before import:
 Brightspace synchronizes imported grades for linked assignments as published

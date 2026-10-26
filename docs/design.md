@@ -1435,22 +1435,29 @@ backfill script if a browsable cross-experiment UI is ever needed
 
 ### Brightspace results export
 
-`aat export-results` exports one course assignment for the 2026 Brightspace
-file-submission workflow. It reads stored final judgments, original Brightspace
-download ZIPs and the ingest identity table. The command requires either an
+`aat export-results` exports one course assignment, or alternative versions of
+one assessment, for the 2026 Brightspace workflow. It reads stored final judgments,
+Brightspace download ZIPs or prepared scan packages using the same layout,
+and the ingest identity table. The command requires either an
 actual Brightspace grade-export CSV (`--grade-export`) for a gradebook export,
 or `--feedback-only` for diagnostic feedback without a gradebook item.
 It makes no model calls and never uploads or publishes anything.
+For a single assignment, use `--assignment ID` and repeated `--submissions-zip`.
+For alternative versions, use repeated `--variant ID=ZIP` instead; multiple ZIPs
+for one ID merge by the ordinary ingest rules. Versions share one grade item
+and require `--brightspace-assignment-id`, the destination's positive numeric
+`db=` ID. A duplicate username or internal person ID across versions is an error,
+including under `--allow-partial`; no version is selected by order or recency.
 The command's name and context selectors refer to stored config names, not
 current TOML files. This lets export reproduce stored work after prompts change.
 
-Selection spans all matching jobs for `--course`, `--assignment`, `--config`,
+Selection spans all matching jobs for `--course`, each source assignment, `--config`,
 and `--context-from`. Config names must each resolve to one stored identity;
 `--config-identity` and `--context-config-identity` disambiguate hashes. Eligible
 judgments are completed student gradings with readable results, exactly
 `--gradings N` prior trials, and no superseded flag. There must be exactly one
-eligible judgment per student. Repeated `--trial JOB/TRIAL` options explicitly
-choose judgments for students with several candidates; other students retain
+eligible judgment per student and source assignment. Repeated `--trial JOB/TRIAL`
+options explicitly choose judgments for students with several candidates; other students retain
 their single candidate. Scores are never averaged or selected by recency.
 
 The grade-export CSV supplies Username, exactly one numeric Points Grade column
@@ -1479,14 +1486,27 @@ and the selected judge's recorded submission input. Identity mappings must agree
 on LMS person ID and username. The most recent upload folder receives one
 `feedback.pdf` for the combined submission. Original student files are not included
 in the feedback ZIP. Downloads with other layouts or multiple LMS assignment IDs
-are rejected. When an upload selection exists, its folder receives the feedback.
+within one source version are rejected. When an upload selection exists, its
+folder receives the feedback unless an explicit destination ID overrides it.
 Group assignments and students lacking a Brightspace identity
 mapping are not supported.
+
+`--brightspace-assignment-id` also works for a single source assignment. It
+addresses feedback folders as `<internal person ID>-<destination ID> - <display name>`,
+using the verified identity and a shared destination while preserving every
+source archive and normalized submission. Internal person IDs are distinct from
+usernames and Org Defined IDs. A source folder with placeholder assignment ID
+`0` cannot be exported without this override. Prepared scans therefore remain
+usable as provenance without being mistaken for actual LMS assignment metadata.
+These folders can attach feedback to an assignment without existing uploads;
+the maintainer verifies one recipient in the target Brightspace instance before
+bulk release. The exporter performs no LMS writes.
 
 The exporter revalidates the grading JSON, nonempty justification and feedback,
 and criterion IDs, maxima, and bonus flags against the hash-checked materialized
 rubric. It recomputes totals from criteria using the shared grading schema;
-authored sum discrepancies remain recorded diagnostics. Gradebook exports add
+authored sum discrepancies remain recorded diagnostics. The default
+`--score-policy scaled` gradebook exports add
 5% of the rubric base maximum to earned base points, cap that adjusted base at
 the base maximum, then add earned assignment bonus points:
 
@@ -1502,15 +1522,46 @@ becomes 80/100, 97/100 becomes 100/100, and 8/10 becomes 8.5/10. A base score of
 export; stored grading artifacts, criterion scores, and report statistics retain
 their raw scores. A graded submission earning zero receives the adjustment.
 Numbers are written with up to six decimal places, consistently in the generated
-grade summary and CSV. A scale conversion is printed and recorded. Scores above
+grade summary and CSV. A scale conversion is printed and recorded when applied. Scores above
 the gradebook maximum require `--can-exceed`, confirming that the operator enabled
 Brightspace's Can Exceed setting; earned assignment bonuses are never capped.
+
+`--score-policy earned-points` selects a different release rule for gradebook
+exports whose raw rubric points already use the target point scale. It sums
+all earned base and bonus points and applies:
+
+```text
+earned = base_points + bonus_points
+adjustment = min(0.05 * gradebook_maximum, max(0, gradebook_maximum - earned))
+csv_grade = earned + adjustment
+```
+
+No scaling from the rubric maximum occurs. For a 100-point grade item with
+110 ordinary points available, 60 becomes 65, 98 becomes 100, and 105 stays
+105. The PDF summary uses the same released grade as the CSV, states the actual
+adjustment and its cap, and preserves the raw criterion table and totals.
+The option does not apply human regrades or staff administrative deductions;
+it cannot be combined with `--feedback-only`. Stored gradings and report
+percentages retain their original rubric denominator. Earned scores above the
+gradebook maximum still require `--can-exceed`.
 
 Feedback-only exports show the sum of earned base and bonus points against the
 materialized rubric's base maximum, with its corresponding percentage. They
 apply no grade adjustment or gradebook scaling. Earned bonus points may take
 the diagnostic score above the base maximum without `--can-exceed`. Stored
 grading artifacts remain unchanged.
+
+Single-assignment exports produce `feedback.zip`. Variant exports produce
+`feedback_<assignment ID>.zip` for each source version with included feedback
+and one combined `grades.csv` when a grade-export CSV is supplied. Every included
+student appears only once in the grades CSV. All files are staged together;
+a rendering failure leaves no upload snapshot. The staff manifest records each
+recipient's source assignment, source folder, destination ZIP and file, raw
+points, released grade, adjustment, trial and input hashes. It also records the
+score policy, shared destination ID, all source ZIPs and the roster CSV, and
+lists omitted recipients. Roster users without a submitted version require
+an explicit omission or missing-work decision; one version never writes zeros
+for students who took the other.
 
 Each PDF contains the course ID, assignment grade-item name, student name and
 username, final academic grade and percentage, raw base and bonus totals, the

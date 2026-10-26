@@ -12,7 +12,7 @@ import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 import pandas as pd
@@ -26,6 +26,7 @@ from .results import load_results
 from .rubric import RubricError, parse_rubric_file
 
 _BASE_ADJUSTMENT_FRACTION = 0.05
+ScorePolicy = Literal["scaled", "earned-points"]
 
 
 class ExportError(Exception):
@@ -46,7 +47,17 @@ class FinalGrade:
     rubric_base_adjustment_points: float
 
 
-def _final_grade(sums: dict[str, float], maximum: float) -> FinalGrade:
+def _final_grade(
+    sums: dict[str, float], maximum: float, *, score_policy: ScorePolicy = "scaled"
+) -> FinalGrade:
+    if score_policy == "earned-points":
+        earned = sums["base_points"] + sums["bonus_points"]
+        adjustment = min(_BASE_ADJUSTMENT_FRACTION * maximum, max(0, maximum - earned))
+        return FinalGrade(
+            points=earned + adjustment,
+            percentage=(earned + adjustment) / maximum * 100,
+            rubric_base_adjustment_points=adjustment,
+        )
     adjusted_base = min(
         sums["base_points"] + _BASE_ADJUSTMENT_FRACTION * sums["base_max"],
         sums["base_max"],
@@ -109,7 +120,7 @@ def read_grade_template(path: Path) -> GradeTemplate:
 def _select_trials(
     frame: pd.DataFrame,
     course_id: str,
-    assignment_id: str,
+    assignment_ids: list[str],
     config_name: str,
     context_name: str,
     gradings: int,
@@ -121,7 +132,7 @@ def _select_trials(
         (frame["stage"] == "grade")
         & (frame["submission_source"] == "student")
         & (frame["course_id"] == course_id)
-        & (frame["assignment_id"] == assignment_id)
+        & frame["assignment_id"].isin(assignment_ids)
         & (frame["config_name"] == config_name)
         & (frame["context_config_name"] == context_name)
         & frame["context_config_identity"].notna()
@@ -247,6 +258,8 @@ def feedback_document(
     grade: FinalGrade,
     *,
     diagnostic: bool = False,
+    score_policy: ScorePolicy = "scaled",
+    source_assignment: str | None = None,
 ) -> str:
     sums = grading_schema.computed_sums(data)
     lines = [
@@ -264,11 +277,24 @@ def feedback_document(
         f"Bonus points: {_number(sums['bonus_points'])} / {_number(sums['bonus_max'])}.",
         "",
     ]
+    if source_assignment is not None:
+        lines.extend([f"**Source assessment:** {_text(source_assignment)}", ""])
     if diagnostic:
         lines.extend(
             [
                 "This diagnostic score uses raw rubric points, including earned bonus points. "
                 "It is not a course grade or an approval decision.",
+                "",
+            ]
+        )
+    elif score_policy == "earned-points":
+        lines.extend(
+            [
+                f"The AI grading adjustment adds {_number(grade.rubric_base_adjustment_points)} "
+                f"points, up to {_number(_BASE_ADJUSTMENT_FRACTION * maximum)} points "
+                f"(5% of {_number(maximum)}). The adjustment stops at {_number(maximum)}; "
+                "earned totals above that boundary are retained. "
+                "Raw earned points are not rescaled.",
                 "",
             ]
         )
@@ -282,7 +308,7 @@ def feedback_document(
                 "",
             ]
         )
-    if not diagnostic and not math.isclose(sums["base_max"], maximum):
+    if not diagnostic and score_policy == "scaled" and not math.isclose(sums["base_max"], maximum):
         lines.extend(
             [
                 f"The rubric score is scaled to the gradebook maximum of {_number(maximum)} points.",
@@ -305,12 +331,15 @@ def export_results(
     root: Path,
     *,
     course_id: str,
-    assignment_id: str,
+    assignment_id: str | None = None,
     config_name: str,
     context_name: str,
     gradings: int,
     grade_export: Path | None = None,
-    submission_zips: list[Path],
+    submission_zips: list[Path] | None = None,
+    variants: dict[str, list[Path]] | None = None,
+    brightspace_assignment_id: str | None = None,
+    score_policy: ScorePolicy = "scaled",
     feedback_only: bool = False,
     out_root: Path | None = None,
     config_identity: str | None = None,
@@ -328,14 +357,35 @@ def export_results(
     without a gradebook roster, adjustment, or grades CSV.
     """
     _safe_component(course_id)
-    _safe_component(assignment_id)
+    if variants is not None:
+        if assignment_id is not None or submission_zips:
+            raise ExportError("--variant cannot be combined with --assignment or --submissions-zip")
+        if not variants or any(not paths for paths in variants.values()):
+            raise ExportError("each --variant needs an assignment ID and submission ZIP")
+        if brightspace_assignment_id is None:
+            raise ExportError(
+                "--variant requires --brightspace-assignment-id for the shared destination"
+            )
+        sources = variants
+    elif assignment_id is not None and submission_zips:
+        sources = {assignment_id: submission_zips}
+    else:
+        raise ExportError("provide --assignment with --submissions-zip, or --variant ID=ZIP")
+    for source_id in sources:
+        _safe_component(source_id)
+    if brightspace_assignment_id is not None and (
+        re.fullmatch(r"[1-9][0-9]*", brightspace_assignment_id) is None
+    ):
+        raise ExportError("--brightspace-assignment-id must be a positive numeric assignment ID")
+    if score_policy not in {"scaled", "earned-points"}:
+        raise ExportError("unknown score policy; choose scaled or earned-points")
     if gradings < 1:
         raise ExportError("--gradings must be positive")
     if feedback_only:
-        if grade_export is not None or zero_missing or can_exceed:
+        if grade_export is not None or zero_missing or can_exceed or score_policy != "scaled":
             raise ExportError(
                 "--feedback-only cannot be combined with --grade-export, --zero-missing, "
-                "or --can-exceed"
+                "--can-exceed, or --score-policy earned-points"
             )
     elif grade_export is None:
         raise ExportError("provide --grade-export or select --feedback-only")
@@ -358,11 +408,26 @@ def export_results(
             )
     template = read_grade_template(grade_export) if grade_export is not None else None
     raw_dir = root / "raw-submissions" / course_id
-    selections = ingest.read_upload_selections(raw_dir, assignment_id)
-    submissions = ingest.read_brightspace_submissions(submission_zips, selections=selections)
-    by_username = {_username(s.username): s for s in submissions}
-    if len(by_username) != len(submissions):
-        raise ExportError("multiple Brightspace person IDs share a username")
+    by_username: dict[str, tuple[str, ingest.BrightspaceSubmission]] = {}
+    seen_people: set[str] = set()
+    for source_id, paths in sources.items():
+        selections = ingest.read_upload_selections(raw_dir, source_id)
+        submissions = ingest.read_brightspace_submissions(paths, selections=selections)
+        for submission in submissions:
+            username = _username(submission.username)
+            if username in by_username or submission.person_id in seen_people:
+                raise ExportError(
+                    "duplicate student across variants or conflicting Brightspace identity"
+                )
+            if brightspace_assignment_id is None and submission.folder.split(" - ", 1)[0].endswith(
+                "-0"
+            ):
+                raise ExportError(
+                    "submission ZIP has placeholder assignment ID 0; "
+                    "provide --brightspace-assignment-id before returning feedback"
+                )
+            by_username[username] = (source_id, submission)
+            seen_people.add(submission.person_id)
     if template is not None:
         unexpected = set(by_username) - set(template.usernames)
         if unexpected:
@@ -370,7 +435,7 @@ def export_results(
     recipients = (
         template.usernames
         if template is not None
-        else {username: submission.username for username, submission in by_username.items()}
+        else {username: submission.username for username, (_, submission) in by_username.items()}
     )
     students = ingest.read_students(root, course_id)
     if not students:
@@ -388,7 +453,7 @@ def export_results(
     known_student_ids = set(
         all_trials.loc[
             (all_trials["course_id"] == course_id)
-            & (all_trials["assignment_id"] == assignment_id)
+            & all_trials["assignment_id"].isin(sources)
             & (all_trials["submission_source"] == "student"),
             "student_id",
         ].dropna()
@@ -396,7 +461,7 @@ def export_results(
     frame = _select_trials(
         all_trials,
         course_id,
-        assignment_id,
+        list(sources),
         config_name,
         context_name,
         gradings,
@@ -405,16 +470,19 @@ def export_results(
         trials or [],
     )
     entries: list[dict[str, Any]] = []
-    documents: list[tuple[str, str]] = []
+    documents: list[tuple[str, str, str]] = []
     for username, original in recipients.items():
         entry: dict[str, Any] = {"username": original}
         entries.append(entry)
         student = mapped.get(username)
-        submission = by_username.get(username)
-        if submission is None:
+        source = by_username.get(username)
+        if source is None:
             # An incomplete ZIP cannot erase work already known to the toolkit.
             known = student is not None and (
-                (root / "submissions" / course_id / student.student_id / assignment_id).exists()
+                any(
+                    (root / "submissions" / course_id / student.student_id / source_id).exists()
+                    for source_id in sources
+                )
                 or student.student_id in known_student_ids
             )
             if zero_missing and not known:
@@ -431,16 +499,20 @@ def export_results(
                     ),
                 )
             continue
+        source_id, submission = source
+        entry["assignment_id"] = source_id
         try:
             if student is None or student.lms_person_id != submission.person_id:
                 raise ExportError("missing or mismatched identity mapping; run ingest-submissions")
             _safe_component(student.student_id)
-            normalized = root / "submissions" / course_id / student.student_id / assignment_id
+            normalized = root / "submissions" / course_id / student.student_id / source_id
             if not normalized.is_dir() or sha256_dir(normalized) != submission.sha256:
                 raise ExportError(
                     "ZIP content differs from the normalized submission; check ingest inputs"
                 )
-            selected = frame.loc[frame["student_id"] == student.student_id]
+            selected = frame.loc[
+                (frame["student_id"] == student.student_id) & (frame["assignment_id"] == source_id)
+            ]
             if len(selected) != 1:
                 refs = ", ".join(selected["reference"])
                 raise ExportError(
@@ -453,7 +525,7 @@ def export_results(
             sums = grading_schema.computed_sums(data)
             maximum = template.maximum if template is not None else sums["base_max"]
             grade = (
-                _final_grade(sums, maximum)
+                _final_grade(sums, maximum, score_policy=score_policy)
                 if template is not None
                 else FinalGrade(
                     points=sums["base_points"] + sums["bonus_points"],
@@ -468,20 +540,29 @@ def export_results(
                     "grade exceeds the gradebook maximum; enable Can Exceed in Brightspace "
                     "and confirm with --can-exceed"
                 )
-            archive_name = submission.folder + "/feedback.pdf"
+            feedback_folder = (
+                f"{submission.person_id}-{brightspace_assignment_id} - {submission.display_name}"
+                if brightspace_assignment_id is not None
+                else submission.folder
+            )
+            _safe_component(feedback_folder)
+            archive_name = feedback_folder + "/feedback.pdf"
+            archive_file = f"feedback_{source_id}.zip" if variants is not None else "feedback.zip"
             document = feedback_document(
                 course_id,
                 template.column.removesuffix(" Points Grade")
                 if template is not None
-                else assignment_id,
+                else source_id,
                 student,
                 data,
                 feedback,
                 maximum,
                 grade,
                 diagnostic=feedback_only,
+                score_policy=score_policy,
+                source_assignment=source_id if variants is not None else None,
             )
-            documents.append((archive_name, document))
+            documents.append((archive_file, archive_name, document))
             entry.update(
                 status="graded",
                 grade=_number(grade.points),
@@ -492,8 +573,11 @@ def export_results(
                 context_config_identity=row["context_config_identity"],
                 prior_trials=row["prior_trials"],
                 feedback_file=archive_name,
+                feedback_archive=archive_file,
+                source_folder=submission.folder,
                 hashes=hashes,
                 rubric_base_max=sums["base_max"],
+                raw_earned_points=sums["base_points"] + sums["bonus_points"],
                 rubric_base_adjustment_points=grade.rubric_base_adjustment_points,
                 sums_consistent=grading_schema.sums_report(data)["consistent"],
             )
@@ -514,7 +598,10 @@ def export_results(
     included = [entry for entry in entries if entry["status"] != "unresolved"]
     if not included:
         raise ExportError("no results are ready to export")
-    inputs = [*submission_zips, root / "tables" / course_id / ingest.STUDENTS_CSV]
+    inputs = [
+        *(path for paths in sources.values() for path in paths),
+        root / "tables" / course_id / ingest.STUDENTS_CSV,
+    ]
     if grade_export is not None:
         inputs.insert(0, grade_export)
     selection_manifest = raw_dir / ingest.MANIFEST_FILENAME
@@ -525,6 +612,9 @@ def export_results(
         "toolkit_version": __version__,
         "course_id": course_id,
         "assignment_id": assignment_id,
+        "variants": list(sources) if variants is not None else None,
+        "brightspace_assignment_id": brightspace_assignment_id,
+        "score_policy": score_policy,
         "config_name": config_name,
         "context_config_name": context_name,
         "gradings": gradings,
@@ -543,15 +633,21 @@ def export_results(
         staging = Path(temporary) / "result"
         staging.mkdir()
         try:
-            with zipfile.ZipFile(staging / "feedback.zip", "w", zipfile.ZIP_DEFLATED) as archive:
-                for name, document in documents:
-                    pdf = render_pdf(document)
-                    info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
-                    info.compress_type = zipfile.ZIP_DEFLATED
-                    archive.writestr(info, pdf)
+            archive_files = sorted({archive_file for archive_file, _, _ in documents})
+            if not archive_files and variants is None:
+                archive_files = ["feedback.zip"]
+            for archive_file in archive_files:
+                with zipfile.ZipFile(staging / archive_file, "w", zipfile.ZIP_DEFLATED) as archive:
+                    for document_archive, name, document in documents:
+                        if document_archive != archive_file:
+                            continue
+                        pdf = render_pdf(document)
+                        info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                        info.compress_type = zipfile.ZIP_DEFLATED
+                        archive.writestr(info, pdf)
         except FeedbackRenderError as error:
             raise ExportError(f"no upload files written: {error}") from error
-        output_names = ["feedback.zip"]
+        output_names = archive_files
         if template is not None:
             buffer = io.StringIO(newline="")
             writer = csv.writer(buffer)
@@ -565,6 +661,7 @@ def export_results(
         (staging / "manifest.json").write_text(
             json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
         )
-        final = destination / f"{utc_stamp()}__{course_id}__{assignment_id}__{uuid4().hex[:8]}"
+        label = "combined" if variants is not None else assignment_id
+        final = destination / f"{utc_stamp()}__{course_id}__{label}__{uuid4().hex[:8]}"
         shutil.move(str(staging), final)
     return final
