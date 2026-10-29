@@ -52,8 +52,14 @@ separate deterministic `aat ingest-submissions` procedure described in
    gets a rubric, its point split taken from the highest-precedence
    source available and its source recorded per assessment
    (`rubric_provenance` in `course.toml`, the precedence order in
-   docs/data-conventions.md). Two questions carry the review:
+   docs/data-conventions.md). Three questions carry the review:
 
+   - **Whose requirements apply?** Shared materials may give different
+     requirements and point allocations for different courses or student
+     groups. Each rubric must state its scope and excluded questions where
+     these differ. Confirm that the selected submissions belong to that
+     group; the toolkit does not route students to different rubrics
+     automatically. Rubric scope does not change solver instructions.
    - **Is this the split the course graded by?** A split transcribed
      faithfully from a handout is still wrong if the course applied a
      different one. Where a graded-copy export or LMS rubric is

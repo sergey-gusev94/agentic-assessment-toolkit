@@ -289,6 +289,16 @@ Notes:
   when they say and drafted when they do not. Only the criterion
   lines are parsed; the prose is read by the grader.
 
+  When shared materials specify different requirements or point allocations
+  for different courses or student groups, each rubric states its scope near
+  the top: whose allocations apply and which questions are outside that
+  group's requirements. The rubric covers the whole assignment within that
+  scope. Other groups' required questions do not become bonus criteria.
+  `intake-notes.md` records the source and any unresolved ambiguity, but it
+  is not presented to the grader. This scope statement does not select
+  students or change solver instructions; rubric selection applies to the
+  whole grading invocation.
+
   What the prose does *not* carry is the grading policy every
   assignment shares: equivalent answers, error follow-through, one
   deduction per omission, awarding a listed level rather than a value

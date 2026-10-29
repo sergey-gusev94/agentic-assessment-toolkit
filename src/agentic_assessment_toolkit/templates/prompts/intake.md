@@ -233,11 +233,20 @@ solution; how individual graders applied a scheme (leniency on
 particular submissions, one-off adjustments, administrative deductions
 an LMS rubric carries) is never evidence.
 
-The rubric must cover the **whole assignment**. Criteria for some
-problems and none for others do not grade the assignment leniently —
-they grade a smaller assignment while the score is reported as the
-whole one. Where part of an assignment states no points, author that
-part's split like any other and say so in the notes.
+When materials give different requirements or point allocations for
+different courses or student groups, use the scheme for the course being
+processed. State that scope near the top of every rubric, including which
+group's point allocations apply and which questions are outside its
+requirements. Record the source and any unresolved scope ambiguity in
+`intake-notes.md`. Never combine the groups' allocations or treat another
+group's required questions as bonus work. The notes alone are insufficient:
+graders receive the rubric, not the intake notes.
+
+The rubric must cover the **whole assignment** for its stated scope.
+Criteria for some problems and none for others grade a smaller assignment
+while the score is reported as the whole one. Where part of an assignment
+states no points, author that part's split like any other and say so in the
+notes.
 
 Whatever the source, the rubric is a **detailed grading document**, not
 a bare list: ordinary Markdown prose plus one bullet line per criterion
