@@ -217,7 +217,9 @@ class _Plan:
 # Selection and doneness
 
 
-def list_raw_courses(root: Path, only: str | None = None) -> list[IngestCourse]:
+def list_raw_courses(
+    root: Path, only: str | None = None, assignments: set[str] | None = None
+) -> list[IngestCourse]:
     """Raw submission dumps with their processing status."""
     raw_root = root / "raw-submissions"
     if not raw_root.is_dir():
@@ -227,14 +229,24 @@ def list_raw_courses(root: Path, only: str | None = None) -> list[IngestCourse]:
         if not entry.is_dir() or (only is not None and entry.name != only):
             continue
         courses.append(
-            IngestCourse(course_id=entry.name, raw_dir=entry, status=_status(root, entry))
+            IngestCourse(
+                course_id=entry.name, raw_dir=entry, status=_status(root, entry, assignments)
+            )
         )
     return courses
 
 
-def _status(root: Path, raw_dir: Path) -> str:
+def _status(root: Path, raw_dir: Path, assignments: set[str] | None = None) -> str:
     record = read_record(root, raw_dir.name)
     if record is None:
+        return "pending"
+    processed = record.get("assignment_ids")
+    if processed is not None and (
+        assignments is None
+        or not isinstance(processed, list)
+        or not all(isinstance(value, str) for value in processed)
+        or not assignments <= set(processed)
+    ):
         return "pending"
     return "done" if record.get("raw_sha256") == sha256_dir(raw_dir) else "pending"
 
@@ -254,10 +266,19 @@ def read_record(root: Path, course_id: str) -> dict[str, object] | None:
     return loaded if isinstance(loaded, dict) else None
 
 
-def recorded_attention(record: dict[str, object] | None) -> int:
+def recorded_attention(
+    record: dict[str, object] | None, assignments: set[str] | None = None
+) -> int:
     """Skipped + frozen counts a receipt recorded for its last run."""
     if record is None:
         return 0
+    per_assignment = record.get("assignment_attention")
+    if isinstance(per_assignment, dict):
+        return sum(
+            count
+            for key, count in per_assignment.items()
+            if (assignments is None or key in assignments) and isinstance(count, int)
+        )
     counts = record.get("outcome_counts")
     if not isinstance(counts, dict):
         return 0
@@ -269,16 +290,36 @@ def recorded_attention(record: dict[str, object] | None) -> int:
     return total
 
 
-def write_record(root: Path, report: CourseReport) -> Path:
+def write_record(root: Path, report: CourseReport, assignments: set[str] | None = None) -> Path:
     counts: dict[str, int] = {}
     for outcome in report.outcomes:
         counts[outcome.status] = counts.get(outcome.status, 0) + 1
+    raw_hash = sha256_dir(root / "raw-submissions" / report.course_id)
+    previous = read_record(root, report.course_id)
+    processed = set(assignments) if assignments is not None else None
+    attention_by_assignment = {
+        assignment: sum(o.attention for o in report.outcomes if o.assignment_id == assignment)
+        for assignment in {o.assignment_id for o in report.outcomes}
+    }
+    if processed is not None and previous is not None and previous.get("raw_sha256") == raw_hash:
+        previous_scope = previous.get("assignment_ids")
+        old_attention = previous.get("assignment_attention")
+        if previous_scope is None and isinstance(old_attention, dict):
+            processed = None
+        elif isinstance(previous_scope, list) and all(
+            isinstance(value, str) for value in previous_scope
+        ):
+            processed.update(previous_scope)
+        if isinstance(old_attention, dict):
+            attention_by_assignment = {**old_attention, **attention_by_assignment}
     record = {
         "schema_version": RECORD_SCHEMA_VERSION,
         "created_utc": datetime.now(UTC).isoformat(),
         "toolkit_version": __version__,
         "course_id": report.course_id,
-        "raw_sha256": sha256_dir(root / "raw-submissions" / report.course_id),
+        "raw_sha256": raw_hash,
+        "assignment_ids": sorted(processed) if processed is not None else None,
+        "assignment_attention": attention_by_assignment,
         "outcome_counts": dict(sorted(counts.items())),
     }
     path = record_path(root, report.course_id)
@@ -629,12 +670,22 @@ def _write_students(root: Path, course_id: str, students: list[Student]) -> None
             )
 
 
-def _write_submissions_csv(root: Path, course_id: str, outcomes: list[Outcome]) -> None:
+def _write_submissions_csv(
+    root: Path, course_id: str, outcomes: list[Outcome], assignments: set[str] | None = None
+) -> None:
     path = root / "tables" / course_id / SUBMISSIONS_CSV
     path.parent.mkdir(parents=True, exist_ok=True)
+    preserved = []
+    if assignments is not None and path.is_file():
+        with path.open(encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            if reader.fieldnames != list(SUBMISSIONS_COLUMNS):
+                raise IngestError(f"{path} does not have the expected submission columns")
+            preserved = [row for row in reader if row["assignment_id"] not in assignments]
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=SUBMISSIONS_COLUMNS, lineterminator="\n")
         writer.writeheader()
+        writer.writerows(preserved)
         for outcome in sorted(
             outcomes, key=lambda o: (o.assignment_id, o.student_id, o.source_ref)
         ):
@@ -817,7 +868,28 @@ def split_gradescope_pdf(pdf_bytes: bytes) -> _SplitPdf | None:
 # Course ingest
 
 
-def ingest_course(root: Path, course_id: str) -> CourseReport:
+def validate_assignments(root: Path, course_id: str, assignments: set[str]) -> None:
+    """Validate an explicit selection even when a receipt would skip ingest."""
+    raw_dir = root / "raw-submissions" / course_id
+    manifest = _load_manifest(raw_dir)
+    known_ids = _known_assignment_ids(root, course_id)
+    available = {
+        _match_assignment(path.name, known_ids, manifest)
+        for path in raw_dir.iterdir()
+        if path.is_file() and path.suffix.lower() == ".zip"
+    }
+    _require_requested_assignments(assignments, available)
+
+
+def _require_requested_assignments(assignments: set[str], available: set[str]) -> None:
+    missing = assignments - available
+    if missing:
+        raise IngestError(
+            f"no submission ZIPs for requested assignments: {', '.join(sorted(missing))}"
+        )
+
+
+def ingest_course(root: Path, course_id: str, assignments: set[str] | None = None) -> CourseReport:
     """Process one course's raw submission dump end to end."""
     raw_dir = root / "raw-submissions" / course_id
     if not raw_dir.is_dir():
@@ -833,13 +905,17 @@ def ingest_course(root: Path, course_id: str) -> CourseReport:
             f"run `aat intake` first or map zips explicitly in {MANIFEST_FILENAME}"
         )
 
+    matched = [(path, _match_assignment(path.name, known_ids, manifest)) for path in zip_paths]
+    if assignments is not None:
+        _require_requested_assignments(assignments, {assignment for _, assignment in matched})
+        matched = [(path, assignment) for path, assignment in matched if assignment in assignments]
+
     existing_students = read_students(root, course_id)
     plan = _Plan()
     brightspace_pools: dict[tuple[str, str], list[_Upload]] = {}
     gradescope_pdfs: dict[str, dict[str, tuple[Path, str]]] = {}
 
-    for zip_path in zip_paths:
-        assignment_id = _match_assignment(zip_path.name, known_ids, manifest)
+    for zip_path, assignment_id in matched:
         with zipfile.ZipFile(zip_path) as zf:
             adapter = _detect_adapter(zip_path, zf)
             if adapter == "brightspace":
@@ -857,27 +933,32 @@ def ingest_course(root: Path, course_id: str) -> CourseReport:
             "one assignment must come from one system"
         )
 
-    unknown = manifest.upload_selections.keys() - brightspace_pools.keys()
+    selected_uploads = {
+        key: value
+        for key, value in manifest.upload_selections.items()
+        if assignments is None or key[0] in assignments
+    }
+    unknown = selected_uploads.keys() - brightspace_pools.keys()
     if unknown:
         raise IngestError(
             f"upload selections refer to absent Brightspace submissions: {sorted(unknown)}"
         )
     students = _ingest_brightspace(
-        course_id, brightspace_pools, existing_students, plan, manifest.upload_selections
+        course_id, brightspace_pools, existing_students, plan, selected_uploads
     )
     students = _ingest_gradescope(course_id, gradescope_pdfs, students, manifest, plan)
     _add_missing_rows(course_id, plan, students)
 
     _apply_plan(root, course_id, plan)
     _write_students(root, course_id, students)
-    _write_submissions_csv(root, course_id, plan.outcomes)
+    _write_submissions_csv(root, course_id, plan.outcomes, assignments)
     known = {student.student_id for student in existing_students}
     report = CourseReport(
         course_id=course_id,
         outcomes=tuple(plan.outcomes),
         students_added=tuple(s for s in students if s.student_id not in known),
     )
-    write_record(root, report)
+    write_record(root, report, assignments)
     return report
 
 

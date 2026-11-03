@@ -17,7 +17,7 @@ from uuid import uuid4
 
 import pandas as pd
 
-from . import __version__, grading_schema, ingest
+from . import __version__, enrollment, grading_schema, ingest
 from .data_root import ensure_outside_toolkit
 from .feedback_pdf import FeedbackRenderError, render_pdf
 from .harbor import read_run_record, utc_stamp
@@ -82,7 +82,10 @@ def read_grade_template(path: Path) -> GradeTemplate:
         if len(headers) != len(set(headers)):
             raise ExportError("grade export contains duplicate headers")
         matches = [
-            re.fullmatch(r"(.+ Points Grade) <Numeric MaxPoints:([^<>]+)>", h)
+            re.fullmatch(
+                r"(.+ Points Grade) <Numeric MaxPoints:([^<> ]+)(?: (?:Weight|Category|CategoryWeight):[^<>]+)?>",
+                h,
+            )
             for h in headers
             if " Points Grade" in h
         ]
@@ -469,6 +472,7 @@ def export_results(
         context_identity,
         trials or [],
     )
+    resolver = enrollment.Resolver(root)
     entries: list[dict[str, Any]] = []
     documents: list[tuple[str, str, str]] = []
     for username, original in recipients.items():
@@ -513,6 +517,20 @@ def export_results(
             selected = frame.loc[
                 (frame["student_id"] == student.student_id) & (frame["assignment_id"] == source_id)
             ]
+            policy = resolver.rubrics(course_id, source_id)
+            selected_rubric = None
+            if policy is not None:
+                selection = resolver.select(course_id, source_id, student.student_id, "default")
+                selected_rubric = (
+                    root / "courses" / course_id / "rubrics" / source_id / f"{selection.name}.md"
+                )
+                if not selected_rubric.is_file():
+                    raise ExportError(f"missing current enrollment rubric {selection.name!r}")
+                selected = selected.loc[
+                    (selected["rubric_name"] == selection.name)
+                    & (selected["rubric_sha256"] == sha256_file(selected_rubric))
+                ]
+                entry["rubric_name"] = selection.name
             if len(selected) != 1:
                 refs = ", ".join(selected["reference"])
                 raise ExportError(
@@ -587,7 +605,7 @@ def export_results(
                     "reason": submission.selection.reason,
                     "excluded_uploads": list(submission.excluded_uploads),
                 }
-        except (ExportError, OSError, ValueError, RubricError) as error:
+        except (ExportError, enrollment.EnrollmentError, OSError, ValueError, RubricError) as error:
             entry.update(status="unresolved", reason=str(error))
     unresolved = [entry for entry in entries if entry["status"] == "unresolved"]
     if unresolved and not allow_partial:
@@ -602,6 +620,9 @@ def export_results(
         *(path for paths in sources.values() for path in paths),
         root / "tables" / course_id / ingest.STUDENTS_CSV,
     ]
+    enrollment_path = root / "tables" / course_id / enrollment.FILENAME
+    if enrollment_path.is_file():
+        inputs.append(enrollment_path)
     if grade_export is not None:
         inputs.insert(0, grade_export)
     selection_manifest = raw_dir / ingest.MANIFEST_FILENAME

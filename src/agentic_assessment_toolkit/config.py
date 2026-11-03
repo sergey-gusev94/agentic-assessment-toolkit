@@ -366,6 +366,7 @@ def item_identity(
     assignment_hash: str | None = None,
     rubric_source_hash: str | None = None,
     prior_gradings_hash: str | None = None,
+    rubric_selection: str | None = None,
 ) -> str:
     """Per-item identity: the config identity plus the item's resolved inputs.
 
@@ -388,6 +389,8 @@ def item_identity(
         parts.append(("assignment", assignment_hash.encode("ascii")))
     if rubric_source_hash is not None:
         parts.append(("rubric-source", rubric_source_hash.encode("ascii")))
+    if rubric_selection is not None:
+        parts.append(("rubric-selection", rubric_selection.encode("utf-8")))
     if prior_gradings_hash is not None:
         parts.append(("prior-gradings", prior_gradings_hash.encode("ascii")))
     return sha256_parts(parts)

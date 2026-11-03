@@ -147,6 +147,21 @@ skipped or frozen. Resolve ambiguous names and filenames in the course's
 `manifest.toml`, then run the command again. The full contract is in
 [Data conventions](docs/data-conventions.md), under "Submission ingest."
 
+To ingest selected assignments without processing other ZIPs in the same course:
+
+```bash
+aat ingest-submissions --course SYN_COURSE1_F2025 --assignment HW11 --assignment HW12
+```
+
+For a merged class with different grading requirements, declare the eligible
+rubric names in each affected assessment's `rubrics` array in `course.toml`.
+Create one complete rubric per name and record verified enrollment in
+`tables/<course_id>/enrollments.csv`, with columns `lms_username,rubric,source`.
+Normal grading selects each student's rubric before materialization. Missing
+membership blocks grading; filenames and attempted questions never determine
+enrollment. Initial graders, final judges, and export use the same selection.
+See [Data conventions](docs/data-conventions.md) for the exact contract.
+
 #### Brightspace downloads
 
 If you are using Brightspace, download one submission ZIP per assignment:

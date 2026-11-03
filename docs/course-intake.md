@@ -57,9 +57,12 @@ separate deterministic `aat ingest-submissions` procedure described in
    - **Whose requirements apply?** Shared materials may give different
      requirements and point allocations for different courses or student
      groups. Each rubric must state its scope and excluded questions where
-     these differ. Confirm that the selected submissions belong to that
-     group; the toolkit does not route students to different rubrics
-     automatically. Rubric scope does not change solver instructions.
+     these differ. For a merged class, prepare a complete named rubric for
+     each group and declare the names in the assessment's `rubrics` array.
+     Grading selects from verified enrollment records under `tables/`;
+     submission ingest and enrollment review remain outside intake.
+     Missing membership blocks grading. Rubric scope does not change
+     solver instructions.
    - **Is this the split the course graded by?** A split transcribed
      faithfully from a handout is still wrong if the course applied a
      different one. Where a graded-copy export or LMS rubric is

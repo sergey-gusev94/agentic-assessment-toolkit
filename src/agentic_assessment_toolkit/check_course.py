@@ -21,7 +21,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import config, data_root, provenance
+from . import config, data_root, enrollment, ingest, provenance
 from .course import RUBRIC_PROVENANCES, Course, CourseError, load_course
 from .intake import PENDING_FILENAME
 from .rubric import RubricError, parse_rubric_file
@@ -79,6 +79,7 @@ def check_course(root: Path, course_id: str) -> CourseCheck:
     assignment_ids = _check_assignments(course_dir, course, report)
     _check_registry(course, assignment_ids, report)
     _check_rubrics(course_dir, course, assignment_ids, report)
+    _check_enrollments(root, course_id, course, report)
     _check_rubric_history(root, course_id, report)
     _check_reference_solutions(course_dir, course, assignment_ids, report)
     _check_syllabus(course_dir, report)
@@ -292,6 +293,51 @@ def _check_rubrics(
                     f"{assessment.id!r} records no 'rubric_provenance' (one of "
                     f"{', '.join(RUBRIC_PROVENANCES)})"
                 )
+
+
+def _check_enrollments(
+    root: Path, course_id: str, course: Course | None, report: CourseCheck
+) -> None:
+    routed = [a for a in course.assessments or () if a.rubrics] if course is not None else []
+    if not routed:
+        return
+    try:
+        enrollments = enrollment.read_enrollments(root, course_id)
+        eligible = {name for a in routed for name in a.rubrics or ()}
+        for entry in enrollments.values():
+            if entry.rubric not in eligible:
+                raise enrollment.EnrollmentError(
+                    f"enrollment rubric {entry.rubric!r} is not declared by any assessment"
+                )
+        resolver = enrollment.Resolver(root)
+        for assessment in routed:
+            for name in assessment.rubrics or ():
+                path = root / "courses" / course_id / "rubrics" / assessment.id / f"{name}.md"
+                if not path.is_file():
+                    report.violations.append(
+                        f"assessment {assessment.id!r}: missing declared rubric {name!r}"
+                    )
+            missing = []
+            for student in ingest.read_students(root, course_id):
+                submission = root / "submissions" / course_id / student.student_id / assessment.id
+                if not submission.is_dir() or student.student_id.startswith("_"):
+                    continue
+                try:
+                    resolver.select(course_id, assessment.id, student.student_id, "default")
+                except enrollment.EnrollmentError:
+                    missing.append(student.student_id)
+            if missing:
+                report.gaps.append(
+                    f"{assessment.id}: {len(missing)} submission(s) lack a valid enrollment rubric: "
+                    + ", ".join(missing)
+                    + f"; complete tables/{course_id}/{enrollment.FILENAME} before grading"
+                )
+        if not enrollments:
+            report.gaps.append(
+                f"no verified enrollment mappings in tables/{course_id}/{enrollment.FILENAME}"
+            )
+    except (enrollment.EnrollmentError, ingest.IngestError) as error:
+        report.violations.append(str(error))
 
 
 def _check_rubric_history(root: Path, course_id: str, report: CourseCheck) -> None:

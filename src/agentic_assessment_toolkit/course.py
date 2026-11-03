@@ -6,9 +6,9 @@ assessment registry (the ``[[assessments]]`` array) — one entry per
 syllabus assessment, including those that never get an assignment
 directory (exams, attendance, presentations), so grade weights sum to
 100 and benchmark coverage of the final grade is computable
-(docs/data-conventions.md, "Course content contract"). Registry fields
-are informational: the pipeline consumes only the environment default,
-and `aat check-course` is the registry's reader. A fact the course
+(docs/data-conventions.md, "Course content contract"). The pipeline consumes
+the environment default and an assessment's optional rubric-selection rule;
+other registry fields are informational. A fact the course
 materials do not state is left absent, never written as a sentinel.
 """
 
@@ -56,6 +56,7 @@ _KNOWN_ASSESSMENT_KEYS = frozenset(
         "due",
         "excluded",
         "rubric_provenance",
+        "rubrics",
     }
 )
 
@@ -79,6 +80,7 @@ class Assessment:
     due: datetime.date | None
     excluded: str | None
     rubric_provenance: str | None
+    rubrics: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -195,6 +197,23 @@ def _parse_assessment(entry: object, index: int, path: Path) -> Assessment:
     ):
         raise CourseError(f"{path}: {where}: 'due' must be a plain TOML date (e.g. 2026-02-06)")
 
+    rubrics = entry.get("rubrics")
+    if rubrics is not None and (
+        not isinstance(rubrics, list)
+        or len(rubrics) < 2
+        or not all(
+            isinstance(name, str)
+            and name
+            and name not in {".", ".."}
+            and all(c.isalnum() or c in "_-" for c in name)
+            for name in rubrics
+        )
+        or len(set(rubrics)) != len(rubrics)
+    ):
+        raise CourseError(
+            f"{path}: {where}: 'rubrics' requires at least two distinct filename stems"
+        )
+
     return Assessment(
         id=assessment_id,
         title=_optional_str(entry, "title", path, where),
@@ -209,6 +228,7 @@ def _parse_assessment(entry: object, index: int, path: Path) -> Assessment:
         rubric_provenance=_optional_choice(
             entry, "rubric_provenance", RUBRIC_PROVENANCES, path, where
         ),
+        rubrics=tuple(rubrics) if rubrics is not None else None,
     )
 
 

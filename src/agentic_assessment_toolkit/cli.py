@@ -31,6 +31,7 @@ from . import base_images as base_images_mod
 from . import check_course as check_course_mod
 from . import config as config_mod
 from . import data_root as data_root_mod
+from . import enrollment as enrollment_mod
 from . import export_results as export_mod
 from . import harbor as harbor_mod
 from . import hashing, provenance
@@ -67,6 +68,7 @@ class _PlannedItem:
     existing: int
     environment_flavor: str
     materialize: Callable[[Path], harbor_mod.RunRecordItem]
+    rubric_name: str | None = None
 
     @property
     def done(self) -> bool:
@@ -83,6 +85,7 @@ def main(argv: list[str] | None = None) -> int:
         ConfigError,
         CourseError,
         DataRootError,
+        enrollment_mod.EnrollmentError,
         export_mod.ExportError,
         harbor_mod.HarborAuthenticationError,
         MaterializeError,
@@ -255,6 +258,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="normalize LMS submission exports into the submissions tree",
     )
     ingest.add_argument("--course", metavar="ID")
+    ingest.add_argument(
+        "--assignment",
+        action="append",
+        metavar="ID",
+        help="ingest only these assignments (repeatable; requires --course)",
+    )
     ingest.add_argument(
         "--all",
         action="store_true",
@@ -446,7 +455,9 @@ def _run(args: argparse.Namespace) -> int:
     # and it moves whenever the config, prompt, verifier, or task
     # template bytes change. Printing both means a reader never has to
     # guess which judge just ran.
-    rubric_note = f", rubric {config.rubric_name!r}" if config.rubric_name is not None else ""
+    rubric_note = (
+        f", configured rubric {config.rubric_name!r}" if config.rubric_name is not None else ""
+    )
     print(
         f"config: {config.name}@{config_identity[:8]} ({config.agent} {config.model}{rubric_note})"
     )
@@ -737,9 +748,12 @@ def _run_intake(args: argparse.Namespace) -> int:
 def _run_ingest_submissions(args: argparse.Namespace) -> int:
     if args.all_items and args.course:
         raise CliError("--all and --course are mutually exclusive")
+    if args.assignment and not args.course:
+        raise CliError("ingest --assignment requires --course")
+    assignments = set(args.assignment) if args.assignment else None
     root = data_root_mod.resolve_data_root(args.data_root)
     if args.course:
-        selected = ingest_mod.list_raw_courses(root, only=args.course)
+        selected = ingest_mod.list_raw_courses(root, only=args.course, assignments=assignments)
         if not selected:
             raise CliError(f"no raw submissions dump at {root / 'raw-submissions' / args.course}")
     elif args.all_items:
@@ -749,6 +763,12 @@ def _run_ingest_submissions(args: argparse.Namespace) -> int:
     else:
         raise CliError("select courses with --course or --all")
 
+    if assignments is not None:
+        try:
+            for course in selected:
+                ingest_mod.validate_assignments(root, course.course_id, assignments)
+        except ingest_mod.IngestError as error:
+            raise CliError(str(error)) from error
     to_run = [c for c in selected if args.force or c.status == "pending"]
 
     if args.dry_run:
@@ -765,7 +785,9 @@ def _run_ingest_submissions(args: argparse.Namespace) -> int:
     for course in selected:
         if course in to_run:
             continue
-        recorded = ingest_mod.recorded_attention(ingest_mod.read_record(root, course.course_id))
+        recorded = ingest_mod.recorded_attention(
+            ingest_mod.read_record(root, course.course_id), assignments
+        )
         if recorded:
             print(
                 f"ingest {course.course_id}: unchanged, but {recorded} submission(s) "
@@ -780,7 +802,7 @@ def _run_ingest_submissions(args: argparse.Namespace) -> int:
 
     for course in to_run:
         try:
-            report = ingest_mod.ingest_course(root, course.course_id)
+            report = ingest_mod.ingest_course(root, course.course_id, assignments=assignments)
         except ingest_mod.IngestError as error:
             raise CliError(str(error)) from error
         print(ingest_mod.format_report(report))
@@ -971,11 +993,48 @@ def _plan_grade(
     if rubric_name is None:  # load_config defaults grading configs to "default"
         raise CliError(f"config {config.name!r} names no rubric")
 
+    resolver = enrollment_mod.Resolver(root)
+    selections: dict[str, enrollment_mod.Selection] = {}
+    enrollment_errors = []
+    for source in sources:
+        try:
+            selections[source.item_id] = resolver.select(
+                source.course_id,
+                source.assignment_id,
+                source.student_id,
+                rubric_name,
+                explicit=config.rubric_override is not None,
+            )
+            if judge is not None:
+                context_selection = resolver.select(
+                    source.course_id,
+                    source.assignment_id,
+                    source.student_id,
+                    judge.config.rubric_name or "default",
+                    explicit=judge.config.rubric_override is not None,
+                )
+                if context_selection.name != selections[source.item_id].name:
+                    raise CliError(
+                        f"config {config.name!r} names rubric {selections[source.item_id].name!r} "
+                        f"but --context-from config {judge.config.name!r} names rubric "
+                        f"{context_selection.name!r}; the judge and its context must "
+                        "grade against the same rubric"
+                    )
+        except enrollment_mod.EnrollmentError as error:
+            enrollment_errors.append(str(error))
+    if enrollment_errors:
+        detail = "\n".join(enrollment_errors[:10])
+        if len(enrollment_errors) > 10:
+            detail += f"\n... and {len(enrollment_errors) - 10} more; run check-course for coverage"
+        raise enrollment_mod.EnrollmentError(
+            f"{len(enrollment_errors)} selected submission(s) have unresolved rubric selection:\n{detail}"
+        )
     n_skipped = 0
     planned = []
     # Many submissions share one assignment; hash each handout once.
     assignment_hashes: dict[Path, str] = {}
     for source in sources:
+        selection = selections[source.item_id]
         assignment = data_root_mod.assignment_dir(root, source.course_id, source.assignment_id)
         if assignment not in assignment_hashes:
             assignment_hashes[assignment] = hashing.sha256_dir(assignment)
@@ -983,14 +1042,14 @@ def _plan_grade(
             root, source.course_id, source.assignment_id
         )
         rubric = data_root_mod.find_rubric(
-            root, source.course_id, source.assignment_id, rubric_name
+            root, source.course_id, source.assignment_id, selection.name
         )
         if rubric is None:
             raise CliError(
-                f"no rubric {rubric_name!r} for "
+                f"no rubric {selection.name!r} for "
                 f"{source.course_id}/{source.assignment_id}: grading never starts "
                 "without a rubric (docs/design.md, decision 5); author "
-                f"courses/{source.course_id}/rubrics/{source.assignment_id}/{rubric_name}.md "
+                f"courses/{source.course_id}/rubrics/{source.assignment_id}/{selection.name}.md "
                 "first (the procedure in docs/data-conventions.md)"
             )
         # Parse at plan time so a bad rubric fails before any job
@@ -1014,6 +1073,7 @@ def _plan_grade(
                 assignment_hashes[assignment],
                 rubric_source_hash,
                 args,
+                selection=selection,
             )
             if prior is None:
                 # Short of --gradings; reported per item by
@@ -1032,6 +1092,7 @@ def _plan_grade(
             )
             if prior is not None
             else None,
+            rubric_selection=selection.identity,
         )
         planned.append(
             _PlannedItem(
@@ -1039,6 +1100,7 @@ def _plan_grade(
                 item_identity=identity,
                 existing=totals.get((source.item_id, identity), 0),
                 environment_flavor=config_mod.GRADING_FLAVOR,
+                rubric_name=selection.name,
                 materialize=_grade_materializer(
                     source,
                     assignment,
@@ -1049,6 +1111,7 @@ def _plan_grade(
                     identity,
                     judge=judge,
                     prior=prior,
+                    rubric_name=selection.name,
                 ),
             )
         )
@@ -1123,17 +1186,6 @@ def _judge_context(
             f"--context-from config {context_config.name!r} is itself a final-judge "
             "config; the judge's context must be the initial grading config"
         )
-    if context_config.rubric_name != config.rubric_name:
-        # A judge shown prior gradings measured against a different
-        # rubric than the one its own criteria are enforced against
-        # cannot reconcile them criterion by criterion, and the review
-        # queue would compare scores across point splits.
-        raise CliError(
-            f"config {config.name!r} names rubric {config.rubric_name!r} but "
-            f"--context-from config {context_config.name!r} names rubric "
-            f"{context_config.rubric_name!r}; the judge and its context must "
-            "grade against the same rubric"
-        )
     return _JudgeContext(
         config=context_config,
         config_identity=config_mod.config_identity(context_config),
@@ -1152,6 +1204,8 @@ def _prior_gradings_for(
     assignment_hash: str,
     rubric_source_hash: str | None,
     args: argparse.Namespace,
+    *,
+    selection: enrollment_mod.Selection | None = None,
 ) -> list[harbor_mod.PriorGrading] | None:
     """The item's ``--gradings`` prior gradings, or None (reported) when too few.
 
@@ -1172,8 +1226,11 @@ def _prior_gradings_for(
     gradings — which is what lets the results layer supersede the
     smaller judgment after a re-judge (docs/design.md, decision 16).
     """
+    selected_name = (
+        selection.name if selection is not None else judge.config.rubric_name or "default"
+    )
     context_rubric = data_root_mod.find_rubric(
-        root, source.course_id, source.assignment_id, judge.config.rubric_name or "default"
+        root, source.course_id, source.assignment_id, selected_name
     )
     key = None
     if context_rubric is not None:
@@ -1183,6 +1240,7 @@ def _prior_gradings_for(
             context_rubric.read_bytes(),
             assignment_hash,
             rubric_source_hash,
+            rubric_selection=selection.identity if selection is not None else None,
         )
         key = (source.item_id, context_identity)
     pooled = judge.pool.by_key.get(key, []) if key is not None else []
@@ -1279,6 +1337,7 @@ def _grade_materializer(
     *,
     judge: _JudgeContext | None = None,
     prior: list[harbor_mod.PriorGrading] | None = None,
+    rubric_name: str | None = None,
 ) -> Callable[[Path], harbor_mod.RunRecordItem]:
     def materialize(tasks_dir: Path) -> harbor_mod.RunRecordItem:
         task = materialize_grading_task(
@@ -1309,6 +1368,7 @@ def _grade_materializer(
             student_id=source.student_id,
             solve_job_name=source.solve_job_name,
             solve_trial_name=source.solve_trial_name,
+            rubric_name=rubric_name,
             context_config_name=judge.config.name if judge is not None else None,
             context_config_identity=judge.config_identity if judge is not None else None,
             prior_trials=(
@@ -1661,7 +1721,8 @@ def _execute(
                 else:
                     status = "complete"
                 counts = f"({item.existing} of {args.repeats} valid trial(s))"
-            print(f"{marker} [{status:8}] {item.item_id} {counts}")
+            rubric_note = f" rubric={item.rubric_name}" if item.rubric_name is not None else ""
+            print(f"{marker} [{status:8}] {item.item_id} {counts}{rubric_note}")
         job_note = f" across {len(groups)} job(s) (one per deficit)" if len(groups) > 1 else ""
         print(
             f"would run {len(to_run)} of {len(planned)} item(s){job_note}; "

@@ -74,6 +74,11 @@ Each entry is a commitment with a short rationale.
    [data-conventions.md](data-conventions.md) covers the rest). Stable criterion ids
    are what make per-criterion statistics well defined across repeated
    gradings.
+   Assessments that declare multiple eligible rubric names select one per
+   student from reviewed local enrollment data. Missing membership blocks
+   grading; student answers never determine the scheme. The selected name
+   and bytes enter that item's identity and are used consistently by the
+   initial grader, final judge, results loader, and export.
 6. **Grades come from the grader's artifacts, not from verifier scoring.**
    Each stage has exactly one generic contract verifier, reused across all
    tasks; per-assignment test code is never written. The solve verifier is
@@ -638,6 +643,26 @@ grades against the override and its `--context-from` config is
 resolved with the same override, so the prior gradings come from the
 pool made against that rubric, and the printed top-up command carries
 the flag. `--rubric` is grade-only; a solve config rejects it.
+
+Enrollment routing is an assignment rule rather than a config override.
+An assessment's `rubrics` array declares its eligible complete rubric files.
+`tables/<course_id>/enrollments.csv` maps verified LMS usernames to names,
+with nonempty source evidence. Grading resolves pseudonyms through the existing
+identity table and rejects missing or conflicting membership before creating
+tasks. A real student's explicit `--rubric` must agree with enrollment.
+Solve-derived and reserved pseudo-student submissions require an explicit
+eligible name. A normal mixed job keeps one config identity and records
+`rubric_name` on every grading item; its selected name and bytes enter the
+per-item identity. Changing another student's mapping does not invalidate it.
+Enrollment evidence remains outside the task and prompt.
+
+Final judges look up initial gradings using that same effective selection.
+Results read the item's name, with the config name as the fallback for older
+records. Export verifies current enrollment and current rubric bytes against
+the stored judgment before creating deliverables. The selection and enrollment
+file hash are recorded in export provenance. Course checks report declared
+rubric files and missing enrollment coverage. The exact data contract is in
+[data-conventions.md](data-conventions.md).
 
 ### Environment templates
 
@@ -1648,6 +1673,7 @@ src/agentic_assessment_toolkit/
 ├── intake.py              # `aat intake`: codex command, receipts, doneness
 ├── ingest.py              # `aat ingest-submissions`: LMS export adapters,
 │                          #   merge policy, identity tables, receipts
+├── enrollment.py          # verified enrollment and per-student rubric selection
 ├── rubric.py              # rubric criteria grammar parsing
 ├── materialize/
 │   ├── _common.py         # shared materializer helpers (naming,
@@ -1900,7 +1926,7 @@ aat intake (--course ID | --all) [--data-root PATH]
            [--model NAME] [--reasoning-effort LEVEL]
            [--force] [--dry-run] [--print-prompt]
 
-aat ingest-submissions (--course ID | --all) [--data-root PATH]
+aat ingest-submissions (--course ID [--assignment ID]... | --all) [--data-root PATH]
            [--force] [--dry-run]
 
 aat init-data [--data-root PATH] [--git]
@@ -1937,7 +1963,11 @@ exiting nonzero while any submission is skipped or frozen (the
 receipt records the outcome counts, so an unchanged course's
 unresolved rows are re-reported rather than silently passing).
 Re-running after a `manifest.toml` fix is the retry mechanism, and
-`--force` reprocesses courses whose dump is unchanged. `aat init-data` creates the
+`--force` reprocesses courses whose dump is unchanged. With `--course`, repeat
+`--assignment` to process selected assignments and preserve other submission
+directories and table rows. Scoped receipts name the processed assignments;
+they never make an unprocessed whole course appear complete.
+`aat init-data` creates the
 resolved data root, including its top-level layout and a short README, because resolution itself never creates anything
 (data-conventions.md); it is idempotent, and `--git` additionally makes
 the root a private git repository with a `.gitignore` for the
@@ -1984,13 +2014,13 @@ judge prompt template also travel together, enforced at config load: a
 mismatch would materialize tasks whose instruction and verifier
 disagree about the deliverables, failing every trial after full agent
 cost. The context config must be a
-non-judge grading config (a judge of judges is rejected) naming the
-same rubric as the judge config. Prior gradings measured against a
+non-judge grading config (a judge of judges is rejected) resolving each
+selected item to the same effective rubric as the judge. Prior gradings measured against a
 different point split could not be reconciled criterion by criterion.
 Item selection is unchanged and includes any submission source, including
 `--sample`. For each selected item, the prior gradings are looked up by the
 *context* config's own per-item identity: its config identity plus the
-item's resolved inputs, the context config's rubric, and the grading
+item's resolved inputs, its effective rubric selection, and the grading
 environment template of the context config's agent, which differs from
 the judge's whenever the two name different agents), so the judge
 consumes exactly the gradings that pool together under the

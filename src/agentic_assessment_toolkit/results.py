@@ -350,7 +350,7 @@ def _trial_row(
         student_id = _opt_str(item.get("student_id"))
         solve_job_name = _opt_str(item.get("solve_job_name"))
         solve_trial_name = _opt_str(item.get("solve_trial_name"))
-        rubric_name = _opt_str(config.get("rubric"))
+        rubric_name = _opt_str(item.get("rubric_name")) or _opt_str(config.get("rubric"))
         input_hashes = item.get("input_hashes")
         if isinstance(input_hashes, dict):
             rubric_sha256 = _opt_str(input_hashes.get("rubric"))

@@ -234,13 +234,19 @@ particular submissions, one-off adjustments, administrative deductions
 an LMS rubric carries) is never evidence.
 
 When materials give different requirements or point allocations for
-different courses or student groups, use the scheme for the course being
-processed. State that scope near the top of every rubric, including which
-group's point allocations apply and which questions are outside its
-requirements. Record the source and any unresolved scope ambiguity in
-`intake-notes.md`. Never combine the groups' allocations or treat another
-group's required questions as bonus work. The notes alone are insufficient:
-graders receive the rubric, not the intake notes.
+different courses or student groups, preserve the groups applicable to this
+course. State the applicable group and question scope near the top of every
+rubric. For a merged course that grades multiple groups, write a complete
+named rubric for each group and declare the names in the assessment's
+`rubrics` array, for example `["undergraduate", "graduate"]`. Retain a
+`default.md` draft for the course checker and document which group it covers.
+The named rubrics are the grading inputs for routed assessments. Record each
+scheme's point evidence and unresolved choices in `intake-notes.md`.
+Never combine the groups' allocations or treat another group's required
+questions as bonus work. Enrollment records under `tables/` are a separate
+human-reviewed input: do not create or infer them during intake. Missing
+membership blocks grading. The notes alone are insufficient because graders
+receive the selected rubric, not the intake notes.
 
 The rubric must cover the **whole assignment** for its stated scope.
 Criteria for some problems and none for others grade a smaller assignment

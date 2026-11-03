@@ -77,6 +77,7 @@ $AAT_DATA_DIR/
 │   └── <course_id>/
 │       ├── students.csv        #   pseudonym table (the identity mapping)
 │       ├── submissions.csv     #   per-submission ingest bookkeeping
+│       ├── enrollments.csv     #   verified LMS username to rubric mapping
 │       └── gradescope-summaries/  # grade pages split off graded-copy PDFs
 ├── tasks/                      # materialized Harbor task inputs, per job
 │   └── <utc>__<config>__<hash8>/
@@ -192,9 +193,9 @@ Notes:
   change how tasks run (the environment flavor, future resource
   overrides) live in `course.toml`'s `[course]` table or the
   per-assignment sidecar; facts that describe the course (weights,
-  policies, dates) live in the registry. The pipeline consumes only the
-  environment default; every other field is informational until a
-  consumer is deliberately added. The pipeline still loads
+  policies, dates) live in the registry. The pipeline consumes the
+  environment default and each assessment's optional `rubrics` selection
+  rule; other descriptive fields are informational. The pipeline still loads
   `course.toml` through the same strict parser, so a schema-invalid
   file fails `aat solve` and `aat grade` planning immediately, one
   parser, one set of rules; `aat check-course` gives the detailed
@@ -240,6 +241,12 @@ Notes:
     feasible, independent of permission (an online exam may forbid AI
     without preventing it; an in-person exam prevents it).
   - `due`, TOML date.
+  - `rubrics`, an optional array of at least two distinct rubric filename
+    stems, such as `["undergraduate", "graduate"]`. This declares an
+    assessment with enrollment-based selection. Each named Markdown file
+    must exist under `rubrics/<id>/`. Names contain only letters, digits,
+    underscores, or hyphens. The enrollment contract below governs selection;
+    absence preserves the config's ordinary rubric selection.
   - `rubric_provenance`, `applied_scheme | professor_rubric | handout
     | authored`: which source `rubrics/<id>/default.md` took its point
     split from, in the precedence order under "Course content contract"
@@ -296,8 +303,9 @@ Notes:
   scope. Other groups' required questions do not become bonus criteria.
   `intake-notes.md` records the source and any unresolved ambiguity, but it
   is not presented to the grader. This scope statement does not select
-  students or change solver instructions; rubric selection applies to the
-  whole grading invocation.
+  students or change solver instructions. Assessments that declare `rubrics`
+  select the applicable file from verified enrollment before grading. Other
+  assessments use the config's rubric for the whole invocation.
 
   What the prose does *not* carry is the grading policy every
   assignment shares: equivalent answers, error follow-through, one
@@ -467,6 +475,49 @@ Notes:
   itself are not administrative and stay in the rubric. Examples include shown
   work, stated assumptions, and required derivations.
 
+## Enrollment-based rubric selection
+
+An assessment with `rubrics = ["undergraduate", "graduate"]` uses one of
+those complete rubric files for each student. The merged handout and instructor
+solution remain shared. Required graduate questions have their own normal
+criteria and weights; they are not undergraduate bonus work.
+
+`tables/<course_id>/enrollments.csv` is a reviewed local input, separate from
+the identity table that ingest manages. Its exact columns, in order, are
+`lms_username,rubric,source`. Every row names one verified username, one rubric
+name, and nonempty evidence for the membership, such as a dated enrollment
+export or an instructor confirmation. A leading `#` and case differences in
+usernames are normalized. Duplicate usernames and incomplete rows are errors.
+Keep unconfirmed candidates in a separate review worksheet, not this file.
+
+Grading joins each selected pseudonym to its LMS username through `students.csv`
+and resolves its enrollment before creating any tasks. Missing identities,
+missing membership, and ineligible rubric names block the invocation. A
+conflicting `--rubric` cannot override a real student's verified membership.
+No membership is inferred from filenames, written headings, extra answers, or
+omitted questions. Solve-derived submissions and reserved pseudo-students have
+no enrollment, so grading them requires an explicit eligible `--rubric`.
+
+Ordinary routed jobs retain their experiment config identity while each item
+records its effective `rubric_name`. The selected name and rubric bytes enter
+the per-item identity. Correcting a student's selection changes that item's
+grading pool; editing another enrollment row or its evidence does not. Final
+judges resolve the same selection when finding initial gradings. Enrollment
+records and evidence remain local and are never copied into grading prompts.
+
+Results use the per-item rubric name, falling back to the config's name for
+older run records. Export checks current enrollment and rubric bytes against
+the selected stored judgment and records the selected name and enrollment-file
+hash in its provenance. A stale selection cannot become a delivered grade.
+Reports keep rubric versions separate by hash; an assignment with multiple
+rubric versions has no single combined assignment or course macro score under
+the existing reporting rules.
+
+`aat check-course` checks declared rubric files and reports submission coverage
+gaps in the enrollment mapping. A structurally valid rubric does not establish
+its academic correctness: missing source materials and provisional point
+allocations still require human review before live grading.
+
 ## Submission ingest
 
 `aat ingest-submissions` converts `raw-submissions/<course_id>/` into
@@ -481,6 +532,14 @@ hash of the whole raw dump directory, including export zips, the optional
 whose current hash differs is unprocessed again, so new exports or a
 manifest fix trigger a re-run that recomputes the course from the raw
 zips.
+
+With `--course ID`, repeat `--assignment ID` to ingest only selected
+assignments. Selected assignments must have matching ZIPs. Other normalized
+submission directories and their `submissions.csv` rows are retained. A scoped
+receipt lists the assignments processed against its raw-dump hash; it does not
+mark the whole course processed. Repeating a covered selection skips it, while
+an unscoped run still processes the remaining course. Enrollment mapping edits
+affect grading selection, not submission bytes or ingest receipts.
 
 **Zip-to-assignment matching.** Each export zip maps to one assignment
 id. The zip filename is parsed for a known series word (`homework`

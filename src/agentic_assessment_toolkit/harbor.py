@@ -581,6 +581,7 @@ class RunRecordItem:
     context_config_name: str | None = None
     context_config_identity: str | None = None
     prior_trials: tuple[PriorTrialRef, ...] | None = None
+    rubric_name: str | None = None
 
 
 def write_run_record(

@@ -969,3 +969,48 @@ def test_pdf_renders_legacy_roman_math_without_changing_code(delimiter: str) -> 
     actual = feedback_pdf.render_pdf(f"{code}{delimiter}{legacy}{delimiter}\n")
     expected = feedback_pdf.render_pdf(f"{code}{delimiter}{modern}{delimiter}\n")
     assert actual == expected
+
+
+def test_grade_template_accepts_brightspace_weight_metadata(export_data: ExportData) -> None:
+    export_data.roster.write_text(
+        "Username,Homework 11 Points Grade <Numeric MaxPoints:100 Weight:7.142857145 Category:Homework CategoryWeight:20>,End-of-Line Indicator\n"
+        "#alice,,#\n"
+    )
+    template = exports.read_grade_template(export_data.roster)
+    assert template.maximum == 100
+    assert template.column == "Homework 11 Points Grade"
+
+
+def test_export_checks_current_enrollment_rubric(export_data: ExportData) -> None:
+    root = export_data.root
+    output = export_data.judgment()
+    course = root / "courses" / "SYN_C1"
+    course.mkdir(parents=True)
+    (course / "course.toml").write_text(
+        '[[assessments]]\nid = "HW1"\nrubrics = ["undergraduate", "graduate"]\n'
+    )
+    rubrics = course / "rubrics" / "HW1"
+    rubrics.mkdir(parents=True)
+    materialized = root / "tasks" / "job1" / "S001" / "environment" / "rubric.md"
+    for name in ("undergraduate", "graduate"):
+        shutil.copyfile(materialized, rubrics / f"{name}.md")
+    record_path = root / "grading" / "job1" / "aat-run.json"
+    record = json.loads(record_path.read_text())
+    record["items"][0]["rubric_name"] = "undergraduate"
+    record_path.write_text(json.dumps(record))
+    mapping = root / "tables" / "SYN_C1" / "enrollments.csv"
+    mapping.write_text("lms_username,rubric,source\nalice,undergraduate,Reviewed roster\n")
+    destination = export_data.run(zero_missing=True)
+    manifest = json.loads((destination / "manifest.json").read_text())
+    assert manifest["students"][0]["rubric_name"] == "undergraduate"
+    assert output.is_dir()
+    mapping.write_text("lms_username,rubric,source\nalice,graduate,Corrected enrollment\n")
+    with pytest.raises(exports.ExportError, match="no completed current final judgment"):
+        export_data.run(zero_missing=True)
+    mapping.write_text("lms_username,rubric,source\nalice,undergraduate,Reviewed roster\n")
+    (rubrics / "undergraduate.md").write_text(materialized.read_text() + "Revised scoring.\n")
+    with pytest.raises(exports.ExportError, match="no completed current final judgment"):
+        export_data.run(zero_missing=True)
+    mapping.write_text("lms_username,rubric,source\n")
+    with pytest.raises(exports.ExportError, match="no verified enrollment"):
+        export_data.run(zero_missing=True)

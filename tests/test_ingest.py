@@ -775,3 +775,119 @@ def test_cli_flags_attention_with_exit_1(
 
 def test_cli_requires_selection(data_root: Path) -> None:
     assert cli.main(["ingest-submissions", "--data-root", str(data_root)]) == 2
+
+
+def test_scoped_ingest_preserves_other_assignments_and_receipts(data_root: Path) -> None:
+    brightspace_zip(data_root)
+    brightspace_zip(
+        data_root,
+        "Homework 2.zip",
+        {upload_dir("101", "alice", "Alice Smith", "Sep 8, 2025 516 PM"): {"hw2.pdf": b"second"}},
+    )
+    first = ingest.ingest_course(data_root, COURSE_ID, assignments={"HW1"})
+    assert {o.assignment_id for o in first.outcomes} == {"HW1"}
+    assert not (data_root / "submissions" / COURSE_ID / "S001" / "HW2").exists()
+    assert ingest.list_raw_courses(data_root, assignments={"HW1"})[0].status == "done"
+    assert ingest.list_raw_courses(data_root)[0].status == "pending"
+    table = data_root / "tables" / COURSE_ID / ingest.SUBMISSIONS_CSV
+    with table.open(newline="") as handle:
+        first_rows = list(csv.DictReader(handle))
+    ingest.ingest_course(data_root, COURSE_ID, assignments={"HW2"})
+    with table.open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [r for r in rows if r["assignment_id"] == "HW1"] == first_rows
+    assert {r["assignment_id"] for r in rows} == {"HW1", "HW2"}
+    assert ingest.list_raw_courses(data_root, assignments={"HW1", "HW2"})[0].status == "done"
+    assert ingest.list_raw_courses(data_root)[0].status == "pending"
+    (raw_dir(data_root) / "new-evidence.txt").write_text("new material")
+    assert ingest.list_raw_courses(data_root, assignments={"HW1"})[0].status == "pending"
+
+
+def test_scoped_ingest_missing_selection_fails_before_writing(data_root: Path) -> None:
+    from tests.conftest import tree_bytes
+
+    brightspace_zip(data_root)
+    before = tree_bytes(data_root)
+    with pytest.raises(ingest.IngestError, match="no submission ZIPs"):
+        ingest.ingest_course(data_root, COURSE_ID, assignments={"HW1", "HW2"})
+    assert tree_bytes(data_root) == before
+
+
+def test_cli_scoped_ingest_is_repeatable_and_does_not_ingest_unselected(
+    data_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    brightspace_zip(data_root)
+    brightspace_zip(data_root, "Homework 2.zip")
+    args = [
+        "ingest-submissions",
+        "--data-root",
+        str(data_root),
+        "--course",
+        COURSE_ID,
+        "--assignment",
+        "HW1",
+    ]
+    assert cli.main(args) == 0
+    capsys.readouterr()
+    assert cli.main(args) == 0
+    assert "already processed" in capsys.readouterr().out
+    assert not (data_root / "submissions" / COURSE_ID / "S001" / "HW2").exists()
+    assert cli.main([*args, "--assignment", "HW2"]) == 0
+    assert (data_root / "submissions" / COURSE_ID / "S001" / "HW2").exists()
+
+
+def test_scoped_receipt_keeps_other_assignment_attention(data_root: Path) -> None:
+    brightspace_zip(data_root)
+    report = ingest.ingest_course(data_root, COURSE_ID)
+    original = ingest.Outcome(
+        course_id=COURSE_ID,
+        assignment_id="HW2",
+        student_id="S001",
+        source="brightspace",
+        source_ref="101",
+        status="frozen",
+        submitted_at="",
+        uploads=1,
+        files=1,
+    )
+    ingest.write_record(
+        data_root,
+        ingest.CourseReport(COURSE_ID, (*report.outcomes, original), ()),
+    )
+    ingest.ingest_course(data_root, COURSE_ID, assignments={"HW1"})
+    record = ingest.read_record(data_root, COURSE_ID)
+    assert ingest.list_raw_courses(data_root)[0].status == "done"
+    assert ingest.recorded_attention(record) == 1
+    assert ingest.recorded_attention(record, assignments={"HW1"}) == 0
+    assert ingest.recorded_attention(record, assignments={"HW2"}) == 1
+
+
+def test_malformed_scoped_receipt_is_pending(data_root: Path) -> None:
+    brightspace_zip(data_root)
+    ingest.ingest_course(data_root, COURSE_ID)
+    path = ingest.record_path(data_root, COURSE_ID)
+    record = json.loads(path.read_text())
+    record["assignment_ids"] = [["HW1"]]
+    path.write_text(json.dumps(record))
+    assert ingest.list_raw_courses(data_root, assignments={"HW1"})[0].status == "pending"
+
+
+def test_full_receipt_does_not_hide_missing_assignment_selection(
+    data_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    brightspace_zip(data_root)
+    ingest.ingest_course(data_root, COURSE_ID)
+    record = ingest.record_path(data_root, COURSE_ID).read_bytes()
+    args = [
+        "ingest-submissions",
+        "--data-root",
+        str(data_root),
+        "--course",
+        COURSE_ID,
+        "--assignment",
+        "HW99",
+    ]
+    for extra in ([], ["--dry-run"]):
+        assert cli.main([*args, *extra]) == 2
+        assert "no submission ZIPs for requested assignments: HW99" in capsys.readouterr().err
+    assert ingest.record_path(data_root, COURSE_ID).read_bytes() == record
