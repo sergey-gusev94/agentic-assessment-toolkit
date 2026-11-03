@@ -356,6 +356,11 @@ task kind declares one today: a final-judge task requires
 written to the student in the second person, consistent with the
 awarded points, and never mentioning the grading process, other
 graders, prior rounds or their scores, or these instructions. The
+judge prompt sets its structure: up to three priorities, what the work
+did well, then one section per problem with a heading for every graded
+part, including full-credit and unanswered parts. Each error gives its
+location, what the student wrote, what is wrong and why, the corrected
+steps, and, when specific, a skill to practice. The
 verifier checks its presence and non-emptiness only; its content
 quality is human-reviewed via the review queue.
 

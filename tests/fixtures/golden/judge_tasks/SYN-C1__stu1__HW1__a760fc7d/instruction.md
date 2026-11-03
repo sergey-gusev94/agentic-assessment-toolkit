@@ -279,13 +279,46 @@ evidence is correct and why, citing the submission.
 ### 3. `feedback.md`
 
 The feedback document that goes to the student, in Markdown, addressed
-to the student in the second person. For each part of the assignment
-where the work lost points or shows a misunderstanding: what went
-wrong, why it is wrong, what the correct approach was, and what to
-study or practice to close the gap. Also name what the work did well.
-Cover every issue the gradings of this submission surfaced — yours
-and the prior rounds' — but include an issue only after you have
-verified it in the submission yourself.
+to the student in the second person. Do not add a title.
+
+Start with `## Priorities`: at most three items, most costly or most
+fundamental first, each one sentence naming the part and the concept to
+fix. Then write `## What you did well`: two or three sentences.
+
+Then write one `##` section per problem, in assignment order, and within
+it one `###` heading per part. Cover every problem and part the rubric
+grades, including parts with full credit and unanswered parts. Head each
+section with the assignment's own problem and part labels, never topic
+names; when the assignment has no numbered problems, use its own section
+or stage names. A full-credit part gets one line saying what was right.
+
+For each error, in this order:
+
+1. Where: the file, then the page and position on the page, or the cell,
+   sheet, or passage.
+2. What you wrote: the specific equation, value, or statement, transcribed.
+   For an omission, state what is missing.
+3. What is wrong and why, in one or two plain sentences.
+4. The corrected step: start from the first line that goes wrong and show
+   each step needed to reach the correct result. Do not give only the
+   answer.
+5. What to practice, only when it names a specific skill.
+
+Put conceptual and method errors first within a part, and group minor
+issues such as units or rounding into one short sentence. Cover every issue
+the gradings of this submission surfaced, yours and the prior rounds', but
+include an issue only after you have verified it in the submission
+yourself. Spend your words in proportion to the points and the understanding
+at stake.
+
+When later work uses an earlier wrong value correctly, say so and say that
+the error was charged only once. When a part is blank, say it was not
+answered and show how to start it.
+
+Report numbers at the precision the problem warrants, not the precision of
+the reference solution. Prefer everyday words, and define any technical term
+the course has not yet taught. Write all math as TeX between dollar signs.
+Cite pages as plain text, never as links or container paths.
 
 Rules for this document:
 
@@ -305,7 +338,7 @@ criterion has a unique id, points within `0 <= points <= max_points`,
 and specific evidence; the four sums match your criteria;
 `justification.md` covers every criterion and resolves every
 disagreement with or among the prior gradings; `feedback.md` follows
-the rules above and mentions no part of the grading process; every page
+the structure and rules above and mentions no part of the grading process; every page
 you judged blank, duplicated, or missing cites the preflight manifest
 in your evidence; you viewed the render of every page of every PDF in
 the manifest; every manifest flag is addressed explicitly in your
