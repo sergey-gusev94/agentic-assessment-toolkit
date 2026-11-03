@@ -283,7 +283,9 @@ to the student in the second person. Do not add a title.
 
 Start with `## Priorities`: at most three items, most costly or most
 fundamental first, each one sentence naming the part and the concept to
-fix. Then write `## What you did well`: two or three sentences.
+fix. If the work earned full credit and shows no misunderstanding, write
+one sentence saying so instead of listing items. Then write
+`## What you did well`: two or three sentences.
 
 Then write one `##` section per problem, in assignment order, and within
 it one `###` heading per part. Cover every problem and part the rubric
