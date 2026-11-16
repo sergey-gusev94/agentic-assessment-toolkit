@@ -1,5 +1,8 @@
 $definitions.typst()$
 
+// Pandoc emits diff for the partial derivative symbol.
+#let diff = math.partial
+
 #set document(title: "Assignment feedback", author: "Course staff")
 #set page(paper: "us-letter", margin: 0.75in, numbering: "1")
 #set text(font: "Libertinus Serif", size: 11pt)
