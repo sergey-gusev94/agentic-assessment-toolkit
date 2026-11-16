@@ -76,7 +76,10 @@ separate deterministic `aat ingest-submissions` procedure described in
      any other.
 
    Review authored splits strictest of all, since no source backs them.
-   Re-run `aat check-course` until clean.
+   Re-run `aat check-course` until clean. Its document gaps name
+   handouts, reference solutions, or rubric sources that graders may
+   misread; add a readable copy, such as a PDF exported from the
+   original application, before grading.
 4. **Use.** Everything stays an editable draft until a job first
    records its hash; from that point the artifact is frozen
    (docs/data-conventions.md), except that a rubric found to be wrong

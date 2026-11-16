@@ -12,14 +12,25 @@ tiers, reported separately:
 - **Intake notes** — `intake-notes.md`, surfaced verbatim: judgment
   calls and everything intake looked for and could not find.
 
-It changes no experiment and no doneness, and never writes.
+With ``documents=True`` (what ``aat check-course`` passes) it also runs
+the grading image's document preflight on each assignment's handout,
+reference solution, and professor rubric source, so a file graders
+cannot read is found once, before grading, instead of in every trial.
+
+It changes no experiment and no doneness, and writes only to a
+temporary directory it removes.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import os
+import tempfile
 from dataclasses import dataclass, field
+from functools import cache
 from pathlib import Path
+from types import ModuleType
+from typing import Any
 
 from . import config, data_root, enrollment, ingest, provenance
 from .course import RUBRIC_PROVENANCES, Course, CourseError, load_course
@@ -27,6 +38,11 @@ from .intake import PENDING_FILENAME
 from .rubric import RubricError, parse_rubric_file
 
 WEIGHT_SUM_TOLERANCE = 0.01
+
+# Preflight flags that mean graders may misread a course document.
+# NO_TEXT_LAYER is left out: graders read scanned pages from renders.
+# TOOL_UNAVAILABLE is reported once, as an incomplete check.
+_UNREADABLE_FLAGS = ("DAMAGED", "DISCREPANCY", "PARTIAL_RENDER")
 
 
 def _has_files(directory: Path) -> bool:
@@ -69,7 +85,7 @@ class CourseCheck:
         return not self.violations
 
 
-def check_course(root: Path, course_id: str) -> CourseCheck:
+def check_course(root: Path, course_id: str, *, documents: bool = False) -> CourseCheck:
     course_dir = root / "courses" / course_id
     if not course_dir.is_dir():
         raise data_root.DataRootError(f"course {course_id!r} not found under {root / 'courses'}")
@@ -82,6 +98,8 @@ def check_course(root: Path, course_id: str) -> CourseCheck:
     _check_enrollments(root, course_id, course, report)
     _check_rubric_history(root, course_id, report)
     _check_reference_solutions(course_dir, course, assignment_ids, report)
+    if documents:
+        _check_documents(course_dir, assignment_ids, report)
     _check_syllabus(course_dir, report)
     _check_unexpected_entries(course_dir, report)
     _read_notes(course_dir, report)
@@ -379,6 +397,86 @@ def _check_reference_solutions(
                 f"assignments/{assignment_id} has no reference solution under "
                 f"reference_solutions/{assignment_id}: gradable only after one exists"
             )
+
+
+@cache
+def _preflight() -> ModuleType:
+    """The grading image's preflight script, loaded from the package."""
+    spec = importlib.util.spec_from_file_location("aat_preflight", config.preflight_source_path())
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _preflight_files(directory: Path) -> list[dict[str, Any]]:
+    """The preflight manifest entries for one directory's files."""
+    with tempfile.TemporaryDirectory() as scratch:
+        files: list[dict[str, Any]] = _preflight().run_preflight(directory, Path(scratch) / "out")[
+            "files"
+        ]
+    return files
+
+
+def _libreoffice_converts() -> bool:
+    """Whether LibreOffice here can convert a document at all.
+
+    Probed with a plain text file, which LibreOffice opens in Writer. A
+    partial installation (for example Impress without Writer) fails
+    every Word conversion, which says nothing about the documents.
+    """
+    with tempfile.TemporaryDirectory() as scratch:
+        probe = Path(scratch) / "probe.txt"
+        probe.write_text("probe\n", encoding="utf-8")
+        return _preflight().convert_office_to_pdf(probe, Path(scratch) / "probe.pdf") is None
+
+
+def _check_documents(course_dir: Path, assignment_ids: list[str], report: CourseCheck) -> None:
+    """Report course documents that graders may be unable to read.
+
+    Runs the same preflight the grading container runs, with the tools
+    installed on this machine. A tool missing here is reported once,
+    because the check is then incomplete, not because a file is bad.
+    """
+    unavailable: set[str] = set()
+    unreadable: list[str] = []
+    unconverted: list[str] = []
+    for assignment_id in assignment_ids:
+        for directory in (
+            course_dir / "assignments" / assignment_id,
+            course_dir / "reference_solutions" / assignment_id,
+            course_dir / "rubrics" / assignment_id / "source",
+        ):
+            if not (directory.is_dir() and _has_files(directory)):
+                continue
+            label = directory.relative_to(course_dir).as_posix()
+            for entry in _preflight_files(directory):
+                unavailable.update(entry.get("tools_unavailable", ()))
+                problems = [flag for flag in entry["flags"] if flag in _UNREADABLE_FLAGS]
+                if not problems:
+                    continue
+                reason = entry.get("conversion_error")
+                message = (
+                    f"{label}/{entry['path']} is flagged {', '.join(problems)}"
+                    + (f" ({reason})" if reason else "")
+                    + ": graders may misread it; repair or replace it before grading"
+                )
+                (unconverted if reason else unreadable).append(message)
+    report.gaps.extend(unreadable)
+    if unconverted and not _libreoffice_converts():
+        report.gaps.append(
+            f"document check incomplete: LibreOffice on this machine cannot convert "
+            f"documents, so {len(unconverted)} Office document(s) were not checked "
+            "(Writer and Impress are needed)"
+        )
+    else:
+        report.gaps.extend(unconverted)
+    if unavailable:
+        report.gaps.append(
+            "document check incomplete: "
+            + ", ".join(sorted(unavailable))
+            + " could not run on this machine, so the files that need it were not checked"
+        )
 
 
 def _check_syllabus(course_dir: Path, report: CourseCheck) -> None:

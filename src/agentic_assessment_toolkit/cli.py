@@ -291,7 +291,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     check = subparsers.add_parser(
         "check-course",
-        help="report a course tree's contract violations, gaps, and intake notes (read-only)",
+        help=(
+            "report a course tree's contract violations, gaps, unreadable documents, "
+            "and intake notes (read-only)"
+        ),
     )
     check.add_argument("--course", required=True, metavar="ID")
     check.add_argument("--data-root", metavar="PATH", help=DATA_ROOT_HELP)
@@ -843,7 +846,7 @@ def _run_check_auth(args: argparse.Namespace) -> int:
 
 def _run_check_course(args: argparse.Namespace) -> int:
     root = data_root_mod.resolve_data_root(args.data_root)
-    report = check_course_mod.check_course(root, args.course)
+    report = check_course_mod.check_course(root, args.course, documents=True)
     print(check_course_mod.format_report(report))
     return 0 if report.ok else 1
 

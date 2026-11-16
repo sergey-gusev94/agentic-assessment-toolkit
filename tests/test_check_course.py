@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from agentic_assessment_toolkit import check_course as check_course_mod
 from agentic_assessment_toolkit import cli
 from agentic_assessment_toolkit.check_course import check_course, format_report
 from agentic_assessment_toolkit.data_root import RUBRIC_ARCHIVE_DIRNAME, DataRootError
@@ -376,3 +378,95 @@ def test_applied_scheme_outranks_a_professor_rubric(data_root: Path) -> None:
     source.mkdir()
     (source / "rubric.pdf").write_text("professor rubric\n", encoding="utf-8")
     assert check_course(data_root, COURSE_ID).ok
+
+
+def _fake_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+    entries: dict[str, list[dict[str, Any]]],
+    libreoffice_converts: bool = True,
+) -> None:
+    """Stand in for the preflight: canned entries per course-relative directory."""
+
+    def preflight_files(directory: Path) -> list[dict[str, Any]]:
+        label = directory.relative_to(directory.parents[1]).as_posix()
+        if label.endswith("/source"):
+            label = directory.relative_to(directory.parents[2]).as_posix()
+        return entries.get(label, [])
+
+    monkeypatch.setattr(check_course_mod, "_preflight_files", preflight_files)
+    monkeypatch.setattr(check_course_mod, "_libreoffice_converts", lambda: libreoffice_converts)
+
+
+def _add_course_documents(data_root: Path) -> None:
+    reference = course_dir(data_root) / "reference_solutions" / "HW1"
+    reference.mkdir(parents=True, exist_ok=True)
+    (reference / "solution.docx").write_bytes(b"document")
+    source = course_dir(data_root) / "rubrics" / "HW1" / "source"
+    source.mkdir()
+    (source / "rubric.pdf").write_bytes(b"%PDF-1.4")
+    toml_path = course_dir(data_root) / "course.toml"
+    toml_path.write_text(
+        toml_path.read_text(encoding="utf-8").replace(
+            'rubric_provenance = "handout"', 'rubric_provenance = "professor_rubric"'
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_cli_reports_course_documents_graders_cannot_read(
+    data_root: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _add_course_documents(data_root)
+    _fake_preflight(
+        monkeypatch,
+        {
+            "assignments/HW1": [
+                {"path": "statement.md", "flags": []},
+                {"path": "scan.pdf", "flags": ["NO_TEXT_LAYER"], "tools_unavailable": []},
+            ],
+            "reference_solutions/HW1": [
+                {
+                    "path": "solution.docx",
+                    "flags": ["DAMAGED"],
+                    "conversion_error": "LibreOffice timed out after 180 s",
+                    "tools_unavailable": [],
+                }
+            ],
+            "rubrics/HW1/source": [
+                {
+                    "path": "rubric.pdf",
+                    "flags": ["DISCREPANCY", "TOOL_UNAVAILABLE"],
+                    "tools_unavailable": ["pdftotext"],
+                }
+            ],
+        },
+    )
+    assert cli.main(["check-course", "--course", COURSE_ID, "--data-root", str(data_root)]) == 0
+    out = capsys.readouterr().out
+    assert "rubrics/HW1/source/rubric.pdf is flagged DISCREPANCY: graders may misread it" in out
+    assert (
+        "reference_solutions/HW1/solution.docx is flagged DAMAGED "
+        "(LibreOffice timed out after 180 s)" in out
+    )
+    assert "scan.pdf" not in out
+    assert "document check incomplete: pdftotext could not run on this machine" in out
+    # Library callers opt in; the default check never runs the preflight.
+    assert not any("flagged" in gap for gap in check_course(data_root, COURSE_ID).gaps)
+
+
+def test_broken_local_libreoffice_is_not_blamed_on_the_documents(
+    data_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _add_course_documents(data_root)
+    failed = {
+        "path": "solution.docx",
+        "flags": ["DAMAGED"],
+        "conversion_error": "LibreOffice could not convert the file (exit 0)",
+    }
+    _fake_preflight(monkeypatch, {"reference_solutions/HW1": [failed]}, libreoffice_converts=False)
+    gaps = check_course(data_root, COURSE_ID, documents=True).gaps
+    assert not any("solution.docx" in gap for gap in gaps)
+    assert (
+        "document check incomplete: LibreOffice on this machine cannot convert documents, "
+        "so 1 Office document(s) were not checked (Writer and Impress are needed)"
+    ) in gaps

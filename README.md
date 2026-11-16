@@ -131,7 +131,12 @@ The default model is `gpt-6.1-sol` with high reasoning effort; override it with
 
 Review the generated course and `intake-notes.md`, then run `aat check-course`
 until it reports no contract violations. Grading refuses an assignment without
-an approved rubric. See [Course intake](docs/course-intake.md) for the review
+an approved rubric. `aat check-course` also renders every handout, reference
+solution, and rubric source the way the grading container does and lists any
+file graders may misread. That check needs `poppler-utils` and LibreOffice
+Writer and Impress on your machine (on Debian or Ubuntu:
+`sudo apt install poppler-utils libreoffice-writer libreoffice-impress`);
+without them it says which checks it skipped. See [Course intake](docs/course-intake.md) for the review
 procedure.
 
 ### Student submission ingest
@@ -214,6 +219,13 @@ aat grade --all --config codex-judge-sol6-high \
 Use `--repeats N` to ensure each selected item has N valid trials. Use `--force`
 to add new trials even when an item is already complete. Existing trials are
 never overwritten.
+
+Both the initial grader and final judge start with a mandatory preflight over
+the submission, assignment, reference solution, and rubric source. It converts
+Word, PowerPoint, OpenDocument, and RTF files to PDF with LibreOffice, then
+renders every page and extracts every embedded image, so worked answers pasted
+as images, equations, and diagrams are read from page images. Originals remain
+unchanged.
 
 ### Export final results to Brightspace
 

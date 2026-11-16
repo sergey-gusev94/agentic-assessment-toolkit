@@ -1,4 +1,4 @@
-"""The PDF preflight script: flag decisions, manifest, Dockerfile embed.
+"""The document preflight script: flag decisions, manifest, Dockerfile embed.
 
 The pure decision helpers are tested by importing the script as a
 module; the full pipeline runs as a real subprocess against synthetic
@@ -9,11 +9,14 @@ qpdf is optional to the script and to these tests.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -26,6 +29,8 @@ from agentic_assessment_toolkit.config import (
     environment_path,
     preflight_source_path,
 )
+from agentic_assessment_toolkit.materialize.grading import materialize_grading_task
+from tests.conftest import COURSE_ID, FIXTURES_DIR
 
 
 def _load_preflight() -> ModuleType:
@@ -509,18 +514,6 @@ def test_output_path_existing_file_is_replaced(tmp_path: Path) -> None:
     assert (output_dir / "manifest.json").is_file()
 
 
-@requires_pipeline_tools
-def test_selftest_passes() -> None:
-    completed = subprocess.run(
-        [sys.executable, str(preflight_source_path()), "--selftest"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert completed.returncode == 0, completed.stderr
-    assert "preflight selftest ok" in completed.stdout
-
-
 def test_missing_input_dir_is_an_error(tmp_path: Path) -> None:
     completed = subprocess.run(
         [sys.executable, str(preflight_source_path()), str(tmp_path / "missing")],
@@ -548,3 +541,269 @@ def test_overlapping_output_dir_is_an_error(tmp_path: Path) -> None:
         check=False,
     )
     assert completed.returncode != 0
+
+
+def _libreoffice_converts_documents(tmp_path: Path) -> bool:
+    """Whether a working LibreOffice with Writer is installed here.
+
+    Probed by converting a plain text file, which LibreOffice opens in
+    Writer, the component Word documents need. A partial installation
+    (for example Impress without Writer) cannot load the probe.
+    """
+    if shutil.which("soffice") is None:
+        return False
+    probe = tmp_path / "probe.txt"
+    probe.write_text("probe\n", encoding="utf-8")
+    return preflight.convert_office_to_pdf(probe, tmp_path / "probe.pdf") is None
+
+
+@requires_pipeline_tools
+def test_selftest_passes(tmp_path: Path) -> None:
+    """The build-time selftest, including a real Word-document conversion."""
+    if not _libreoffice_converts_documents(tmp_path):
+        pytest.skip("LibreOffice with Writer required")
+    completed = subprocess.run(
+        [sys.executable, str(preflight_source_path()), "--selftest"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "preflight selftest ok" in completed.stdout
+
+
+def _fake_converter(pdf: bytes | None, error: str | None = None) -> Any:
+    """A stand-in for LibreOffice: writes ``pdf`` as the conversion result."""
+
+    def convert(_document: Path, pdf_path: Path) -> str | None:
+        if pdf is None:
+            return error
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        pdf_path.write_bytes(pdf)
+        return None
+
+    return convert
+
+
+@requires_pipeline_tools
+def test_office_document_is_read_from_its_converted_pdf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        preflight, "convert_office_to_pdf", _fake_converter(preflight._fixture_vector_over_image())
+    )
+    source = tmp_path / "reference"
+    source.mkdir()
+    original = b"original Word bytes"
+    (source / "Solution.DOCX").write_bytes(original)
+
+    manifest = preflight.run_preflight(source, tmp_path / "out")
+    (entry,) = manifest["files"]
+    assert entry["kind"] == "docx"
+    assert entry["size_bytes"] == len(original)
+    assert entry["sha256"] == hashlib.sha256(original).hexdigest()
+    # The stand-in PDF has strokes but no text layer.
+    assert entry["flags"] == ["NO_TEXT_LAYER"]
+    assert (tmp_path / "out" / entry["converted_pdf"]).is_file()
+    (page,) = entry["pages"]
+    assert (tmp_path / "out" / page["render"]).is_file()
+    assert page["images"][0]["extracted_path"] is not None
+    assert manifest["summary"]["office_files"] == 1
+    assert manifest["summary"]["other_files"] == 0
+    assert f"converted by LibreOffice: {entry['converted_pdf']}" in preflight.manifest_text(
+        manifest
+    )
+    assert (source / "Solution.DOCX").read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    ("error", "flags", "conversion_error", "tools_unavailable"),
+    [
+        ("LibreOffice timed out after 180 s", ["DAMAGED"], "LibreOffice timed out after 180 s", []),
+        ("unavailable", ["TOOL_UNAVAILABLE"], None, ["soffice"]),
+    ],
+)
+def test_unconverted_office_document_is_flagged_never_empty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error: str,
+    flags: list[str],
+    conversion_error: str | None,
+    tools_unavailable: list[str],
+) -> None:
+    """A failed conversion is damage; a missing LibreOffice is only a missing tool."""
+    monkeypatch.setattr(preflight, "convert_office_to_pdf", _fake_converter(None, error))
+    source = tmp_path / "submission"
+    source.mkdir()
+    (source / "answers.pptx").write_bytes(b"slides")
+
+    manifest = preflight.run_preflight(source, tmp_path / "out")
+    (entry,) = manifest["files"]
+    assert entry["flags"] == flags
+    assert entry["converted_pdf"] is None
+    assert entry["conversion_error"] == conversion_error
+    assert entry["tools_unavailable"] == tools_unavailable
+    assert "pages" not in entry
+    assert "answers.pptx: pptx, not converted to PDF" in preflight.manifest_text(manifest)
+
+
+def _install_fake_soffice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> Path:
+    """Put a fake ``soffice`` first on PATH; it logs its arguments to a file."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "soffice-args.json"
+    script = bin_dir / "soffice"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys, time, subprocess\n"
+        "from pathlib import Path\n"
+        "args = sys.argv[1:]\n"
+        f"Path({str(log)!r}).write_text(json.dumps(args))\n"
+        "outdir = Path(args[args.index('--outdir') + 1])\n"
+        "source = Path(args[-1])\n" + body,
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    return log
+
+
+def test_conversion_works_on_a_private_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LibreOffice never writes beside the original, whatever its name."""
+    log = _install_fake_soffice(
+        tmp_path,
+        monkeypatch,
+        # Like LibreOffice: a lock file beside the input, the PDF named
+        # after the input's stem.
+        "(source.parent / ('.~lock.' + source.name + '#')).write_text('lock')\n"
+        "outdir.mkdir(parents=True, exist_ok=True)\n"
+        "(outdir / (source.stem + '.pdf')).write_bytes(source.read_bytes())\n",
+    )
+    source = tmp_path / "input"
+    source.mkdir()
+    document = source / "-HW 1 (final).docx"
+    document.write_bytes(b"document bytes")
+
+    target = tmp_path / "out" / "converted" / "doc.pdf"
+    assert preflight.convert_office_to_pdf(document, target) is None
+    assert target.read_bytes() == b"document bytes"
+    assert sorted(path.name for path in source.iterdir()) == [document.name]
+    args = json.loads(log.read_text())
+    assert Path(args[-1]).name == "document.docx"
+    assert args[args.index("--convert-to") + 1] == "pdf"
+
+
+def test_conversion_without_output_is_a_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """soffice exits 0 when it cannot load a file; only the PDF proves success."""
+    _install_fake_soffice(
+        tmp_path, monkeypatch, "print('Error: source file could not be loaded')\n"
+    )
+    document = tmp_path / "broken.docx"
+    document.write_bytes(b"not a document")
+    error = preflight.convert_office_to_pdf(document, tmp_path / "out.pdf")
+    assert error == "LibreOffice could not convert the file (exit 0)"
+    assert not (tmp_path / "out.pdf").exists()
+
+
+def test_conversion_timeout_kills_the_whole_converter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """soffice is a launcher; its worker must not outlive the time limit."""
+    worker_pid = tmp_path / "worker.pid"
+    _install_fake_soffice(
+        tmp_path,
+        monkeypatch,
+        "worker = subprocess.Popen(['sleep', '60'])\n"
+        f"Path({str(worker_pid)!r}).write_text(str(worker.pid))\n"
+        "time.sleep(60)\n",
+    )
+    monkeypatch.setattr(preflight, "OFFICE_CONVERT_TIMEOUT_SECONDS", 1)
+    document = tmp_path / "slow.docx"
+    document.write_bytes(b"document")
+
+    started = time.monotonic()
+    error = preflight.convert_office_to_pdf(document, tmp_path / "out.pdf")
+    assert error == "LibreOffice timed out after 1 s"
+    assert time.monotonic() - started < 30
+    pid = int(worker_pid.read_text())
+    deadline = time.monotonic() + 10
+    while Path(f"/proc/{pid}").exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not Path(f"/proc/{pid}").exists()
+
+
+def test_missing_soffice_is_unavailable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    empty = tmp_path / "empty-path"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+    document = tmp_path / "notes.odt"
+    document.write_bytes(b"document")
+    assert preflight.convert_office_to_pdf(document, tmp_path / "out.pdf") == "unavailable"
+
+
+@requires_pipeline_tools
+@pytest.mark.parametrize("prompt_name", ["grader", "judge"])
+def test_both_grading_stages_prepare_every_grading_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, prompt_name: str
+) -> None:
+    """A reference answer that exists only inside a Word document gets rendered."""
+    monkeypatch.setattr(
+        preflight, "convert_office_to_pdf", _fake_converter(preflight._fixture_vector_over_image())
+    )
+    reference = tmp_path / "reference"
+    reference.mkdir()
+    (reference / "solution.docx").write_bytes(b"Word document")
+    course = FIXTURES_DIR / "course" / COURSE_ID
+    prior = FIXTURES_DIR / "prior_gradings" / "01"
+    task = materialize_grading_task(
+        assignment_dir=course / "assignments" / "HW1",
+        submission_dir=FIXTURES_DIR / "submission",
+        reference_solution_dir=reference,
+        rubric_path=course / "rubrics" / "HW1" / "default.md",
+        rubric_source_dir=reference,
+        item_id=f"{COURSE_ID}/stu1/HW1",
+        name_parts=(COURSE_ID, "stu1", "HW1"),
+        agent=CODEX_AGENT,
+        prompt_name=prompt_name,
+        tasks_dir=tmp_path / "tasks",
+        prior_gradings=[(prior / "grading_result.json", prior / "justification.md")]
+        if prompt_name == "judge"
+        else None,
+    )
+    instruction = (task.task_dir / "instruction.md").read_text()
+    assert "python3 /opt/aat/preflight.py --grading" in instruction
+    output = tmp_path / "prepared"
+    manifests = preflight.run_grading_preflight(task.task_dir / "environment", output)
+    assert {Path(m["input_dir"]).name for m in manifests} == set(preflight.GRADING_DIRECTORIES)
+    for role in ("reference_solution", "rubric_source"):
+        manifest = json.loads((output / role / "manifest.json").read_text())
+        (document,) = manifest["files"]
+        assert document["kind"] == "docx"
+        assert (output / role / document["pages"][0]["render"]).is_file()
+    assert "solution.docx" in (output / "manifest.txt").read_text()
+    # A second run removes stale optional inputs from the prepared inventory.
+    shutil.rmtree(task.task_dir / "environment" / "rubric_source")
+    preflight.run_grading_preflight(task.task_dir / "environment", output)
+    assert not (output / "rubric_source").exists()
+
+
+def test_grading_preflight_cli_rejects_missing_required_sources(tmp_path: Path) -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(preflight_source_path()),
+            str(tmp_path),
+            "--grading",
+            "-o",
+            str(tmp_path.parent / "prepared"),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 2
+    assert "missing grading input directory" in completed.stderr

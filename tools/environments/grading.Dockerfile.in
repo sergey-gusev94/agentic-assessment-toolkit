@@ -5,8 +5,8 @@
 # document-reading tools — file/JSON inspection, PDF text extraction
 # and OCR for scanned pages, image inspection and cropping, PDF
 # structure inspection, spreadsheet and tabular reading, notebook
-# parsing, Word and PowerPoint reading, archive unpacking, text
-# extraction from binaries — plus scipy, scikit-learn, and sympy for
+# parsing, Word and PowerPoint reading and rendering, archive
+# unpacking, text extraction from binaries — plus scipy, scikit-learn, and sympy for
 # the grader's own independent check calculations (its code on its own
 # inputs, which the grader prompt sanctions). Everything is
 # preinstalled: the grader never installs at run time, so no grade
@@ -26,6 +26,16 @@
 # empty map `montage` and `convert -annotate` abort (SIGABRT).
 # fonts-dejavu-core is not in that map and does not prevent the abort;
 # it only serves explicit `-font DejaVu-Sans` use.
+#
+# LibreOffice (Writer and Impress, the -nogui builds without desktop
+# libraries) converts Word, PowerPoint, OpenDocument, and RTF files to
+# PDF so the preflight renders their pages like any PDF: equations,
+# charts, EMF/WMF drawings, and pasted images appear where the author
+# placed them, which text and media extraction cannot show. The Carlito,
+# Caladea, and Liberation fonts match the metrics of Calibri, Cambria,
+# Arial, Times New Roman, and Courier New, so converted documents keep
+# their line and page breaks. LibreOffice's default macro security
+# keeps document macros from running during conversion.
 
 FROM python:3.12.11-slim-bookworm
 
@@ -38,10 +48,15 @@ RUN apt-get update \
         ca-certificates \
         curl \
         file \
+        fonts-crosextra-caladea \
+        fonts-crosextra-carlito \
         fonts-dejavu-core \
+        fonts-liberation2 \
         fonts-urw-base35 \
         imagemagick \
         jq \
+        libreoffice-impress-nogui \
+        libreoffice-writer-nogui \
         mupdf-tools \
         pandoc \
         poppler-data \
@@ -66,25 +81,32 @@ RUN pip install \
         python-docx==1.2.0 \
         python-pptx==1.0.2
 
-# The PDF preflight script: the grader's mandatory first step. It
-# renders every submission PDF page at a fixed DPI and writes a
-# measurement manifest, so blank-looking or malformed pages are caught
-# by measurement instead of impression. This image builds from an empty
+# The document preflight script: the grader's mandatory first step. It
+# prepares all grading inputs, converts Office documents to PDF, renders
+# every PDF page at a fixed DPI, and writes a measurement manifest, so
+# blank-looking or malformed pages are caught by measurement instead of
+# impression. This image builds from an empty
 # context (base_images.py), so the script cannot be COPY'd from disk;
 # it is embedded here as a BuildKit heredoc, byte-identical to the
 # canonical source beside this file (preflight.py) — a repository test
 # keeps the two in sync.
 COPY <<'PREFLIGHT_EOF' /opt/aat/preflight.py
 #!/usr/bin/env python3
-"""PDF preflight for grading containers: canonical renders plus a manifest.
+"""Document preflight for grading containers: canonical renders plus a manifest.
 
 The grader runs this before reading anything else. It walks an input
 directory (default /app/submission), renders every page of every PDF to
 PNG with pdftoppm at a fixed 150 DPI, extracts every embedded image
 with pdfimages, and writes an output directory (default /tmp/preflight)
 holding those renders and extracted images plus manifest.json and a
-short human-readable manifest.txt. The renders are the canonical
-reading of the submission; the manifest records, per page, the rendered
+short human-readable manifest.txt. Word, PowerPoint, OpenDocument, and
+RTF files are first converted to PDF with LibreOffice and then go
+through the same PDF steps, so their pages, equations, charts, and
+figures (including EMF/WMF drawings) are read from page renders too.
+The original files are never modified. --grading prepares the
+submission, assignment, reference solution, and optional rubric-source
+directories in one invocation. The renders are the canonical
+reading of every document; the manifest records, per page, the rendered
 ink fraction, the extractable text count, and the embedded-image
 inventory with content hashes and extracted-file paths, so claims about
 blank, duplicated, or missing pages can cite measurements instead of
@@ -111,27 +133,35 @@ Flags (advisory measurements, never judgments about the work):
   images such as corner badges and logos. The extracted image named in
   the manifest holds the scan's full content.
 - DAMAGED (per file): qpdf --check reports errors, the PDF library
-  cannot parse the file, or the renderer fails outright.
+  cannot parse the file, or the renderer fails outright; for an Office
+  document, LibreOffice could not convert it to PDF (conversion_error
+  says why, including a timeout).
 - NO_TEXT_LAYER (per file, informational): near-zero extractable text;
   the pages are images and need OCR to read as text.
 - TOOL_UNAVAILABLE (per file): a tool the measurements needed
-  (pdftoppm, pdfimages, pypdf, or pdftotext) could not run; the
+  (pdftoppm, pdfimages, pypdf, pdftotext, or soffice) could not run; the
   affected facts are recorded as unknown (and listed in
   tools_unavailable), never fed into the flags above — a missing tool
   must not flag a healthy file.
 
 Determinism: files are visited in sorted order, the manifest carries no
 timestamps or random content, and render filenames are normalized, so
-the same input directory always yields byte-identical manifests.
+the same input directory always yields byte-identical manifests. For an
+Office document the manifest records the original file's size and hash,
+not the converted PDF's, whose bytes carry a conversion timestamp.
 
 Standalone by design: stdlib plus the tools already in the grading
-image (poppler-utils, qpdf, pypdf, and Pillow or pymupdf for pixel
-counts). Each external tool degrades gracefully — a missing tool is
-recorded in the manifest, never a crash. `--selftest` authors four
+image (poppler-utils, qpdf, pypdf, LibreOffice, and Pillow or pymupdf
+for pixel counts). Each external tool degrades gracefully: a missing
+tool is recorded in the manifest, never a crash. LibreOffice runs on a
+private copy of each document with a fresh profile and a time limit, so
+it never writes beside the original. `--selftest` authors four
 synthetic PDFs (an overflow-/BBox form that renders blank, vector
 strokes over an embedded image, a blank scanned page, and a scan placed
-partly outside its page) and asserts the flag decisions on them; the
-grading image runs it at build time.
+partly outside its page) and asserts the flag decisions on them, then
+converts a synthetic Word document with an image-only answer and checks
+that the answer is rendered and extracted; the grading image runs it at
+build time.
 """
 
 from __future__ import annotations
@@ -139,15 +169,20 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
+import signal
+import struct
 import subprocess
 import sys
 import tempfile
+import zlib
 from pathlib import Path
 from typing import Any
+from zipfile import ZipFile
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 DEFAULT_INPUT_DIR = "/app/submission"
 DEFAULT_OUTPUT_DIR = "/tmp/preflight"
@@ -194,6 +229,18 @@ FLAG_PARTIAL_RENDER = "PARTIAL_RENDER"
 FLAG_DAMAGED = "DAMAGED"
 FLAG_NO_TEXT_LAYER = "NO_TEXT_LAYER"
 FLAG_TOOL_UNAVAILABLE = "TOOL_UNAVAILABLE"
+
+GRADING_DIRECTORIES = ("submission", "assignment", "reference_solution", "rubric_source")
+
+# Documents LibreOffice converts to PDF before the PDF steps. Spreadsheets
+# are left out on purpose: their PDF export splits sheets into arbitrary
+# pages, and the grader reads them with openpyxl or pandas instead.
+OFFICE_SUFFIXES = (".doc", ".docx", ".docm", ".odt", ".rtf", ".ppt", ".pptx", ".pptm", ".odp")
+
+# Wall-clock limit for one LibreOffice conversion. A normal homework
+# document converts in seconds; a hostile or broken one must not stall
+# the grader indefinitely.
+OFFICE_CONVERT_TIMEOUT_SECONDS = 180
 
 # Error value the tool wrappers return when the tool could not run at
 # all, as opposed to running and failing on this file.
@@ -847,6 +894,90 @@ def analyze_other_file(path: Path, relative_path: str, kind: str) -> dict[str, A
     }
 
 
+def convert_office_to_pdf(document: Path, pdf_path: Path) -> str | None:
+    """Convert one Office document to ``pdf_path`` with LibreOffice.
+
+    Returns None on success, UNAVAILABLE when soffice could not start,
+    or a description of the failure. LibreOffice works on a private copy
+    named ``document<suffix>`` inside a scratch directory that also holds
+    a fresh user profile: the original's directory never receives lock
+    or backup files, odd filenames cannot be mistaken for options, and
+    concurrent conversions never share a profile. soffice exits 0 even
+    when it cannot load the input, so success means the PDF exists. On
+    timeout the whole process group is killed, because soffice is a
+    launcher whose worker process would otherwise outlive it.
+    """
+    with tempfile.TemporaryDirectory() as scratch_name:
+        scratch = Path(scratch_name)
+        source = scratch / f"document{document.suffix.lower()}"
+        shutil.copyfile(document, source)
+        command = [
+            "soffice",
+            f"-env:UserInstallation={(scratch / 'profile').as_uri()}",
+            "--headless",
+            "--norestore",
+            "--nolockcheck",
+            "--convert-to",
+            "pdf",
+            "--outdir",
+            str(scratch / "out"),
+            str(source),
+        ]
+        try:
+            process = subprocess.Popen(  # noqa: S603
+                command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError:
+            return UNAVAILABLE
+        try:
+            process.wait(timeout=OFFICE_CONVERT_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+            return f"LibreOffice timed out after {OFFICE_CONVERT_TIMEOUT_SECONDS} s"
+        produced = scratch / "out" / "document.pdf"
+        if not produced.is_file():
+            return f"LibreOffice could not convert the file (exit {process.returncode})"
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(produced, pdf_path)
+    return None
+
+
+def analyze_office_document(path: Path, relative_path: str, output_dir: Path) -> dict[str, Any]:
+    """Convert an Office document to PDF, then analyze that PDF.
+
+    The entry has the PDF entry's shape, with the original file's
+    path, kind (its suffix), size, and hash, plus ``converted_pdf``.
+    When conversion fails the entry has no pages and is flagged
+    DAMAGED; when soffice is missing it is flagged TOOL_UNAVAILABLE
+    instead, since a missing tool says nothing about the file.
+    """
+    data = path.read_bytes()
+    kind = path.suffix.lower().lstrip(".")
+    converted = f"converted/{_derived_dir_name(relative_path)}.pdf"
+    error = convert_office_to_pdf(path, output_dir / converted)
+    if error is None:
+        entry = analyze_pdf(output_dir / converted, relative_path, output_dir)
+    else:
+        unavailable = error == UNAVAILABLE
+        entry = {
+            "tools_unavailable": ["soffice"] if unavailable else [],
+            "flags": [FLAG_TOOL_UNAVAILABLE if unavailable else FLAG_DAMAGED],
+        }
+    entry.update(
+        path=relative_path,
+        kind=kind,
+        size_bytes=len(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        converted_pdf=None if error else converted,
+        conversion_error=None if error in (None, UNAVAILABLE) else error,
+    )
+    return entry
+
+
 def build_manifest(input_dir: Path, output_dir: Path) -> dict[str, Any]:
     entries = []
     for path in sorted(input_dir.rglob("*"), key=lambda p: p.relative_to(input_dir).as_posix()):
@@ -858,6 +989,8 @@ def build_manifest(input_dir: Path, output_dir: Path) -> dict[str, Any]:
         kind = sniff_kind(head)
         if kind == "pdf":
             entries.append(analyze_pdf(path, relative_path, output_dir))
+        elif path.suffix.lower() in OFFICE_SUFFIXES:
+            entries.append(analyze_office_document(path, relative_path, output_dir))
         else:
             entries.append(analyze_other_file(path, relative_path, kind))
     return {
@@ -875,7 +1008,10 @@ def build_manifest(input_dir: Path, output_dir: Path) -> dict[str, Any]:
         },
         "summary": {
             "pdf_files": sum(1 for entry in entries if entry["kind"] == "pdf"),
-            "other_files": sum(1 for entry in entries if entry["kind"] != "pdf"),
+            "office_files": sum(1 for entry in entries if "converted_pdf" in entry),
+            "other_files": sum(
+                1 for entry in entries if entry["kind"] != "pdf" and "converted_pdf" not in entry
+            ),
             "flagged_files": sum(1 for entry in entries if entry["flags"]),
         },
         "files": entries,
@@ -888,12 +1024,19 @@ def manifest_text(manifest: dict[str, Any]) -> str:
     lines = [
         f"preflight manifest (schema {manifest['schema_version']})",
         f"input: {manifest['input_dir']}",
-        f"{summary['pdf_files']} PDF file(s), {summary['other_files']} other file(s), "
-        f"{summary['flagged_files']} flagged file(s)",
+        f"{summary['pdf_files']} PDF file(s), {summary['office_files']} Office file(s), "
+        f"{summary['other_files']} other file(s), {summary['flagged_files']} flagged file(s)",
         "",
     ]
     for entry in manifest["files"]:
-        if entry["kind"] != "pdf":
+        if "converted_pdf" in entry and entry["converted_pdf"] is None:
+            reason = entry["conversion_error"] or "soffice unavailable"
+            lines.append(
+                f"{entry['path']}: {entry['kind']}, not converted to PDF ({reason}), "
+                f"flags: {', '.join(entry['flags'])}"
+            )
+            continue
+        if "pages" not in entry:
             lines.append(
                 f"{entry['path']}: {entry['kind']}, {entry['size_bytes']} bytes (not a PDF)"
             )
@@ -907,6 +1050,8 @@ def manifest_text(manifest: dict[str, Any]) -> str:
             f"{entry['image_count']} image(s), {text_total} text chars, "
             f"flags: {flags}"
         )
+        if entry.get("converted_pdf"):
+            lines.append(f"  converted by LibreOffice: {entry['converted_pdf']}")
         lines.append(f"  renders: {entry['render_dir']}/")
         if entry["tools_unavailable"]:
             lines.append(f"  tools unavailable: {', '.join(entry['tools_unavailable'])}")
@@ -928,7 +1073,7 @@ def manifest_text(manifest: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def run_preflight(input_dir: Path, output_dir: Path) -> dict[str, Any]:
+def _prepare_output(input_dir: Path, output_dir: Path) -> None:
     input_resolved = input_dir.resolve()
     output_resolved = output_dir.resolve()
     if (
@@ -945,12 +1090,33 @@ def run_preflight(input_dir: Path, output_dir: Path) -> dict[str, Any]:
         else:
             output_dir.unlink()
     output_dir.mkdir(parents=True)
+
+
+def run_preflight(input_dir: Path, output_dir: Path) -> dict[str, Any]:
+    _prepare_output(input_dir, output_dir)
     manifest = build_manifest(input_dir, output_dir)
     (output_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     (output_dir / "manifest.txt").write_text(manifest_text(manifest), encoding="utf-8")
     return manifest
+
+
+def run_grading_preflight(input_dir: Path, output_dir: Path) -> list[dict[str, Any]]:
+    """Prepare all grading sources using the same readers and isolated outputs."""
+    for role in GRADING_DIRECTORIES[:-1]:
+        if not (input_dir / role).is_dir():
+            raise ValueError(f"missing grading input directory: {input_dir / role}")
+    _prepare_output(input_dir, output_dir)
+    manifests = []
+    for role in GRADING_DIRECTORIES:
+        path = input_dir / role
+        if path.is_dir():
+            manifests.append(run_preflight(path, output_dir / role))
+    (output_dir / "manifest.txt").write_text(
+        "\n".join(manifest_text(manifest) for manifest in manifests), encoding="utf-8"
+    )
+    return manifests
 
 
 # --- selftest fixtures: raw-authored PDFs, stdlib only ---
@@ -1049,8 +1215,109 @@ def _fixture_clipped_scan() -> bytes:
     return _raw_pdf(_page_objects("/Im0 5 0 R", content, _clipped_scan_image_obj()))
 
 
+def _answer_png() -> bytes:
+    """A 200x100 grayscale PNG: a solid black block on white, the "answer"."""
+    rows = b"".join(
+        b"\x00" + bytes(0 if 40 <= x < 160 and 20 <= y < 80 else 255 for x in range(200))
+        for y in range(100)
+    )
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 200, 100, 8, 0, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(rows))
+        + chunk(b"IEND", b"")
+    )
+
+
+def _fixture_image_answer_docx(path: Path) -> None:
+    """A Word document whose worked answer exists only as an embedded image."""
+    package = "http://schemas.openxmlformats.org/package/2006"
+    office = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    drawing = "http://schemas.openxmlformats.org/drawingml/2006"
+    with ZipFile(path, "w") as archive:
+        archive.writestr(
+            "[Content_Types].xml",
+            f'<Types xmlns="{package}/content-types">'
+            '<Default Extension="rels" '
+            'ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Default Extension="png" ContentType="image/png"/>'
+            '<Override PartName="/word/document.xml" ContentType="application/'
+            'vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+            "</Types>",
+        )
+        archive.writestr(
+            "_rels/.rels",
+            f'<Relationships xmlns="{package}/relationships">'
+            f'<Relationship Id="rId1" Type="{office}/officeDocument" '
+            'Target="word/document.xml"/></Relationships>',
+        )
+        archive.writestr(
+            "word/_rels/document.xml.rels",
+            f'<Relationships xmlns="{package}/relationships">'
+            f'<Relationship Id="rIdAnswer" Type="{office}/image" '
+            'Target="media/answer.png"/></Relationships>',
+        )
+        archive.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/'
+            f'wordprocessingml/2006/main" xmlns:r="{office}" '
+            f'xmlns:wp="{drawing}/wordprocessingDrawing" xmlns:a="{drawing}/main" '
+            f'xmlns:pic="{drawing}/picture"><w:body>'
+            "<w:p><w:r><w:t>Question 1 worked answer: the reactor volume follows "
+            "from the derivation shown in the figure below.</w:t></w:r></w:p>"
+            '<w:p><w:r><w:drawing><wp:inline><wp:extent cx="2743200" cy="1371600"/>'
+            '<wp:docPr id="1" name="Answer"/><a:graphic>'
+            f'<a:graphicData uri="{drawing}/picture"><pic:pic>'
+            '<pic:nvPicPr><pic:cNvPr id="1" name="answer.png"/><pic:cNvPicPr/></pic:nvPicPr>'
+            '<pic:blipFill><a:blip r:embed="rIdAnswer"/><a:stretch><a:fillRect/></a:stretch>'
+            '</pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/>'
+            '<a:ext cx="2743200" cy="1371600"/></a:xfrm>'
+            '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>'
+            "</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"
+            "</w:body></w:document>",
+        )
+        archive.writestr("word/media/answer.png", _answer_png())
+
+
+def _office_selftest_failures(scratch: Path) -> list[str]:
+    """Convert the image-answer document and check the answer is visible."""
+    input_dir = scratch / "office_input"
+    input_dir.mkdir()
+    _fixture_image_answer_docx(input_dir / "solution.docx")
+    original = (input_dir / "solution.docx").read_bytes()
+    manifest = run_preflight(input_dir, scratch / "office_out")
+    (entry,) = manifest["files"]
+    if entry["converted_pdf"] is None:
+        return [f"solution.docx must convert to PDF (flags {entry['flags']})"]
+    failures = []
+    if entry["flags"] != []:
+        failures.append(f"solution.docx must not flag anything, got {entry['flags']}")
+    if not entry["text_chars_total"]:
+        failures.append("solution.docx must keep its question text")
+    pages = entry["pages"]
+    if not pages or pages[0]["ink_fraction"] is None or pages[0]["ink_fraction"] < 0.01:
+        failures.append("solution.docx page 1 must render the image answer with ink")
+    images = [row for page in pages for row in page["images"] if row["type"] == "image"]
+    if not any(
+        row["nonwhite_fraction"] is not None and row["nonwhite_fraction"] >= SUBSTANTIAL_IMAGE_INK
+        for row in images
+    ):
+        failures.append("solution.docx must extract the image answer")
+    if sorted(path.name for path in input_dir.iterdir()) != ["solution.docx"]:
+        failures.append("conversion must not write beside the original")
+    if (input_dir / "solution.docx").read_bytes() != original:
+        failures.append("conversion must not modify the original")
+    return failures
+
+
 def selftest() -> int:
-    """Author the four fixtures, run the pipeline, assert the decisions."""
+    """Author the fixtures, run the pipeline, assert the decisions."""
     with tempfile.TemporaryDirectory() as scratch:
         input_dir = Path(scratch) / "input"
         input_dir.mkdir()
@@ -1099,6 +1366,8 @@ def selftest() -> int:
         if manifest != repeat:
             failures.append("manifest must be deterministic across runs")
 
+        failures.extend(_office_selftest_failures(Path(scratch)))
+
         if failures:
             for failure in failures:
                 print(f"selftest failure: {failure}", file=sys.stderr)
@@ -1109,13 +1378,17 @@ def selftest() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Render every PDF page and write a measurement manifest."
+        description="Render every PDF and Office document page and write a measurement manifest."
     )
     parser.add_argument(
         "input_dir",
         nargs="?",
-        default=DEFAULT_INPUT_DIR,
-        help=f"directory to preflight (default {DEFAULT_INPUT_DIR})",
+        help=f"directory to preflight (default {DEFAULT_INPUT_DIR}, or /app with --grading)",
+    )
+    parser.add_argument(
+        "--grading",
+        action="store_true",
+        help="prepare submission, assignment, reference_solution, and optional rubric_source",
     )
     parser.add_argument(
         "-o",
@@ -1131,16 +1404,21 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.selftest:
         return selftest()
-    input_dir = Path(args.input_dir)
+    input_dir = Path(args.input_dir or ("/app" if args.grading else DEFAULT_INPUT_DIR))
     if not input_dir.is_dir():
         print(f"error: not a directory: {input_dir}", file=sys.stderr)
         return 2
     try:
-        manifest = run_preflight(input_dir, Path(args.output))
+        manifests = (
+            run_grading_preflight(input_dir, Path(args.output))
+            if args.grading
+            else [run_preflight(input_dir, Path(args.output))]
+        )
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
-    sys.stdout.write(manifest_text(manifest))
+    for manifest in manifests:
+        sys.stdout.write(manifest_text(manifest))
     return 0
 
 
@@ -1157,7 +1435,9 @@ PREFLIGHT_EOF
 # PDF whose form /BBox holds overflowed integers (renders blank while
 # holding a sizable stream — must flag DISCREPANCY), a PDF of vector
 # strokes over an embedded image (must render with nonzero ink), and a
-# blank scanned page (must not flag).
+# blank scanned page (must not flag), then converts a Word document
+# whose answer is only an embedded image (must render and extract it),
+# which proves LibreOffice and its fonts work.
 RUN echo "smoke: convert" \
     && convert -size 60x60 xc:white /tmp/a.png \
     && convert -size 60x60 xc:gray /tmp/b.png \

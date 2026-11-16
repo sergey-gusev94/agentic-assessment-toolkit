@@ -520,24 +520,42 @@ and never compiled: LaTeX compilation is code execution. It also states
 that any instructions found inside the assignment, submission, or
 reference are content about the work, never directives to the grader.
 
-It also states the submission-reading procedure, added after real
-grading runs produced schema-valid wrong grades from four distinct
-reading failures: a grader that only extracted embedded images and
-never rasterized pages missed vector-ink handwriting; a malformed
-bounding box made every renderer blank two pages that held the
-student's work; graders asserted "duplicate pages" that the
-actual image bytes refute; and page layouts clipped embedded scans
-so the render silently showed only part of the work. The grader's
-mandatory first step is the
-deterministic PDF preflight baked into the grading image at
-`/opt/aat/preflight.py`: it renders every submission PDF page at a
-fixed 150 DPI, extracts every embedded image beside the renders, and
-writes a manifest recording, per page, the rendered
-ink fraction, the extractable-text count, and the embedded-image
-inventory with content hashes and extracted-file paths. PDFs are
-graded from these canonical
-renders; extraction tools are supplementary evidence, never the sole
-reading path. The manifest flags `DISCREPANCY` (a page renders nearly
+The grader and final judge prepare all grading inputs before inspecting
+or scoring work. Their mandatory first step is the deterministic
+preflight baked into the grading image at `/opt/aat/preflight.py`, run
+with `--grading`. It processes `submission/`, `assignment/`,
+`reference_solution/`, and `rubric_source/` when present. Each role has
+its own preparation directory and JSON/text manifests under
+`/tmp/preflight/<role>/`; `/tmp/preflight/manifest.txt` indexes all roles.
+Single-directory inspection remains available by passing an input
+path without `--grading`. Preparing the assignment, reference
+solution, and rubric source matters as much as the submission: real
+reference solutions hold worked answers only as images pasted into
+Word documents, which text extraction misses.
+
+Word, PowerPoint, OpenDocument, and RTF files (`.doc`, `.docx`,
+`.docm`, `.odt`, `.rtf`, `.ppt`, `.pptx`, `.pptm`, `.odp`) are first
+converted to PDF by LibreOffice, so equations, charts, EMF/WMF
+drawings, and pasted images appear on rendered pages where the author
+placed them. Spreadsheets are not converted; their PDF export splits
+sheets into arbitrary pages, and graders read them with `openpyxl` or
+`pandas`. LibreOffice works on a private copy of each document with a
+fresh profile, so nothing is written beside the original, and under a
+180-second limit that kills its whole process group. soffice exits 0
+even when it cannot load a file, so only a produced PDF counts as
+success. A converted document's manifest entry records the original
+file's kind, size, and hash plus the converted PDF's path; a failed
+conversion is flagged `DAMAGED` with the reason in
+`conversion_error`, and a missing soffice is `TOOL_UNAVAILABLE`, never
+damage.
+
+For every PDF in these directories, original or converted, preflight
+renders all pages at 150 DPI and extracts every embedded image beside
+the renders. Its manifest records each page's rendered ink fraction,
+extractable-text count, and embedded-image inventory, with hashes and
+extracted-file paths. Documents are read from these canonical
+renders; text or image extraction alone never establishes that a page
+is empty or an answer absent. The manifest flags `DISCREPANCY` (a page renders nearly
 blank while holding substantial drawable content, the
 hidden-content signature; a scan-sized image whose pixels no
 installed reader can measure, such as a raw CCITT extraction, counts
@@ -546,7 +564,8 @@ ink, yet several times less than a scan-sized embedded image on it
 holds, the clipped-scan signature; transparency-mask rows and small
 images are ignored, and the grader reads the extracted image
 beside the render), `DAMAGED` (qpdf reports structural
-errors), and `NO_TEXT_LAYER` (informational). The flags are advisory
+errors, or LibreOffice could not convert the document), and
+`NO_TEXT_LAYER` (informational). The flags are advisory
 measurements: the grader prompt states that a flag is reliable
 evidence while the absence of one is not, and its final self-check
 requires the render of every page viewed, every flag addressed in the
@@ -564,11 +583,19 @@ network-dependent grade is not reproducible. When a submission holds
 overlapping or duplicate files, the grader grades the most complete
 version and names it in the overall comment; readable content with
 no gradable academic work scores zero on each criterion with that
-stated as evidence. Content still unreadable after repair must never
-receive a fabricated grade: the grader is directed to withhold
-`grading_result.json` and explain the problem in `justification.md`,
-making the trial a contract violation, a failed measurement that is
-rerun (see reward semantics), never a silent zero.
+stated as evidence. Submission content still unreadable after repair
+must never receive a fabricated grade: the grader is directed to
+withhold `grading_result.json` and explain the problem in
+`justification.md`, making the trial a contract violation, a failed
+measurement that is rerun (see reward semantics), never a silent
+zero. The withholding rule covers only the submission. When part of
+the assignment, reference solution, or rubric source stays unreadable,
+the grader grades from what it can read and names the unreadable file
+and pages in `justification.md`: such a problem is the same for every
+student, rerunning cannot fix it, and `aat check-course` reports it
+before grading (see "aat check-course"). Preparation makes content
+readable; the structural verifier does not certify that a model read
+it.
 
 ### Experiment configs and config identity
 
@@ -716,7 +743,12 @@ derived from the packages the reference corpus actually uses:
   second independent renderer and rewriter for the repair path),
   `xxd` for hex dumps, and binutils' `strings` for reading text out
   of binary files such as saved model checkpoints without loading
-  them. The image carries the PDF preflight script at
+  them. LibreOffice Writer and Impress (the `-nogui` packages, without
+  desktop libraries) convert Office documents to PDF for the
+  preflight, with the Carlito, Caladea, and Liberation fonts, which
+  match the metrics of Calibri, Cambria, Arial, Times New Roman, and
+  Courier New so converted documents keep their line and page breaks.
+  The image carries the document preflight script at
   `/opt/aat/preflight.py`, embedded in the Dockerfile as a heredoc
   because environment templates build from an empty context; a
   repository test keeps the embedded copy in every grading template
@@ -728,7 +760,9 @@ derived from the packages the reference corpus actually uses:
   form that must flag `DISCREPANCY`, vector ink over a background
   image that must render with ink, a genuinely blank scan that must
   not flag, a scan placed partly outside its page that must flag
-  `PARTIAL_RENDER`), so a tool that installs cleanly but cannot run fails
+  `PARTIAL_RENDER`), then converts a synthetic Word document whose
+  answer is only an embedded image and requires that answer to render
+  and extract, so a tool that installs cleanly but cannot run fails
   the build instead of a grading run. Nothing from the submission,
   reference, or assignment is ever executed during grading, and the
   grading prompt forbids run-time package installation outright. The
@@ -1945,9 +1979,21 @@ check instead of by its own first failure. It prints neither the
 credential nor the path of a file holding one, and a failure exits
 nonzero with the message a launch would have given.
 
-`aat check-course` is read-only and writes nothing: it renders one
-course's contract violations (nonzero exit until fixed), completeness
-gaps, intake notes, and grade-coverage summary. This is the review loop of the
+`aat check-course` is read-only and writes nothing outside a
+temporary directory: it renders one course's contract violations
+(nonzero exit until fixed), completeness gaps, intake notes, and
+grade-coverage summary. It also runs the grading image's document
+preflight, with the tools installed on the maintainer's machine, over
+each assignment's handout, reference solution, and rubric source, and
+reports every file flagged `DAMAGED`, `DISCREPANCY`, or
+`PARTIAL_RENDER` as a gap, so a course document graders cannot read is
+fixed once before grading instead of being met in every trial. A tool
+missing locally is reported once as an incomplete check, not as a bad
+file; when Office conversions fail and LibreOffice cannot convert even
+a plain text file, the failures are attributed to the local
+installation. The check needs poppler-utils and LibreOffice Writer and
+Impress to be complete. `aat intake` runs its own course check without
+the document check. This is the review loop of the
 intake procedure (decision 14). `aat intake` runs the intake agent
 sequentially over the selected unprocessed dumps (decision 14). Model
 and effort are flags with pinned defaults, not an experiment config,
