@@ -26,6 +26,7 @@ dev = [
   "build>=1.2",
   "mypy>=1.10",
   "pandas-stubs>=2.2",
+  "pillow>=10",
   "pre-commit>=3.7",
   "pytest>=8",
   "ruff>=0.6",

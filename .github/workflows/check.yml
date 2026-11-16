@@ -20,9 +20,27 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+      - name: Install document tools
+        # System programs the PDF export and document preflight tests need.
+        # Tests skip without them locally; here AAT_FAIL_ON_SKIP turns any
+        # skip into a failure, so CI never silently drops that coverage.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            poppler-utils qpdf libreoffice-writer-nogui libreoffice-impress-nogui
+          # Pandoc comes from a pinned official release, which bundles its
+          # data files: Ubuntu 26.04's packaged Pandoc 3.7 lacks the
+          # templates/definitions.typst file its Typst output needs.
+          curl -fsSL -o /tmp/pandoc.deb \
+            https://github.com/jgm/pandoc/releases/download/3.1.3/pandoc-3.1.3-1-amd64.deb
+          echo "caa7e0410f9e2cb1da2eb8db13cc97b5548fe455985e2c944e3929d22f99bcdc  /tmp/pandoc.deb" \
+            | sha256sum --check
+          sudo apt-get install -y /tmp/pandoc.deb
       - name: Install package and development dependencies
         run: python -m pip install -e ".[dev]"
       - name: Run checks
+        env:
+          AAT_FAIL_ON_SKIP: "1"
         run: make check
       - name: Build package
         run: make package

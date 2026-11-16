@@ -960,6 +960,7 @@ def test_legacy_roman_math_normalization(source: str, expected: str) -> None:
     assert feedback_pdf._normalize_math(source) == expected
 
 
+@pytest.mark.skipif(shutil.which("pandoc") is None, reason="PDF integration requires host Pandoc")
 def test_pdf_renders_partial_derivatives() -> None:
     assert feedback_pdf.render_pdf(r"The slope is $\partial f/\partial x$.").startswith(b"%PDF-")
 
